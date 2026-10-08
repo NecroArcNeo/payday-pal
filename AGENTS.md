@@ -8,3 +8,10 @@
 > Commits you push to the connected branch sync back to Lovable and show up in
 > the editor, so keep the branch in a working state.
 <!-- LOVABLE:END -->
+
+## Architecture rules
+- Data access uses the browser Supabase client under the `_authenticated` (ssr:false) layout; RLS (has_role admin / own employee row) is the security boundary.
+- Worked hours for clock entries are computed by a DB trigger (`compute_record_hours`), so imports and manual entries share one formula.
+- First signup becomes admin via `handle_new_user`; later signups are employees linked to employee rows by email.
+- File imports are parsed client-side with SheetJS (`xlsx`) for both CSV and Excel.
+- Theme is a `.dark` class on <html>, set pre-hydration by an inline head script from localStorage.
