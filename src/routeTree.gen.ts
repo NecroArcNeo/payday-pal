@@ -14,6 +14,7 @@ import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
 import { Route as AuthenticatedEmployeesRouteImport } from './routes/_authenticated/employees'
+import { Route as AuthenticatedImportRouteImport } from './routes/_authenticated/import'
 import { Route as AuthenticatedMeRouteImport } from './routes/_authenticated/me'
 import { Route as AuthenticatedPayrollRouteImport } from './routes/_authenticated/payroll'
 import { Route as AuthenticatedRecordsRouteImport } from './routes/_authenticated/records'
@@ -42,6 +43,11 @@ const AuthenticatedEmployeesRoute = AuthenticatedEmployeesRouteImport.update({
   path: '/employees',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedImportRoute = AuthenticatedImportRouteImport.update({
+  id: '/import',
+  path: '/import',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
 const AuthenticatedMeRoute = AuthenticatedMeRouteImport.update({
   id: '/me',
   path: '/me',
@@ -63,6 +69,7 @@ export interface FileRoutesByFullPath {
   '/auth': typeof AuthRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/employees': typeof AuthenticatedEmployeesRoute
+  '/import': typeof AuthenticatedImportRoute
   '/me': typeof AuthenticatedMeRoute
   '/payroll': typeof AuthenticatedPayrollRoute
   '/records': typeof AuthenticatedRecordsRoute
@@ -72,6 +79,7 @@ export interface FileRoutesByTo {
   '/auth': typeof AuthRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/employees': typeof AuthenticatedEmployeesRoute
+  '/import': typeof AuthenticatedImportRoute
   '/me': typeof AuthenticatedMeRoute
   '/payroll': typeof AuthenticatedPayrollRoute
   '/records': typeof AuthenticatedRecordsRoute
@@ -83,6 +91,7 @@ export interface FileRoutesById {
   '/auth': typeof AuthRoute
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
   '/_authenticated/employees': typeof AuthenticatedEmployeesRoute
+  '/_authenticated/import': typeof AuthenticatedImportRoute
   '/_authenticated/me': typeof AuthenticatedMeRoute
   '/_authenticated/payroll': typeof AuthenticatedPayrollRoute
   '/_authenticated/records': typeof AuthenticatedRecordsRoute
@@ -94,6 +103,7 @@ export interface FileRouteTypes {
     | '/auth'
     | '/dashboard'
     | '/employees'
+    | '/import'
     | '/me'
     | '/payroll'
     | '/records'
@@ -103,6 +113,7 @@ export interface FileRouteTypes {
     | '/auth'
     | '/dashboard'
     | '/employees'
+    | '/import'
     | '/me'
     | '/payroll'
     | '/records'
@@ -113,6 +124,7 @@ export interface FileRouteTypes {
     | '/auth'
     | '/_authenticated/dashboard'
     | '/_authenticated/employees'
+    | '/_authenticated/import'
     | '/_authenticated/me'
     | '/_authenticated/payroll'
     | '/_authenticated/records'
@@ -161,6 +173,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedEmployeesRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/import': {
+      id: '/_authenticated/import'
+      path: '/import'
+      fullPath: '/import'
+      preLoaderRoute: typeof AuthenticatedImportRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/me': {
       id: '/_authenticated/me'
       path: '/me'
@@ -188,6 +207,7 @@ declare module '@tanstack/react-router' {
 interface AuthenticatedRouteRouteChildren {
   AuthenticatedDashboardRoute: typeof AuthenticatedDashboardRoute
   AuthenticatedEmployeesRoute: typeof AuthenticatedEmployeesRoute
+  AuthenticatedImportRoute: typeof AuthenticatedImportRoute
   AuthenticatedMeRoute: typeof AuthenticatedMeRoute
   AuthenticatedPayrollRoute: typeof AuthenticatedPayrollRoute
   AuthenticatedRecordsRoute: typeof AuthenticatedRecordsRoute
@@ -196,6 +216,7 @@ interface AuthenticatedRouteRouteChildren {
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedDashboardRoute: AuthenticatedDashboardRoute,
   AuthenticatedEmployeesRoute: AuthenticatedEmployeesRoute,
+  AuthenticatedImportRoute: AuthenticatedImportRoute,
   AuthenticatedMeRoute: AuthenticatedMeRoute,
   AuthenticatedPayrollRoute: AuthenticatedPayrollRoute,
   AuthenticatedRecordsRoute: AuthenticatedRecordsRoute,
