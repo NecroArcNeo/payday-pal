@@ -1,24 +1,35 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
-// No head() here: the home route inherits title/description/og/twitter from
-// __root.tsx, and ships no og:image so serve-time hosting can inject the
-// project's social preview (explicit og:image or latest screenshot).
 export const Route = createFileRoute("/")({
+  head: () => ({
+    meta: [
+      { title: "Meridian Payroll — Employees, hours & pay" },
+      { name: "description", content: "Store employee details, track clock-in or daily hours, import CSV/Excel timesheets and calculate pay." },
+      { property: "og:title", content: "Meridian Payroll" },
+      { property: "og:description", content: "Employees, work hours and pay in one live ledger." },
+    ],
+  }),
   component: Index,
 });
 
-// IMPORTANT: Replace this placeholder. See ./README.md for routing conventions.
 function Index() {
   return (
-    <div
-      className="flex min-h-screen items-center justify-center"
-      style={{ backgroundColor: "#fcfbf8" }}
-    >
-      <img
-        data-lovable-blank-page-placeholder="REMOVE_THIS"
-        src="https://cdn.gpteng.co/blank-app-v1.svg"
-        alt="Your app will live here!"
-      />
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-6">
+      <div className="anim-breathe pointer-events-none fixed -left-40 -top-48 h-[42rem] w-[42rem] rounded-full bg-glow-a blur-3xl" />
+      <div className="anim-breathe pointer-events-none fixed -right-52 top-1/3 h-[40rem] w-[40rem] rounded-full bg-glow-b blur-3xl" />
+      <div className="absolute right-6 top-6"><ThemeToggle /></div>
+      <div className="anim-rise relative max-w-xl text-center">
+        <div className="mx-auto mb-6 grid h-12 w-12 place-items-center rounded-2xl bg-primary font-display text-xl font-extrabold text-primary-foreground">M</div>
+        <div className="label-mono">Payroll OS</div>
+        <h1 className="mt-3 font-display text-5xl font-extrabold tracking-tight">Every hour, on the ledger.</h1>
+        <p className="mt-4 text-muted-foreground">
+          Keep employee records, log clock-in/out or daily hours, import timesheets from CSV or Excel, and see pay instantly.
+        </p>
+        <Link to="/dashboard" className="mt-8 inline-block rounded-xl bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground shadow-lg shadow-primary/25 hover:bg-primary/90">
+          Open the ledger
+        </Link>
+      </div>
     </div>
   );
 }
