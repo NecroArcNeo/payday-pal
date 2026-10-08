@@ -1,7 +1,7 @@
 # Roadmap
-- [ ] Pick design direction
-- [ ] Cloud backend: employees, time records (clock in/out w/ lunch OR daily hours), roles (admin/employee)
-- [ ] CSV + Excel import
-- [ ] Basic pay calc (hours × rate)
-- [ ] Employee self-view
-- [ ] Light/night mode toggle
+- [x] Pick design direction (Ledger Glass)
+- [x] Cloud backend: employees, time records (clock in/out w/ lunch OR daily hours), roles (admin/employee)
+- [x] CSV + Excel import
+- [x] Basic pay calc (hours × rate)
+- [x] Employee self-view
+- [x] Light/night mode toggle
