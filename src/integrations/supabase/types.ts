@@ -14,16 +14,125 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      employees: {
+        Row: {
+          active: boolean
+          created_at: string
+          department: string | null
+          email: string | null
+          employee_code: string
+          first_name: string
+          hourly_rate: number
+          id: string
+          last_name: string
+          user_id: string | null
+        }
+        Insert: {
+          active?: boolean
+          created_at?: string
+          department?: string | null
+          email?: string | null
+          employee_code: string
+          first_name: string
+          hourly_rate?: number
+          id?: string
+          last_name: string
+          user_id?: string | null
+        }
+        Update: {
+          active?: boolean
+          created_at?: string
+          department?: string | null
+          email?: string | null
+          employee_code?: string
+          first_name?: string
+          hourly_rate?: number
+          id?: string
+          last_name?: string
+          user_id?: string | null
+        }
+        Relationships: []
+      }
+      time_records: {
+        Row: {
+          clock_in: string | null
+          clock_out: string | null
+          created_at: string
+          employee_id: string
+          entry_mode: string
+          hours: number
+          id: string
+          lunch_minutes: number
+          note: string | null
+          work_date: string
+        }
+        Insert: {
+          clock_in?: string | null
+          clock_out?: string | null
+          created_at?: string
+          employee_id: string
+          entry_mode?: string
+          hours?: number
+          id?: string
+          lunch_minutes?: number
+          note?: string | null
+          work_date: string
+        }
+        Update: {
+          clock_in?: string | null
+          clock_out?: string | null
+          created_at?: string
+          employee_id?: string
+          entry_mode?: string
+          hours?: number
+          id?: string
+          lunch_minutes?: number
+          note?: string | null
+          work_date?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "time_records_employee_id_fkey"
+            columns: ["employee_id"]
+            isOneToOne: false
+            referencedRelation: "employees"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      user_roles: {
+        Row: {
+          id: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Insert: {
+          id?: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Update: {
+          id?: string
+          role?: Database["public"]["Enums"]["app_role"]
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      has_role: {
+        Args: {
+          _role: Database["public"]["Enums"]["app_role"]
+          _user_id: string
+        }
+        Returns: boolean
+      }
     }
     Enums: {
-      [_ in never]: never
+      app_role: "admin" | "employee"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -150,6 +259,8 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      app_role: ["admin", "employee"],
+    },
   },
 } as const
