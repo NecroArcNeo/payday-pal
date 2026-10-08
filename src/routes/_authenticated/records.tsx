@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import type { TablesInsert } from "@/integrations/supabase/types";
 import { AppShell, btnPrimary, inputCls } from "@/components/AppShell";
 import { RecordsTable } from "@/components/RecordsTable";
 import { computeHours, fullName, isoDate, useEmployees, useRecords } from "@/lib/payroll";
@@ -26,24 +27,24 @@ function RecordsPage() {
 
   const add = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!f.employee_id) return toast.error("Pick an employee");
+    if (!f.employee_id) { toast.error("Pick an employee"); return; }
     const lunch = Number(f.lunch_minutes);
     const hours = Number(f.hours);
-    if (mode === "clock" && (!Number.isFinite(lunch) || lunch < 0 || lunch > 600)) return toast.error("Lunch minutes must be 0–600");
-    if (mode === "hours" && (!Number.isFinite(hours) || hours < 0 || hours > 24)) return toast.error("Hours must be 0–24");
-    const row =
+    if (mode === "clock" && (!Number.isFinite(lunch) || lunch < 0 || lunch > 600)) { toast.error("Lunch minutes must be 0–600"); return; }
+    if (mode === "hours" && (!Number.isFinite(hours) || hours < 0 || hours > 24)) { toast.error("Hours must be 0–24"); return; }
+    const row: TablesInsert<"time_records"> =
       mode === "clock"
         ? { employee_id: f.employee_id, work_date: f.work_date, entry_mode: "clock", clock_in: f.clock_in, clock_out: f.clock_out, lunch_minutes: lunch }
         : { employee_id: f.employee_id, work_date: f.work_date, entry_mode: "hours", hours };
     const { error } = await supabase.from("time_records").insert(row);
-    if (error) return toast.error(error.message);
+    if (error) { toast.error(error.message); return; }
     toast.success("Record added");
     qc.invalidateQueries({ queryKey: ["records"] });
   };
 
   const del = async (id: string) => {
     const { error } = await supabase.from("time_records").delete().eq("id", id);
-    if (error) return toast.error(error.message);
+    if (error) { toast.error(error.message); return; }
     qc.invalidateQueries({ queryKey: ["records"] });
   };
 

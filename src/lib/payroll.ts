@@ -68,8 +68,8 @@ export function currentWeek() {
 }
 
 export function computeHours(clockIn: string, clockOut: string, lunch: number) {
-  const [ih, im] = clockIn.split(":").map(Number);
-  const [oh, om] = clockOut.split(":").map(Number);
+  const [ih = 0, im = 0] = clockIn.split(":").map(Number);
+  const [oh = 0, om = 0] = clockOut.split(":").map(Number);
   let mins = oh * 60 + om - (ih * 60 + im);
   if (mins < 0) mins += 1440;
   return Math.max(0, (mins - lunch) / 60);

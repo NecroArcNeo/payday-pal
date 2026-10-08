@@ -39,8 +39,9 @@ function parseDate(v: string): string | null {
   if (/^\d{4}-\d{2}-\d{2}/.test(v)) return v.slice(0, 10);
   const m = v.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})$/);
   if (m) {
-    const y = m[3].length === 2 ? `20${m[3]}` : m[3];
-    return `${y}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}`;
+    const [, a = "", b = "", c = ""] = m;
+    const y = c.length === 2 ? `20${c}` : c;
+    return `${y}-${a.padStart(2, "0")}-${b.padStart(2, "0")}`;
   }
   const d = new Date(v);
   return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
@@ -63,10 +64,12 @@ function ImportPage() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const handle = async (f: File) => {
-    if (f.size > 10 * 1024 * 1024) return toast.error("File must be under 10MB");
+    if (f.size > 10 * 1024 * 1024) { toast.error("File must be under 10MB"); return; }
     setFile(f.name);
     const wb = XLSX.read(await f.arrayBuffer(), { cellDates: true });
-    const sheet = wb.Sheets[wb.SheetNames[0]];
+    const first = wb.SheetNames[0];
+    if (!first) { toast.error("Empty file"); return; }
+    const sheet = wb.Sheets[first]!;
     const raw = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { raw: false, defval: "", dateNF: "yyyy-mm-dd" });
     const rows: Row[] = raw.map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [norm(k), String(v ?? "")])));
     const ok: Record<string, unknown>[] = [];
@@ -82,26 +85,26 @@ function ImportPage() {
         const last = pick(r, "lastname", "last", "surname");
         const rate = Number(pick(r, "hourlyrate", "rate", "payrate", "wage").replace(/[$,]/g, "") || 0);
         const email = pick(r, "email", "emailaddress");
-        if (!code || !first || !last) return errs.push(`Row ${line}: needs employee_id, first_name, last_name`);
-        if (!Number.isFinite(rate) || rate < 0) return errs.push(`Row ${line}: invalid hourly rate`);
-        if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return errs.push(`Row ${line}: invalid email`);
+        if (!code || !first || !last) { errs.push(`Row ${line}: needs employee_id, first_name, last_name`); return; }
+        if (!Number.isFinite(rate) || rate < 0) { errs.push(`Row ${line}: invalid hourly rate`); return; }
+        if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { errs.push(`Row ${line}: invalid email`); return; }
         ok.push({ employee_code: code.slice(0, 40), first_name: first.slice(0, 80), last_name: last.slice(0, 80), email: email || null, department: pick(r, "department", "dept").slice(0, 80) || null, hourly_rate: rate });
       } else {
         const code = pick(r, "employeeid", "employeecode", "id", "code").toLowerCase();
         const email = pick(r, "email").toLowerCase();
         const empId = byCode.get(code) ?? byEmail.get(email);
-        if (!empId) return errs.push(`Row ${line}: unknown employee "${code || email}"`);
+        if (!empId) { errs.push(`Row ${line}: unknown employee "${code || email}"`); return; }
         const date = parseDate(pick(r, "date", "workdate", "day"));
-        if (!date) return errs.push(`Row ${line}: invalid date`);
+        if (!date) { errs.push(`Row ${line}: invalid date`); return; }
         const cin = parseTime(pick(r, "clockin", "timein", "in", "start"));
         const cout = parseTime(pick(r, "clockout", "timeout", "out", "end"));
         if (cin && cout) {
           const lunch = Number(pick(r, "lunchminutes", "lunch", "break", "breakminutes") || 0);
-          if (!Number.isFinite(lunch) || lunch < 0 || lunch > 600) return errs.push(`Row ${line}: invalid lunch minutes`);
+          if (!Number.isFinite(lunch) || lunch < 0 || lunch > 600) { errs.push(`Row ${line}: invalid lunch minutes`); return; }
           ok.push({ employee_id: empId, work_date: date, entry_mode: "clock", clock_in: cin, clock_out: cout, lunch_minutes: lunch });
         } else {
           const hours = Number(pick(r, "hours", "totalhours", "hoursworked"));
-          if (!Number.isFinite(hours) || hours <= 0 || hours > 24) return errs.push(`Row ${line}: needs clock in/out or hours (0–24)`);
+          if (!Number.isFinite(hours) || hours <= 0 || hours > 24) { errs.push(`Row ${line}: needs clock in/out or hours (0–24)`); return; }
           ok.push({ employee_id: empId, work_date: date, entry_mode: "hours", hours });
         }
       }
@@ -117,7 +120,7 @@ function ImportPage() {
         ? await supabase.from("employees").upsert(valid as never, { onConflict: "employee_code" })
         : await supabase.from("time_records").insert(valid as never);
     setBusy(false);
-    if (error) return toast.error(error.message);
+    if (error) { toast.error(error.message); return; }
     toast.success(`Imported ${valid.length} rows`);
     setValid([]); setErrors([]); setFile("");
     qc.invalidateQueries();

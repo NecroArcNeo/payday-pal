@@ -34,12 +34,12 @@ function EmployeesPage() {
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
     const parsed = schema.safeParse(form);
-    if (!parsed.success) return toast.error(parsed.error.issues[0].message);
+    if (!parsed.success) { toast.error(parsed.error.issues[0]?.message ?? "Invalid input"); return; }
     const row = { ...parsed.data, email: parsed.data.email || null, department: parsed.data.department || null };
     const { error } = editing
       ? await supabase.from("employees").update(row).eq("id", editing)
       : await supabase.from("employees").insert(row);
-    if (error) return toast.error(error.message);
+    if (error) { toast.error(error.message); return; }
     toast.success(editing ? "Employee updated" : "Employee added");
     setForm(empty);
     setEditing(null);
@@ -54,7 +54,7 @@ function EmployeesPage() {
   const remove = async (id: string) => {
     if (!confirm("Delete this employee and all their time records?")) return;
     const { error } = await supabase.from("employees").delete().eq("id", id);
-    if (error) return toast.error(error.message);
+    if (error) { toast.error(error.message); return; }
     qc.invalidateQueries();
   };
 
