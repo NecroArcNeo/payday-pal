@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -99,7 +99,7 @@ function EmployeesPage() {
             {list.length === 0 && <tr><td colSpan={7} className="px-5 py-10 text-center text-muted-foreground">No employees yet — add one above or import a file.</td></tr>}
             {list.map((e) => (
               <tr key={e.id} className="border-b border-border last:border-0 hover:bg-secondary">
-                <td className="px-5 py-3 font-medium">{fullName(e)}</td>
+                <td className="px-5 py-3 font-medium"><Link to="/employees/$id" params={{ id: e.id }} className="hover:underline">{fullName(e)}</Link></td>
                 <td className="px-3 py-3 font-mono text-[13px]">{e.employee_code}</td>
                 <td className="px-3 py-3 text-muted-foreground">{e.email ?? "—"}</td>
                 <td className="px-3 py-3 text-muted-foreground">{e.department ?? "—"}</td>

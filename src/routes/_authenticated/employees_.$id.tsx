@@ -1,0 +1,95 @@
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { supabase } from "@/integrations/supabase/client";
+import { AppShell, btnPrimary, inputCls } from "@/components/AppShell";
+import { fullName, useEmployees } from "@/lib/payroll";
+import { ArrowLeft } from "lucide-react";
+
+export const Route = createFileRoute("/_authenticated/employees_/$id")({
+  head: () => ({ meta: [{ title: "Employee profile — Meridian Payroll" }] }),
+  component: ProfilePage,
+  notFoundComponent: () => <div className="p-8">Employee not found.</div>,
+  errorComponent: ({ error }) => <div className="p-8">{error.message}</div>,
+});
+
+type Field = { k: string; label: string; type?: string; span?: boolean };
+const sections: { title: string; fields: Field[] }[] = [
+  { title: "Payroll", fields: [
+    { k: "employee_code", label: "Employee ID" }, { k: "first_name", label: "First name" }, { k: "last_name", label: "Last name" },
+    { k: "hourly_rate", label: "Hourly rate", type: "number" }, { k: "department", label: "Department" }, { k: "job_title", label: "Job title" },
+  ] },
+  { title: "Contact", fields: [
+    { k: "email", label: "Email", type: "email" }, { k: "phone", label: "Phone", type: "tel" },
+    { k: "date_of_birth", label: "Date of birth", type: "date" }, { k: "hire_date", label: "Hire date", type: "date" },
+  ] },
+  { title: "Address", fields: [
+    { k: "address_line1", label: "Street address", span: true }, { k: "address_line2", label: "Apt / suite", span: true },
+    { k: "city", label: "City" }, { k: "state", label: "State / region" }, { k: "postal_code", label: "Postal code" }, { k: "country", label: "Country" },
+  ] },
+  { title: "Emergency contact", fields: [
+    { k: "emergency_contact_name", label: "Name" }, { k: "emergency_contact_phone", label: "Phone", type: "tel" },
+  ] },
+];
+const required = ["employee_code", "first_name", "last_name"];
+
+function ProfilePage() {
+  const { id } = Route.useParams();
+  const qc = useQueryClient();
+  const { data: employees = [], isLoading } = useEmployees();
+  const emp = employees.find((e) => e.id === id);
+  const [form, setForm] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!emp) return;
+    const f: Record<string, string> = {};
+    for (const [k, v] of Object.entries(emp)) f[k] = v == null ? "" : String(v);
+    setForm(f);
+  }, [emp]);
+
+  if (isLoading) return <AppShell eyebrow="Profile" title="Loading…"><div /></AppShell>;
+  if (!emp) return <AppShell eyebrow="Profile" title="Not found"><Link to="/employees" className="underline">Back to employees</Link></AppShell>;
+
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    for (const k of required) if (!form[k]?.trim()) { toast.error("Employee ID, first and last name are required"); return; }
+    const rate = Number(form.hourly_rate);
+    if (!Number.isFinite(rate) || rate < 0) { toast.error("Hourly rate must be a positive number"); return; }
+    const row: Record<string, string | number | null> = {};
+    for (const s of sections) for (const f of s.fields) row[f.k] = form[f.k]?.trim() || null;
+    row.hourly_rate = rate;
+    row.notes = form.notes?.trim() || null;
+    const { error } = await supabase.from("employees").update(row as never).eq("id", id);
+    if (error) { toast.error(error.message); return; }
+    toast.success("Profile saved");
+    qc.invalidateQueries({ queryKey: ["employees"] });
+  };
+
+  return (
+    <AppShell eyebrow="Profile" title={fullName(emp)}>
+      <Link to="/employees" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" /> All employees</Link>
+      <form onSubmit={save} className="space-y-5">
+        {sections.map((s) => (
+          <div key={s.title} className="glass-panel p-5">
+            <div className="mb-4 font-display font-extrabold tracking-tight">{s.title}</div>
+            <div className="grid gap-3 md:grid-cols-3">
+              {s.fields.map((f) => (
+                <label key={f.k} className={f.span ? "md:col-span-3" : ""}>
+                  <span className="label-mono">{f.label}</span>
+                  <input className={`${inputCls} mt-1`} type={f.type ?? "text"} step={f.type === "number" ? "0.01" : undefined}
+                    value={form[f.k] ?? ""} onChange={(e) => setForm({ ...form, [f.k]: e.target.value })} />
+                </label>
+              ))}
+            </div>
+          </div>
+        ))}
+        <div className="glass-panel p-5">
+          <div className="mb-4 font-display font-extrabold tracking-tight">Notes</div>
+          <textarea rows={4} className={inputCls} value={form.notes ?? ""} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Anything else worth keeping…" />
+        </div>
+        <button className={btnPrimary}>Save profile</button>
+      </form>
+    </AppShell>
+  );
+}
