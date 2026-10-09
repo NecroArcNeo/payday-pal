@@ -21,24 +21,27 @@ function RecordsPage() {
   const { data: records = [] } = useRecords(from || undefined, to || undefined);
 
   const [mode, setMode] = useState<"clock" | "hours">("clock");
-  const [f, setF] = useState({ employee_id: "", work_date: isoDate(new Date()), clock_in: "09:00", clock_out: "17:00", lunch_minutes: "30", hours: "8" });
+  const [f, setF] = useState({ work_date: isoDate(new Date()), clock_in: "09:00", clock_out: "17:00", lunch_minutes: "30", hours: "8" });
+  const [picked, setPicked] = useState<string[]>([]);
+  const toggle = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
   const preview = mode === "clock" ? computeHours(f.clock_in, f.clock_out, Number(f.lunch_minutes) || 0) : Number(f.hours) || 0;
 
   const add = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!f.employee_id) { toast.error("Pick an employee"); return; }
+    if (picked.length === 0) { toast.error("Pick at least one employee"); return; }
     const lunch = Number(f.lunch_minutes);
     const hours = Number(f.hours);
     if (mode === "clock" && (!Number.isFinite(lunch) || lunch < 0 || lunch > 600)) { toast.error("Lunch minutes must be 0–600"); return; }
     if (mode === "hours" && (!Number.isFinite(hours) || hours < 0 || hours > 24)) { toast.error("Hours must be 0–24"); return; }
-    const row: TablesInsert<"time_records"> =
+    const rows: TablesInsert<"time_records">[] = picked.map((employee_id) =>
       mode === "clock"
-        ? { employee_id: f.employee_id, work_date: f.work_date, entry_mode: "clock", clock_in: f.clock_in, clock_out: f.clock_out, lunch_minutes: lunch }
-        : { employee_id: f.employee_id, work_date: f.work_date, entry_mode: "hours", hours };
-    const { error } = await supabase.from("time_records").insert(row);
+        ? { employee_id, work_date: f.work_date, entry_mode: "clock", clock_in: f.clock_in, clock_out: f.clock_out, lunch_minutes: lunch }
+        : { employee_id, work_date: f.work_date, entry_mode: "hours", hours });
+    const { error } = await supabase.from("time_records").insert(rows);
     if (error) { toast.error(error.message); return; }
-    toast.success("Record added");
+    toast.success(rows.length === 1 ? "Record added" : `${rows.length} records added`);
+    setPicked([]);
     qc.invalidateQueries({ queryKey: ["records"] });
   };
 
@@ -61,13 +64,28 @@ function RecordsPage() {
             ))}
           </div>
         </div>
-        <div className="grid items-end gap-3 md:grid-cols-7">
-          <label className="md:col-span-2"><span className="label-mono">Employee</span>
-            <select className={`${inputCls} mt-1`} value={f.employee_id} onChange={(e) => setF({ ...f, employee_id: e.target.value })}>
-              <option value="">Select…</option>
-              {employees.map((e) => <option key={e.id} value={e.id}>{fullName(e)} · {e.employee_code}</option>)}
-            </select>
-          </label>
+        <div>
+          <div className="mb-2 flex items-center justify-between">
+            <span className="label-mono">Employees · {picked.length} selected</span>
+            <div className="flex gap-3 text-xs text-muted-foreground">
+              <button type="button" className="hover:text-foreground" onClick={() => setPicked(employees.filter((e) => e.active).map((e) => e.id))}>Select all</button>
+              <button type="button" className="hover:text-foreground" onClick={() => setPicked([])}>Clear</button>
+            </div>
+          </div>
+          <div className="flex max-h-40 flex-wrap gap-2 overflow-y-auto">
+            {employees.length === 0 && <span className="text-sm text-muted-foreground">No employees yet.</span>}
+            {employees.map((e) => {
+              const on = picked.includes(e.id);
+              return (
+                <button type="button" key={e.id} onClick={() => toggle(e.id)}
+                  className={`rounded-lg px-3 py-1.5 text-sm ring-1 ring-border ${on ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground hover:text-foreground"}`}>
+                  {fullName(e)} <span className="font-mono text-[11px] opacity-70">{e.employee_code}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div className="grid items-end gap-3 md:grid-cols-6">
           <label><span className="label-mono">Date</span><input type="date" className={`${inputCls} mt-1`} value={f.work_date} onChange={(e) => setF({ ...f, work_date: e.target.value })} required /></label>
           {mode === "clock" ? (
             <>
