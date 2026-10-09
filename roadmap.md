@@ -5,3 +5,5 @@
 - [x] Basic pay calc (hours × rate)
 - [x] Employee self-view
 - [x] Light/night mode toggle
+- [x] Fix broken build: spreadsheet reader for the import page was missing
+- [ ] Keep the app private: stay unpublished, reachable on one device (Daniel's choice for now)
