@@ -18,6 +18,7 @@ import { Route as AuthenticatedImportRouteImport } from './routes/_authenticated
 import { Route as AuthenticatedMeRouteImport } from './routes/_authenticated/me'
 import { Route as AuthenticatedPayrollRouteImport } from './routes/_authenticated/payroll'
 import { Route as AuthenticatedRecordsRouteImport } from './routes/_authenticated/records'
+import { Route as AuthenticatedEmployeesIdRouteImport } from './routes/_authenticated/employees_.$id'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -63,6 +64,12 @@ const AuthenticatedRecordsRoute = AuthenticatedRecordsRouteImport.update({
   path: '/records',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedEmployeesIdRoute =
+  AuthenticatedEmployeesIdRouteImport.update({
+    id: '/employees_/$id',
+    path: '/employees/$id',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -73,6 +80,7 @@ export interface FileRoutesByFullPath {
   '/me': typeof AuthenticatedMeRoute
   '/payroll': typeof AuthenticatedPayrollRoute
   '/records': typeof AuthenticatedRecordsRoute
+  '/employees/$id': typeof AuthenticatedEmployeesIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -83,6 +91,7 @@ export interface FileRoutesByTo {
   '/me': typeof AuthenticatedMeRoute
   '/payroll': typeof AuthenticatedPayrollRoute
   '/records': typeof AuthenticatedRecordsRoute
+  '/employees/$id': typeof AuthenticatedEmployeesIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -95,6 +104,7 @@ export interface FileRoutesById {
   '/_authenticated/me': typeof AuthenticatedMeRoute
   '/_authenticated/payroll': typeof AuthenticatedPayrollRoute
   '/_authenticated/records': typeof AuthenticatedRecordsRoute
+  '/_authenticated/employees_/$id': typeof AuthenticatedEmployeesIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -107,6 +117,7 @@ export interface FileRouteTypes {
     | '/me'
     | '/payroll'
     | '/records'
+    | '/employees/$id'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -117,6 +128,7 @@ export interface FileRouteTypes {
     | '/me'
     | '/payroll'
     | '/records'
+    | '/employees/$id'
   id:
     | '__root__'
     | '/'
@@ -128,6 +140,7 @@ export interface FileRouteTypes {
     | '/_authenticated/me'
     | '/_authenticated/payroll'
     | '/_authenticated/records'
+    | '/_authenticated/employees_/$id'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -201,6 +214,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedRecordsRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/employees_/$id': {
+      id: '/_authenticated/employees_/$id'
+      path: '/employees/$id'
+      fullPath: '/employees/$id'
+      preLoaderRoute: typeof AuthenticatedEmployeesIdRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
   }
 }
 
@@ -211,6 +231,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedMeRoute: typeof AuthenticatedMeRoute
   AuthenticatedPayrollRoute: typeof AuthenticatedPayrollRoute
   AuthenticatedRecordsRoute: typeof AuthenticatedRecordsRoute
+  AuthenticatedEmployeesIdRoute: typeof AuthenticatedEmployeesIdRoute
 }
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
@@ -220,6 +241,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedMeRoute: AuthenticatedMeRoute,
   AuthenticatedPayrollRoute: AuthenticatedPayrollRoute,
   AuthenticatedRecordsRoute: AuthenticatedRecordsRoute,
+  AuthenticatedEmployeesIdRoute: AuthenticatedEmployeesIdRoute,
 }
 
 const AuthenticatedRouteRouteWithChildren =
