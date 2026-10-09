@@ -17,38 +17,77 @@ export type Database = {
       employees: {
         Row: {
           active: boolean
+          address_line1: string | null
+          address_line2: string | null
+          city: string | null
+          country: string | null
           created_at: string
+          date_of_birth: string | null
           department: string | null
           email: string | null
+          emergency_contact_name: string | null
+          emergency_contact_phone: string | null
           employee_code: string
           first_name: string
+          hire_date: string | null
           hourly_rate: number
           id: string
+          job_title: string | null
           last_name: string
+          notes: string | null
+          phone: string | null
+          postal_code: string | null
+          state: string | null
           user_id: string | null
         }
         Insert: {
           active?: boolean
+          address_line1?: string | null
+          address_line2?: string | null
+          city?: string | null
+          country?: string | null
           created_at?: string
+          date_of_birth?: string | null
           department?: string | null
           email?: string | null
+          emergency_contact_name?: string | null
+          emergency_contact_phone?: string | null
           employee_code: string
           first_name: string
+          hire_date?: string | null
           hourly_rate?: number
           id?: string
+          job_title?: string | null
           last_name: string
+          notes?: string | null
+          phone?: string | null
+          postal_code?: string | null
+          state?: string | null
           user_id?: string | null
         }
         Update: {
           active?: boolean
+          address_line1?: string | null
+          address_line2?: string | null
+          city?: string | null
+          country?: string | null
           created_at?: string
+          date_of_birth?: string | null
           department?: string | null
           email?: string | null
+          emergency_contact_name?: string | null
+          emergency_contact_phone?: string | null
           employee_code?: string
           first_name?: string
+          hire_date?: string | null
           hourly_rate?: number
           id?: string
+          job_title?: string | null
           last_name?: string
+          notes?: string | null
+          phone?: string | null
+          postal_code?: string | null
+          state?: string | null
           user_id?: string | null
         }
         Relationships: []
