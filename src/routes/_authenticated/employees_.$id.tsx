@@ -11,7 +11,7 @@ export const Route = createFileRoute("/_authenticated/employees_/$id")({
   head: () => ({ meta: [{ title: "Employee profile — Meridian Payroll" }] }),
   component: ProfilePage,
   notFoundComponent: () => <div className="p-8">Employee not found.</div>,
-  errorComponent: ({ error }) => <div className="p-8">{error.message}</div>,
+  errorComponent: ({ error }) => <div className="p-8">{(error as Error).message}</div>,
 });
 
 type Field = { k: string; label: string; type?: string; span?: boolean };
@@ -54,12 +54,12 @@ function ProfilePage() {
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
     for (const k of required) if (!form[k]?.trim()) { toast.error("Employee ID, first and last name are required"); return; }
-    const rate = Number(form.hourly_rate);
+    const rate = Number(form["hourly_rate"]);
     if (!Number.isFinite(rate) || rate < 0) { toast.error("Hourly rate must be a positive number"); return; }
     const row: Record<string, string | number | null> = {};
     for (const s of sections) for (const f of s.fields) row[f.k] = form[f.k]?.trim() || null;
-    row.hourly_rate = rate;
-    row.notes = form.notes?.trim() || null;
+    row["hourly_rate"] = rate;
+    row["notes"] = form["notes"]?.trim() || null;
     const { error } = await supabase.from("employees").update(row as never).eq("id", id);
     if (error) { toast.error(error.message); return; }
     toast.success("Profile saved");
@@ -86,7 +86,7 @@ function ProfilePage() {
         ))}
         <div className="glass-panel p-5">
           <div className="mb-4 font-display font-extrabold tracking-tight">Notes</div>
-          <textarea rows={4} className={inputCls} value={form.notes ?? ""} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Anything else worth keeping…" />
+          <textarea rows={4} className={inputCls} value={form["notes"] ?? ""} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Anything else worth keeping…" />
         </div>
         <button className={btnPrimary}>Save profile</button>
       </form>
