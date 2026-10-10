@@ -74,3 +74,64 @@ export function computeHours(clockIn: string, clockOut: string, lunch: number) {
   if (mins < 0) mins += 1440;
   return Math.max(0, (mins - lunch) / 60);
 }
+
+export type FieldDef = Tables<"employee_field_defs">;
+export type Adjustment = Tables<"pay_adjustments">;
+export type PayrollSettings = Tables<"payroll_settings">;
+
+export function useFieldDefs() {
+  return useQuery({
+    queryKey: ["field-defs"],
+    queryFn: async () => {
+      const { data, error } = await supabase.from("employee_field_defs").select("*").order("sort_order").order("created_at");
+      if (error) throw error;
+      return data;
+    },
+  });
+}
+
+export function useAdjustments(from?: string, to?: string) {
+  return useQuery({
+    queryKey: ["adjustments", from, to],
+    queryFn: async () => {
+      let q = supabase.from("pay_adjustments").select("*").order("pay_date", { ascending: false });
+      if (from) q = q.gte("pay_date", from);
+      if (to) q = q.lte("pay_date", to);
+      const { data, error } = await q;
+      if (error) throw error;
+      return data;
+    },
+  });
+}
+
+export const defaultSettings = { ot_threshold: 40, ot_multiplier: 1.5, visible_columns: ["employee_code", "days"] };
+
+export function usePayrollSettings() {
+  return useQuery({
+    queryKey: ["payroll-settings"],
+    queryFn: async () => {
+      const { data, error } = await supabase.from("payroll_settings").select("*").maybeSingle();
+      if (error) throw error;
+      return data
+        ? { ot_threshold: Number(data.ot_threshold), ot_multiplier: Number(data.ot_multiplier), visible_columns: data.visible_columns }
+        : defaultSettings;
+    },
+  });
+}
+
+/** Monday of the week containing an ISO date string. */
+export function weekKey(date: string) {
+  const d = new Date(date + "T00:00:00Z");
+  const day = (d.getUTCDay() + 6) % 7;
+  d.setUTCDate(d.getUTCDate() - day);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Overtime = hours above the weekly threshold (Mon–Sun). */
+export function splitHours(records: { work_date: string; hours: number | string }[], threshold: number) {
+  const weeks = new Map<string, number>();
+  for (const r of records) weeks.set(weekKey(r.work_date), (weeks.get(weekKey(r.work_date)) ?? 0) + Number(r.hours));
+  let regular = 0, overtime = 0;
+  for (const h of weeks.values()) { regular += Math.min(h, threshold); overtime += Math.max(0, h - threshold); }
+  return { regular, overtime };
+}
