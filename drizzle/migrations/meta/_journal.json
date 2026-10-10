@@ -15,6 +15,13 @@
       "when": 1791516271464,
       "tag": "0001_employee_profile_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791598819990,
+      "tag": "0002_custom_fields_overtime_adjustments",
+      "breakpoints": true
     }
   ]
 }
