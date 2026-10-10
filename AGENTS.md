@@ -15,3 +15,4 @@
 - First signup becomes admin via `handle_new_user`; later signups are employees linked to employee rows by email.
 - File imports are parsed client-side with SheetJS (`xlsx`) for both CSV and Excel.
 - Theme is a `.dark` class on <html>, set pre-hydration by an inline head script from localStorage.
+- Custom employee categories live in employee_field_defs; values in employees.custom_fields keyed by def id (so renames keep data). Overtime is computed client-side per Mon–Sun week from payroll_settings.

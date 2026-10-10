@@ -14,6 +14,30 @@ export type Database = {
   }
   public: {
     Tables: {
+      employee_field_defs: {
+        Row: {
+          created_at: string
+          field_type: string
+          id: string
+          label: string
+          sort_order: number
+        }
+        Insert: {
+          created_at?: string
+          field_type?: string
+          id?: string
+          label: string
+          sort_order?: number
+        }
+        Update: {
+          created_at?: string
+          field_type?: string
+          id?: string
+          label?: string
+          sort_order?: number
+        }
+        Relationships: []
+      }
       employees: {
         Row: {
           active: boolean
@@ -22,6 +46,7 @@ export type Database = {
           city: string | null
           country: string | null
           created_at: string
+          custom_fields: Json
           date_of_birth: string | null
           department: string | null
           email: string | null
@@ -47,6 +72,7 @@ export type Database = {
           city?: string | null
           country?: string | null
           created_at?: string
+          custom_fields?: Json
           date_of_birth?: string | null
           department?: string | null
           email?: string | null
@@ -72,6 +98,7 @@ export type Database = {
           city?: string | null
           country?: string | null
           created_at?: string
+          custom_fields?: Json
           date_of_birth?: string | null
           department?: string | null
           email?: string | null
@@ -89,6 +116,68 @@ export type Database = {
           postal_code?: string | null
           state?: string | null
           user_id?: string | null
+        }
+        Relationships: []
+      }
+      pay_adjustments: {
+        Row: {
+          amount: number
+          category: string
+          created_at: string
+          employee_id: string
+          id: string
+          note: string | null
+          pay_date: string
+        }
+        Insert: {
+          amount?: number
+          category: string
+          created_at?: string
+          employee_id: string
+          id?: string
+          note?: string | null
+          pay_date: string
+        }
+        Update: {
+          amount?: number
+          category?: string
+          created_at?: string
+          employee_id?: string
+          id?: string
+          note?: string | null
+          pay_date?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pay_adjustments_employee_id_fkey"
+            columns: ["employee_id"]
+            isOneToOne: false
+            referencedRelation: "employees"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      payroll_settings: {
+        Row: {
+          id: boolean
+          ot_multiplier: number
+          ot_threshold: number
+          updated_at: string
+          visible_columns: string[]
+        }
+        Insert: {
+          id?: boolean
+          ot_multiplier?: number
+          ot_threshold?: number
+          updated_at?: string
+          visible_columns?: string[]
+        }
+        Update: {
+          id?: boolean
+          ot_multiplier?: number
+          ot_threshold?: number
+          updated_at?: string
+          visible_columns?: string[]
         }
         Relationships: []
       }

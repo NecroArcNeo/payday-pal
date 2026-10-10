@@ -4,8 +4,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { AppShell, btnPrimary, inputCls } from "@/components/AppShell";
-import { fullName, useEmployees } from "@/lib/payroll";
-import { ArrowLeft } from "lucide-react";
+import { fullName, useEmployees, useFieldDefs } from "@/lib/payroll";
+import { ArrowLeft, Plus, Trash2 } from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated/employees_/$id")({
   head: () => ({ meta: [{ title: "Employee profile — Meridian Payroll" }] }),
@@ -40,12 +40,41 @@ function ProfilePage() {
   const { data: employees = [], isLoading } = useEmployees();
   const emp = employees.find((e) => e.id === id);
   const [form, setForm] = useState<Record<string, string>>({});
+  const [custom, setCustom] = useState<Record<string, string>>({});
+  const { data: defs = [] } = useFieldDefs();
+  const [newLabel, setNewLabel] = useState("");
+  const [newType, setNewType] = useState("text");
+
+  const addCategory = async () => {
+    const label = newLabel.trim();
+    if (!label) return;
+    if (label.length > 60) { toast.error("Keep the category name under 60 characters"); return; }
+    const { error } = await supabase.from("employee_field_defs").insert({ label, field_type: newType, sort_order: defs.length });
+    if (error) { toast.error(error.message); return; }
+    setNewLabel("");
+    toast.success(`"${label}" added for every employee`);
+    qc.invalidateQueries({ queryKey: ["field-defs"] });
+  };
+  const renameCategory = async (defId: string, label: string) => {
+    if (!label.trim()) return;
+    const { error } = await supabase.from("employee_field_defs").update({ label: label.trim() }).eq("id", defId);
+    if (error) toast.error(error.message); else qc.invalidateQueries({ queryKey: ["field-defs"] });
+  };
+  const removeCategory = async (defId: string, label: string) => {
+    if (!confirm(`Remove the "${label}" category for all employees?`)) return;
+    const { error } = await supabase.from("employee_field_defs").delete().eq("id", defId);
+    if (error) toast.error(error.message); else qc.invalidateQueries({ queryKey: ["field-defs"] });
+  };
 
   useEffect(() => {
     if (!emp) return;
     const f: Record<string, string> = {};
     for (const [k, v] of Object.entries(emp)) f[k] = v == null ? "" : String(v);
     setForm(f);
+    const c: Record<string, string> = {};
+    const raw = (emp.custom_fields ?? {}) as Record<string, unknown>;
+    for (const [k, v] of Object.entries(raw)) c[k] = v == null ? "" : String(v);
+    setCustom(c);
   }, [emp]);
 
   if (isLoading) return <AppShell eyebrow="Profile" title="Loading…"><div /></AppShell>;
@@ -60,6 +89,9 @@ function ProfilePage() {
     for (const s of sections) for (const f of s.fields) row[f.k] = form[f.k]?.trim() || null;
     row["hourly_rate"] = rate;
     row["notes"] = form["notes"]?.trim() || null;
+    const cf: Record<string, string> = {};
+    for (const [k, v] of Object.entries(custom)) if (v.trim()) cf[k] = v.trim().slice(0, 1000);
+    (row as Record<string, unknown>)["custom_fields"] = cf;
     const { error } = await supabase.from("employees").update(row as never).eq("id", id);
     if (error) { toast.error(error.message); return; }
     toast.success("Profile saved");
@@ -84,6 +116,31 @@ function ProfilePage() {
             </div>
           </div>
         ))}
+        <div className="glass-panel p-5">
+          <div className="mb-1 font-display font-extrabold tracking-tight">Your categories</div>
+          <p className="mb-4 text-xs text-muted-foreground">Categories you add here show up on every employee's profile. Click a name to rename it.</p>
+          <div className="grid gap-3 md:grid-cols-3">
+            {defs.map((d) => (
+              <label key={d.id}>
+                <span className="flex items-center justify-between gap-2">
+                  <input className="label-mono w-full bg-transparent outline-none" defaultValue={d.label}
+                    onBlur={(e) => e.target.value !== d.label && renameCategory(d.id, e.target.value)} aria-label="Category name" />
+                  <button type="button" onClick={() => removeCategory(d.id, d.label)} aria-label={`Remove ${d.label}`} className="text-muted-foreground hover:text-destructive"><Trash2 className="h-3.5 w-3.5" /></button>
+                </span>
+                <input className={`${inputCls} mt-1`} type={d.field_type} value={custom[d.id] ?? ""} onChange={(e) => setCustom({ ...custom, [d.id]: e.target.value })} />
+              </label>
+            ))}
+            {defs.length === 0 && <div className="text-sm text-muted-foreground md:col-span-3">No custom categories yet.</div>}
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2 border-t border-border pt-4">
+            <input className={`${inputCls} max-w-xs`} placeholder="New category, e.g. T-shirt size" value={newLabel} onChange={(e) => setNewLabel(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCategory(); } }} />
+            <select className={`${inputCls} max-w-[9rem]`} value={newType} onChange={(e) => setNewType(e.target.value)}>
+              <option value="text">Text</option><option value="number">Number</option><option value="date">Date</option>
+            </select>
+            <button type="button" onClick={addCategory} className={btnPrimary}><Plus className="mr-1 inline h-4 w-4" />Add category</button>
+          </div>
+        </div>
         <div className="glass-panel p-5">
           <div className="mb-4 font-display font-extrabold tracking-tight">Notes</div>
           <textarea rows={4} className={inputCls} value={form["notes"] ?? ""} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Anything else worth keeping…" />
