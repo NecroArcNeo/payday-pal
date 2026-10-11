@@ -153,7 +153,7 @@ function parsePeople(sheet: SheetInfo, existing: Employee[], defs: FieldDef[], t
   return { ok, errs };
 }
 
-function parseRecords(sheet: SheetInfo, people: { id?: string; employee_code: string; email?: string | null; first_name: string; last_name: string }[]) {
+function parseRecords(sheet: SheetInfo, people: { id?: string | undefined; employee_code: string; email?: string | null | undefined; first_name: string; last_name: string }[]) {
   const ok: Record<string, unknown>[] = [];
   const errs: string[] = [];
   const byCode = new Map(people.map((e) => [e.employee_code.toLowerCase(), e]));
