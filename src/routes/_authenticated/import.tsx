@@ -105,7 +105,7 @@ function guessRole(headers: string[]): Role {
   return r > p ? "records" : "people";
 }
 
-type PersonRow = Partial<Employee> & { employee_code: string; first_name: string; last_name: string };
+type PersonRow = { [K in keyof Employee]?: Employee[K] | undefined } & { employee_code: string; first_name: string; last_name: string };
 
 function parsePeople(sheet: SheetInfo, existing: Employee[], defs: FieldDef[], taken: Set<string>) {
   const ok: PersonRow[] = [];
