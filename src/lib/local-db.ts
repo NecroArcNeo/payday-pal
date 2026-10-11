@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS employees (
   department TEXT,
   hourly_rate NUMERIC(10,2) NOT NULL DEFAULT 0,
   active BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP::text),
   phone TEXT,
   job_title TEXT,
   address_line1 TEXT,
@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS time_records (
   lunch_minutes INTEGER NOT NULL DEFAULT 0 CHECK (lunch_minutes >= 0),
   hours NUMERIC(6,2) NOT NULL DEFAULT 0 CHECK (hours >= 0),
   note TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP::text)
 );
 CREATE INDEX IF NOT EXISTS time_records_emp_date ON time_records (employee_id, work_date);
 
@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS employee_field_defs (
   label TEXT NOT NULL,
   field_type TEXT NOT NULL DEFAULT 'text',
   sort_order INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP::text)
 );
 
 CREATE TABLE IF NOT EXISTS pay_adjustments (
@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS pay_adjustments (
   category TEXT NOT NULL,
   amount NUMERIC NOT NULL DEFAULT 0,
   note TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP::text)
 );
 
 CREATE TABLE IF NOT EXISTS payroll_settings (
@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS payroll_settings (
   ot_threshold NUMERIC NOT NULL DEFAULT 40,
   ot_multiplier NUMERIC NOT NULL DEFAULT 1.5,
   visible_columns TEXT NOT NULL DEFAULT '["employee_code","days"]',
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP::text)
 );
 
 CREATE TABLE IF NOT EXISTS sync_meta (
