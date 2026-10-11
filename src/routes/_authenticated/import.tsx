@@ -107,13 +107,17 @@ function guessRole(headers: string[]): Role {
 
 type PersonRow = { [K in keyof Employee]?: Employee[K] | undefined } & { employee_code: string; first_name: string; last_name: string };
 
-function parsePeople(sheet: SheetInfo, existing: Employee[], defs: FieldDef[], taken: Set<string>) {
+function parsePeople(sheet: SheetInfo, existing: Employee[], seen: PersonRow[], defs: FieldDef[], taken: Set<string>) {
   const ok: PersonRow[] = [];
   const errs: string[] = [];
-  const byEmail = new Map(existing.filter((e) => e.email).map((e) => [e.email!.toLowerCase(), e]));
-  const byName = new Map(existing.map((e) => [`${e.first_name} ${e.last_name}`.toLowerCase(), e]));
+  const existByEmail = new Map(existing.filter((e) => e.email).map((e) => [e.email!.toLowerCase(), e]));
+  const existByName = new Map(existing.map((e) => [`${e.first_name} ${e.last_name}`.toLowerCase(), e]));
+  const seenByEmail = new Map(seen.filter((p) => p.email).map((p) => [p.email!.toLowerCase(), p]));
+  const seenByName = new Map(seen.map((p) => [`${p.first_name} ${p.last_name}`.toLowerCase(), p]));
+  const sheetByEmail = new Map<string, PersonRow>();
+  const sheetByName = new Map<string, PersonRow>();
   const defByLabel = new Map(defs.map((d) => [norm(d.label), d.id]));
-  let n = existing.length + 1;
+  let n = existing.length + seen.length + 1;
   sheet.rows.slice(0, 25000).forEach((r, i) => {
     const line = `${sheet.name} row ${i + 2}`;
     let first = pick(r, ...A.first), last = pick(r, ...A.last);
@@ -126,10 +130,16 @@ function parsePeople(sheet: SheetInfo, existing: Employee[], defs: FieldDef[], t
     if (!last) last = "-";
     const email = pick(r, ...A.email);
     if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { errs.push(`${line}: invalid email "${email}"`); return; }
+    const emailKey = email ? email.toLowerCase() : "";
+    const nameKey = `${first} ${last}`.toLowerCase();
+    if ((emailKey && (seenByEmail.has(emailKey) || sheetByEmail.has(emailKey))) || seenByName.has(nameKey) || sheetByName.has(nameKey)) {
+      errs.push(`${line}: duplicate employee "${first} ${last === "-" ? "" : last}"${emailKey ? ` <${email}>` : ""} — skipped`);
+      return;
+    }
     const rateRaw = pick(r, ...A.rate).replace(/[$,\s]/g, "");
     const rate = Number(rateRaw || 0);
     if (!Number.isFinite(rate) || rate < 0) { errs.push(`${line}: invalid hourly rate`); return; }
-    const match = (email && byEmail.get(email.toLowerCase())) || byName.get(`${first} ${last}`.toLowerCase());
+    const match = (emailKey && existByEmail.get(emailKey)) || existByName.get(nameKey);
     let code = pick(r, ...A.code) || match?.employee_code || "";
     if (!code) { do { code = `E${String(n++).padStart(3, "0")}`; } while (taken.has(code.toLowerCase())); }
     if (taken.has(code.toLowerCase()) && !match && !pick(r, ...A.code)) { errs.push(`${line}: duplicate ID ${code}`); return; }
@@ -149,6 +159,8 @@ function parsePeople(sheet: SheetInfo, existing: Employee[], defs: FieldDef[], t
     };
     for (const k of Object.keys(row) as (keyof PersonRow)[]) if (row[k] === undefined) delete row[k];
     ok.push(row);
+    if (emailKey) sheetByEmail.set(emailKey, row);
+    sheetByName.set(nameKey, row);
   });
   return { ok, errs };
 }
@@ -226,10 +238,16 @@ function ImportPage() {
 
   const setRole = (name: string, role: Role) => setSheets((s) => s.map((x) => (x.name === name ? { ...x, role } : x)));
 
-  // Preview
+  // Preview — parse people sheets, accumulating seen rows so duplicates across sheets are skipped
   const taken = new Set(employees.map((e) => e.employee_code.toLowerCase()));
-  const peopleRes = sheets.filter((s) => s.role === "people").map((s) => parsePeople(s, employees, defs, taken));
-  const newPeople = peopleRes.flatMap((r) => r.ok);
+  const peopleRes: { ok: PersonRow[]; errs: string[] }[] = [];
+  const accumulated: PersonRow[] = [];
+  for (const s of sheets.filter((x) => x.role === "people")) {
+    const res = parsePeople(s, employees, accumulated, defs, taken);
+    peopleRes.push(res);
+    accumulated.push(...res.ok);
+  }
+  const newPeople = accumulated;
   const pool = [...employees, ...newPeople.filter((p) => !employees.some((e) => e.employee_code === p.employee_code))];
   const recRes = sheets.filter((s) => s.role === "records").map((s) => parseRecords(s, pool));
   const recCount = recRes.reduce((n, r) => n + r.ok.length, 0);
