@@ -47,10 +47,11 @@ function createSupabaseFetch(supabaseUrl: string, supabaseKey: string): typeof f
 
 
 function createSupabaseClient() {
-  // Prefer the SUPABASE_URL / SUPABASE_PUBLISHABLE_KEY pair (server-injected, always
-  // matches the project the key was issued for). Fall back to VITE_* vars only if those
-  // aren't available — the VITE_* pair can be stale and point at a different project.
-  const SUPABASE_URL = process.env['SUPABASE_URL'] || import.meta.env['VITE_SUPABASE_URL'];
+  // The VITE_SUPABASE_URL in .env can be stale and point at a different project than the
+  // key. The project ID is always correct, so derive the URL from it when available.
+  const projectId = process.env['SUPABASE_PROJECT_ID'] || import.meta.env['VITE_SUPABASE_PROJECT_ID'];
+  const derivedUrl = projectId ? `https://${projectId}.supabase.co` : undefined;
+  const SUPABASE_URL = derivedUrl || process.env['SUPABASE_URL'] || import.meta.env['VITE_SUPABASE_URL'];
   const SUPABASE_PUBLISHABLE_KEY = process.env['SUPABASE_PUBLISHABLE_KEY'] || import.meta.env['VITE_SUPABASE_PUBLISHABLE_KEY'];
 
   if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
