@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { Search, X, ChevronRight, ChevronLeft, Users, UserCheck } from "lucide-react";
 import { localDb } from "@/lib/local-db";
 import { AppShell, btnPrimary, inputCls } from "@/components/AppShell";
-import { RecordsTable } from "@/components/RecordsTable";
+import { RecordsTable, type EditData } from "@/components/RecordsTable";
 import { computeHours, fullName, isoDate, useEmployees, useRecords, type Employee } from "@/lib/payroll";
 
 export const Route = createFileRoute("/_authenticated/records")({
@@ -104,6 +104,26 @@ function RecordsPage() {
     for (const id of ids) await localDb.deleteRecord(id);
     qc.invalidateQueries({ queryKey: ["records"] });
     toast.success(`Deleted ${ids.length} record${ids.length > 1 ? "s" : ""}`);
+  };
+
+  const editOne = async (id: string, data: EditData) => {
+    try {
+      await localDb.updateRecord(id, data);
+      qc.invalidateQueries({ queryKey: ["records"] });
+      toast.success("Record updated");
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
+  };
+
+  const editMany = async (ids: string[], data: EditData) => {
+    try {
+      for (const id of ids) await localDb.updateRecord(id, data);
+      qc.invalidateQueries({ queryKey: ["records"] });
+      toast.success(`Updated ${ids.length} record${ids.length > 1 ? "s" : ""}`);
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
   };
 
   return (
@@ -225,7 +245,7 @@ function RecordsPage() {
         </div>
       </div>
 
-      <RecordsTable records={records} employees={employees} title={`${records.length} records`} onDelete={del} onDeleteMany={delMany} />
+      <RecordsTable records={records} employees={employees} title={`${records.length} records`} onDelete={del} onDeleteMany={delMany} onEdit={editOne} onEditMany={editMany} />
     </AppShell>
   );
 }

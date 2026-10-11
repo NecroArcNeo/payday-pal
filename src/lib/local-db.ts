@@ -385,6 +385,37 @@ export const localDb = {
     for (const r of records) await this.insertRecord(r);
   },
 
+  async updateRecord(id: string, data: { work_date?: string; entry_mode?: string; clock_in?: string | null; clock_out?: string | null; lunch_minutes?: number; hours?: number; note?: string | null }): Promise<void> {
+    const db = await getDb();
+    const fields: string[] = [];
+    const values: unknown[] = [];
+    let idx = 1;
+
+    if (data.work_date !== undefined) { fields.push(`work_date = ${idx++}`); values.push(data.work_date); }
+    if (data.entry_mode !== undefined) { fields.push(`entry_mode = ${idx++}`); values.push(data.entry_mode); }
+    if (data.clock_in !== undefined) { fields.push(`clock_in = ${idx++}`); values.push(data.clock_in); }
+    if (data.clock_out !== undefined) { fields.push(`clock_out = ${idx++}`); values.push(data.clock_out); }
+    if (data.lunch_minutes !== undefined) { fields.push(`lunch_minutes = ${idx++}`); values.push(data.lunch_minutes); }
+    if (data.hours !== undefined) { fields.push(`hours = ${idx++}`); values.push(data.hours); }
+    if (data.note !== undefined) { fields.push(`note = ${idx++}`); values.push(data.note); }
+
+    // Recompute hours if clock fields were updated
+    const mode = data.entry_mode;
+    if (mode === "clock" && data.clock_in != null && data.clock_out != null) {
+      const lunch = data.lunch_minutes ?? 0;
+      const computed = computeHours(data.clock_in, data.clock_out, lunch);
+      fields.push(`hours = ${idx++}`); values.push(computed);
+    } else if (mode === "hours" && data.hours !== undefined) {
+      fields.push(`clock_in = ${idx++}`); values.push(null);
+      fields.push(`clock_out = ${idx++}`); values.push(null);
+      fields.push(`lunch_minutes = ${idx++}`); values.push(0);
+    }
+
+    if (!fields.length) return;
+    values.push(id);
+    await db.query(`UPDATE time_records SET ${fields.join(", ")} WHERE id = ${idx}`, values);
+  },
+
   async deleteRecord(id: string): Promise<void> {
     const db = await getDb();
     await db.query("DELETE FROM time_records WHERE id = $1", [id]);

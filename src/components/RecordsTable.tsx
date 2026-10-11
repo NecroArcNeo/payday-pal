@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
-import { Search, X, Trash2, Filter } from "lucide-react";
-import { fullName, money, type Employee, type RecordWithEmp } from "@/lib/payroll";
+import { Search, X, Trash2, Filter, Pencil, XCircle } from "lucide-react";
+import { fullName, money, computeHours, type Employee, type RecordWithEmp } from "@/lib/payroll";
 import { inputCls } from "@/components/AppShell";
 
 interface Props {
@@ -9,12 +9,23 @@ interface Props {
   title?: string;
   onDelete?: (id: string) => void;
   onDeleteMany?: (ids: string[]) => void;
+  onEdit?: (id: string, data: EditData) => Promise<void>;
+  onEditMany?: (ids: string[], data: EditData) => Promise<void>;
   showName?: boolean;
+}
+
+export interface EditData {
+  work_date?: string;
+  entry_mode?: "clock" | "hours";
+  clock_in?: string | null;
+  clock_out?: string | null;
+  lunch_minutes?: number;
+  hours?: number;
 }
 
 type SortKey = "date" | "name" | "hours" | "pay";
 
-export function RecordsTable({ records, employees = [], title = "Time records", onDelete, onDeleteMany, showName = true }: Props) {
+export function RecordsTable({ records, employees = [], title = "Time records", onDelete, onDeleteMany, onEdit, onEditMany, showName = true }: Props) {
   const [mode, setMode] = useState<"all" | "clock" | "hours">("all");
   const [search, setSearch] = useState("");
   const [dept, setDept] = useState("");
@@ -24,7 +35,49 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [confirmDelete, setConfirmDelete] = useState(false);
 
-  // Unique departments and positions for filter dropdowns
+  // Edit modal state
+  const [editSingle, setEditSingle] = useState<RecordWithEmp | null>(null);
+  const [showBulkEdit, setShowBulkEdit] = useState(false);
+
+  // Bulk edit form — fields are optional, only applied if changed
+  const [bulkForm, setBulkForm] = useState<{
+    work_date: string;
+    entry_mode: "clock" | "hours";
+    clock_in: string;
+    clock_out: string;
+    lunch_minutes: string;
+    hours: string;
+    useDate: boolean;
+    useMode: boolean;
+    useClockIn: boolean;
+    useClockOut: boolean;
+    useLunch: boolean;
+    useHours: boolean;
+  }>({
+    work_date: "",
+    entry_mode: "clock",
+    clock_in: "09:00",
+    clock_out: "17:00",
+    lunch_minutes: "30",
+    hours: "8",
+    useDate: false,
+    useMode: false,
+    useClockIn: false,
+    useClockOut: false,
+    useLunch: false,
+    useHours: false,
+  });
+
+  // Single edit form
+  const [singleForm, setSingleForm] = useState({
+    work_date: "",
+    entry_mode: "clock" as "clock" | "hours",
+    clock_in: "",
+    clock_out: "",
+    lunch_minutes: "",
+    hours: "",
+  });
+
   const departments = useMemo(() => {
     const set = new Set<string>();
     employees.forEach((e) => { if (e.department) set.add(e.department); });
@@ -37,12 +90,8 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
     return [...set].sort();
   }, [employees]);
 
-  const empById = useMemo(() => {
-    const m = new Map(employees.map((e) => [e.id, e]));
-    return m;
-  }, [employees]);
+  const empById = useMemo(() => new Map(employees.map((e) => [e.id, e])), [employees]);
 
-  // Apply filters
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim();
     let rows = records.filter((r) => {
@@ -59,7 +108,6 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
       return true;
     });
 
-    // Sort
     rows = [...rows].sort((a, b) => {
       let cmp = 0;
       if (sortKey === "date") cmp = a.work_date.localeCompare(b.work_date);
@@ -79,7 +127,6 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
     return rows;
   }, [records, mode, search, dept, position, sortKey, sortDesc, empById]);
 
-  // Remove checked IDs that are no longer visible
   const visibleChecked = useMemo(
     () => filtered.filter((r) => checked.has(r.id)),
     [filtered, checked],
@@ -107,6 +154,60 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
     await onDeleteMany(ids);
   };
 
+  const openEditSingle = (r: RecordWithEmp) => {
+    setSingleForm({
+      work_date: r.work_date,
+      entry_mode: r.entry_mode as "clock" | "hours",
+      clock_in: r.clock_in ?? "09:00",
+      clock_out: r.clock_out ?? "17:00",
+      lunch_minutes: String(r.lunch_minutes ?? 0),
+      hours: String(r.hours ?? 0),
+    });
+    setEditSingle(r);
+  };
+
+  const submitSingleEdit = async () => {
+    if (!editSingle || !onEdit) return;
+    const data: EditData = {
+      work_date: singleForm.work_date,
+      entry_mode: singleForm.entry_mode,
+    };
+    if (singleForm.entry_mode === "clock") {
+      data.clock_in = singleForm.clock_in;
+      data.clock_out = singleForm.clock_out;
+      data.lunch_minutes = Number(singleForm.lunch_minutes) || 0;
+    } else {
+      data.hours = Number(singleForm.hours) || 0;
+    }
+    await onEdit(editSingle.id, data);
+    setEditSingle(null);
+  };
+
+  const submitBulkEdit = async () => {
+    if (!onEditMany || checked.size === 0) return;
+    const data: EditData = {};
+    if (bulkForm.useDate) data.work_date = bulkForm.work_date;
+    if (bulkForm.useMode) data.entry_mode = bulkForm.entry_mode;
+    if (bulkForm.useMode && bulkForm.entry_mode === "clock") {
+      if (bulkForm.useClockIn) data.clock_in = bulkForm.clock_in;
+      if (bulkForm.useClockOut) data.clock_out = bulkForm.clock_out;
+      if (bulkForm.useLunch) data.lunch_minutes = Number(bulkForm.lunch_minutes) || 0;
+    }
+    if (bulkForm.useMode && bulkForm.entry_mode === "hours") {
+      if (bulkForm.useHours) data.hours = Number(bulkForm.hours) || 0;
+    }
+    if (!bulkForm.useMode) {
+      // Keep existing mode but allow field overrides
+      if (bulkForm.useClockIn) data.clock_in = bulkForm.clock_in;
+      if (bulkForm.useClockOut) data.clock_out = bulkForm.clock_out;
+      if (bulkForm.useLunch) data.lunch_minutes = Number(bulkForm.lunch_minutes) || 0;
+      if (bulkForm.useHours) data.hours = Number(bulkForm.hours) || 0;
+    }
+    await onEditMany([...checked], data);
+    setShowBulkEdit(false);
+    setChecked(new Set());
+  };
+
   const sortBtn = (key: SortKey, label: string) => (
     <button
       onClick={() => setSortKey((k) => {
@@ -122,12 +223,15 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
   );
 
   const hasFilters = search || dept || position || mode !== "all";
+  const singlePreview = singleForm.entry_mode === "clock"
+    ? computeHours(singleForm.clock_in, singleForm.clock_out, Number(singleForm.lunch_minutes) || 0)
+    : Number(singleForm.hours) || 0;
 
   return (
     <div className="glass-panel overflow-hidden">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <div className="font-display font-extrabold tracking-tight">{title}</div>
           {checked.size > 0 && onDeleteMany && (
             <button
@@ -136,6 +240,15 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
             >
               <Trash2 className="h-3.5 w-3.5" />
               Delete {checked.size} selected
+            </button>
+          )}
+          {checked.size > 0 && onEditMany && (
+            <button
+              onClick={() => setShowBulkEdit(true)}
+              className="flex items-center gap-1.5 rounded-lg bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary ring-1 ring-primary/20 hover:bg-primary/20"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+              Edit {checked.size} selected
             </button>
           )}
         </div>
@@ -201,12 +314,7 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
             <tr className="border-b border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
               {onDeleteMany && (
                 <th className="w-10 px-3 py-3">
-                  <input
-                    type="checkbox"
-                    checked={allVisibleChecked}
-                    onChange={toggleAll}
-                    className="h-3.5 w-3.5"
-                  />
+                  <input type="checkbox" checked={allVisibleChecked} onChange={toggleAll} className="h-3.5 w-3.5" />
                 </th>
               )}
               {showName && <th className="px-5 py-3 text-left font-medium">{sortBtn("name", "Employee")}</th>}
@@ -218,7 +326,7 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
               <th className="px-3 py-3 text-right font-medium">{sortBtn("hours", "Hours")}</th>
               <th className="px-3 py-3 text-right font-medium">Rate</th>
               <th className="px-5 py-3 text-right font-medium">{sortBtn("pay", "Gross")}</th>
-              {onDelete && <th className="w-10" />}
+              {(onDelete || onEdit) && <th className="w-20" />}
             </tr>
           </thead>
           <tbody className="font-mono text-[13px]">
@@ -240,12 +348,7 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
                 >
                   {onDeleteMany && (
                     <td className="px-3 py-3">
-                      <input
-                        type="checkbox"
-                        checked={isChecked}
-                        onChange={() => toggleOne(r.id)}
-                        className="h-3.5 w-3.5"
-                      />
+                      <input type="checkbox" checked={isChecked} onChange={() => toggleOne(r.id)} className="h-3.5 w-3.5" />
                     </td>
                   )}
                   {showName && (
@@ -270,15 +373,28 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
                   <td className="px-3 py-3 text-right font-semibold">{Number(r.hours).toFixed(2)}</td>
                   <td className="px-3 py-3 text-right text-muted-foreground">{money(rate)}</td>
                   <td className="px-5 py-3 text-right font-semibold">{money(rate * Number(r.hours))}</td>
-                  {onDelete && (
+                  {(onDelete || onEdit) && (
                     <td className="pr-4">
-                      <button
-                        onClick={() => onDelete(r.id)}
-                        aria-label="Delete record"
-                        className="text-muted-foreground transition-colors hover:text-destructive"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
+                      <div className="flex items-center gap-2">
+                        {onEdit && (
+                          <button
+                            onClick={() => openEditSingle(r)}
+                            aria-label="Edit record"
+                            className="text-muted-foreground transition-colors hover:text-primary"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </button>
+                        )}
+                        {onDelete && (
+                          <button
+                            onClick={() => onDelete(r.id)}
+                            aria-label="Delete record"
+                            className="text-muted-foreground transition-colors hover:text-destructive"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
                     </td>
                   )}
                 </tr>
@@ -287,6 +403,168 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
           </tbody>
         </table>
       </div>
+
+      {/* Single edit modal */}
+      {editSingle && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4" onClick={() => setEditSingle(null)}>
+          <div className="glass-panel max-w-md space-y-4 p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="font-display text-lg font-extrabold">Edit record</div>
+                <div className="text-xs text-muted-foreground">
+                  {editSingle.employees ? fullName(editSingle.employees) : "Unknown"} · {editSingle.work_date}
+                </div>
+              </div>
+              <button onClick={() => setEditSingle(null)} className="text-muted-foreground hover:text-foreground">
+                <XCircle className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="flex rounded-xl bg-secondary p-1 text-xs font-medium ring-1 ring-border">
+              {(["clock", "hours"] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setSingleForm((f) => ({ ...f, entry_mode: m }))}
+                  className={`flex-1 rounded-lg px-3 py-1.5 ${singleForm.entry_mode === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                >
+                  {m === "clock" ? "Clock in / out" : "Daily hours"}
+                </button>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <label className="col-span-2">
+                <span className="label-mono">Date</span>
+                <input type="date" className={`${inputCls} mt-1`} value={singleForm.work_date} onChange={(e) => setSingleForm((f) => ({ ...f, work_date: e.target.value }))} />
+              </label>
+              {singleForm.entry_mode === "clock" ? (
+                <>
+                  <label>
+                    <span className="label-mono">Clock in</span>
+                    <input type="time" className={`${inputCls} mt-1`} value={singleForm.clock_in} onChange={(e) => setSingleForm((f) => ({ ...f, clock_in: e.target.value }))} />
+                  </label>
+                  <label>
+                    <span className="label-mono">Clock out</span>
+                    <input type="time" className={`${inputCls} mt-1`} value={singleForm.clock_out} onChange={(e) => setSingleForm((f) => ({ ...f, clock_out: e.target.value }))} />
+                  </label>
+                  <label>
+                    <span className="label-mono">Lunch (min)</span>
+                    <input type="number" min={0} className={`${inputCls} mt-1`} value={singleForm.lunch_minutes} onChange={(e) => setSingleForm((f) => ({ ...f, lunch_minutes: e.target.value }))} />
+                  </label>
+                </>
+              ) : (
+                <label className="col-span-2">
+                  <span className="label-mono">Hours worked</span>
+                  <input type="number" step="0.25" min={0} max={24} className={`${inputCls} mt-1`} value={singleForm.hours} onChange={(e) => setSingleForm((f) => ({ ...f, hours: e.target.value }))} />
+                </label>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between">
+              <span className="font-mono text-xs text-muted-foreground">{singlePreview.toFixed(2)} hours</span>
+              <div className="flex gap-2">
+                <button onClick={() => setEditSingle(null)} className="rounded-xl bg-secondary px-4 py-2 text-sm font-medium ring-1 ring-border text-muted-foreground hover:text-foreground">Cancel</button>
+                <button onClick={submitSingleEdit} className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90">Save changes</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk edit modal */}
+      {showBulkEdit && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4" onClick={() => setShowBulkEdit(false)}>
+          <div className="glass-panel max-w-lg space-y-4 p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="font-display text-lg font-extrabold">Edit {checked.size} records</div>
+                <div className="text-xs text-muted-foreground">Check the fields you want to change. Unchecked fields keep their current values.</div>
+              </div>
+              <button onClick={() => setShowBulkEdit(false)} className="text-muted-foreground hover:text-foreground">
+                <XCircle className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              {/* Date */}
+              <label className="flex items-center gap-3 rounded-xl bg-secondary p-3 ring-1 ring-border">
+                <input type="checkbox" checked={bulkForm.useDate} onChange={() => setBulkForm((f) => ({ ...f, useDate: !f.useDate }))} className="h-4 w-4" />
+                <div className="flex flex-1 items-center gap-3">
+                  <span className="label-mono whitespace-nowrap">Date</span>
+                  <input
+                    type="date"
+                    disabled={!bulkForm.useDate}
+                    className={`${inputCls} flex-1 ${!bulkForm.useDate ? "opacity-40" : ""}`}
+                    value={bulkForm.work_date}
+                    onChange={(e) => setBulkForm((f) => ({ ...f, work_date: e.target.value }))}
+                  />
+                </div>
+              </label>
+
+              {/* Entry mode */}
+              <div className="flex items-center gap-3 rounded-xl bg-secondary p-3 ring-1 ring-border">
+                <input type="checkbox" checked={bulkForm.useMode} onChange={() => setBulkForm((f) => ({ ...f, useMode: !f.useMode }))} className="h-4 w-4" />
+                <div className="flex flex-1 items-center gap-3">
+                  <span className="label-mono whitespace-nowrap">Type</span>
+                  <div className="flex flex-1 rounded-lg bg-background p-1 text-xs font-medium ring-1 ring-border">
+                    {(["clock", "hours"] as const).map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        disabled={!bulkForm.useMode}
+                        onClick={() => setBulkForm((f) => ({ ...f, entry_mode: m }))}
+                        className={`flex-1 rounded-lg px-3 py-1.5 ${bulkForm.entry_mode === m ? "bg-primary text-primary-foreground" : "text-muted-foreground"} ${!bulkForm.useMode ? "opacity-40" : ""}`}
+                      >
+                        {m === "clock" ? "Clock in / out" : "Daily hours"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Clock fields */}
+              <div className="grid grid-cols-3 gap-3">
+                <label className={`flex items-center gap-2 rounded-xl bg-secondary p-3 ring-1 ring-border ${!bulkForm.useClockIn ? "opacity-60" : ""}`}>
+                  <input type="checkbox" checked={bulkForm.useClockIn} onChange={() => setBulkForm((f) => ({ ...f, useClockIn: !f.useClockIn }))} className="h-4 w-4" />
+                  <div className="flex-1">
+                    <span className="label-mono">In</span>
+                    <input type="time" disabled={!bulkForm.useClockIn} className={`${inputCls} mt-1`} value={bulkForm.clock_in} onChange={(e) => setBulkForm((f) => ({ ...f, clock_in: e.target.value }))} />
+                  </div>
+                </label>
+                <label className={`flex items-center gap-2 rounded-xl bg-secondary p-3 ring-1 ring-border ${!bulkForm.useClockOut ? "opacity-60" : ""}`}>
+                  <input type="checkbox" checked={bulkForm.useClockOut} onChange={() => setBulkForm((f) => ({ ...f, useClockOut: !f.useClockOut }))} className="h-4 w-4" />
+                  <div className="flex-1">
+                    <span className="label-mono">Out</span>
+                    <input type="time" disabled={!bulkForm.useClockOut} className={`${inputCls} mt-1`} value={bulkForm.clock_out} onChange={(e) => setBulkForm((f) => ({ ...f, clock_out: e.target.value }))} />
+                  </div>
+                </label>
+                <label className={`flex items-center gap-2 rounded-xl bg-secondary p-3 ring-1 ring-border ${!bulkForm.useLunch ? "opacity-60" : ""}`}>
+                  <input type="checkbox" checked={bulkForm.useLunch} onChange={() => setBulkForm((f) => ({ ...f, useLunch: !f.useLunch }))} className="h-4 w-4" />
+                  <div className="flex-1">
+                    <span className="label-mono">Lunch</span>
+                    <input type="number" min={0} disabled={!bulkForm.useLunch} className={`${inputCls} mt-1`} value={bulkForm.lunch_minutes} onChange={(e) => setBulkForm((f) => ({ ...f, lunch_minutes: e.target.value }))} />
+                  </div>
+                </label>
+              </div>
+
+              {/* Hours */}
+              <label className={`flex items-center gap-3 rounded-xl bg-secondary p-3 ring-1 ring-border ${!bulkForm.useHours ? "opacity-60" : ""}`}>
+                <input type="checkbox" checked={bulkForm.useHours} onChange={() => setBulkForm((f) => ({ ...f, useHours: !f.useHours }))} className="h-4 w-4" />
+                <div className="flex flex-1 items-center gap-3">
+                  <span className="label-mono whitespace-nowrap">Hours</span>
+                  <input type="number" step="0.25" min={0} max={24} disabled={!bulkForm.useHours} className={`${inputCls} flex-1`} value={bulkForm.hours} onChange={(e) => setBulkForm((f) => ({ ...f, hours: e.target.value }))} />
+                </div>
+              </label>
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setShowBulkEdit(false)} className="rounded-xl bg-secondary px-4 py-2 text-sm font-medium ring-1 ring-border text-muted-foreground hover:text-foreground">Cancel</button>
+              <button onClick={submitBulkEdit} className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90">Apply to {checked.size} records</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Confirm delete modal */}
       {confirmDelete && (
