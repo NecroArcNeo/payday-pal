@@ -11,19 +11,6 @@ export const money = (n: number) =>
 
 export const fullName = (e: Pick<Employee, "first_name" | "last_name">) => `${e.first_name} ${e.last_name}`;
 
-export function useSession() {
-  return useQuery({
-    queryKey: ["session-role"],
-    queryFn: async () => {
-      const { data } = await supabase.auth.getUser();
-      const user = data.user;
-      if (!user) return { user: null, isAdmin: false };
-      const { data: roles } = await supabase.from("user_roles").select("role").eq("user_id", user.id);
-      return { user, isAdmin: !!roles?.some((r) => r.role === "admin") };
-    },
-  });
-}
-
 export function useEmployees() {
   return useQuery({
     queryKey: ["employees"],

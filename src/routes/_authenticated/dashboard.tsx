@@ -1,7 +1,7 @@
-import { createFileRoute, Link, Navigate } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell, StatCard, btnPrimary } from "@/components/AppShell";
 import { RecordsTable } from "@/components/RecordsTable";
-import { currentWeek, fullName, money, useEmployees, useRecords, useSession } from "@/lib/payroll";
+import { currentWeek, fullName, money, useEmployees, useRecords } from "@/lib/payroll";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
   head: () => ({ meta: [{ title: "Dashboard — Meridian Payroll" }] }),
@@ -9,12 +9,9 @@ export const Route = createFileRoute("/_authenticated/dashboard")({
 });
 
 function Dashboard() {
-  const { data: session, isLoading } = useSession();
   const week = currentWeek();
   const { data: employees = [] } = useEmployees();
   const { data: records = [] } = useRecords(week.from, week.to);
-  if (isLoading) return null;
-  if (!session?.isAdmin) return <Navigate to="/me" />;
 
   const hours = records.reduce((s, r) => s + Number(r.hours), 0);
   const gross = records.reduce((s, r) => s + Number(r.hours) * Number(r.employees?.hourly_rate ?? 0), 0);

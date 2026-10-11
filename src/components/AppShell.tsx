@@ -1,12 +1,8 @@
-import { Link, useNavigate } from "@tanstack/react-router";
-import { useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
-import { supabase } from "@/integrations/supabase/client";
-import { useSession } from "@/lib/payroll";
 import { ThemeToggle } from "./ThemeToggle";
-import { LogOut } from "lucide-react";
 
-const adminNav = [
+const nav = [
   { to: "/dashboard", label: "Dashboard" },
   { to: "/employees", label: "Employees" },
   { to: "/records", label: "Time records" },
@@ -15,19 +11,6 @@ const adminNav = [
 ] as const;
 
 export function AppShell({ eyebrow, title, actions, children }: { eyebrow: string; title: string; actions?: ReactNode; children: ReactNode }) {
-  const { data: session } = useSession();
-  const qc = useQueryClient();
-  const navigate = useNavigate();
-  const nav = session?.isAdmin ? adminNav : ([{ to: "/me", label: "My hours & pay" }] as const);
-  const email = session?.user?.email ?? "";
-
-  const signOut = async () => {
-    await qc.cancelQueries();
-    qc.clear();
-    await supabase.auth.signOut();
-    navigate({ to: "/auth", replace: true });
-  };
-
   return (
     <div className="relative min-h-screen overflow-hidden bg-background text-foreground">
       <div className="anim-breathe pointer-events-none fixed -left-40 -top-48 h-[42rem] w-[42rem] rounded-full bg-glow-a blur-3xl" />
@@ -54,20 +37,6 @@ export function AppShell({ eyebrow, title, actions, children }: { eyebrow: strin
               </Link>
             ))}
           </nav>
-          <div className="mt-auto border-t border-border p-3">
-            <div className="flex items-center gap-3 rounded-xl bg-secondary p-3 ring-1 ring-border">
-              <div className="grid h-9 w-9 place-items-center rounded-full bg-accent font-display text-sm font-bold text-accent-foreground">
-                {email.slice(0, 2).toUpperCase()}
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-[13px] font-semibold leading-none">{email}</div>
-                <div className="mt-1 text-[11px] text-muted-foreground">{session?.isAdmin ? "Payroll admin" : "Employee"}</div>
-              </div>
-              <button onClick={signOut} aria-label="Sign out" className="text-muted-foreground hover:text-foreground">
-                <LogOut className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
         </aside>
 
         <main className="min-w-0 flex-1">
