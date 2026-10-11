@@ -27,6 +27,20 @@ export function useRecords(from?: string, to?: string) {
   });
 }
 
+export function useRecordsPaged(from: string | undefined, to: string | undefined, limit: number, offset: number) {
+  return useQuery({
+    queryKey: ["records-paged", from, to, limit, offset],
+    queryFn: () => localDb.getRecords(from, to, limit, offset),
+  });
+}
+
+export function useRecordCount(from?: string, to?: string) {
+  return useQuery({
+    queryKey: ["record-count", from, to],
+    queryFn: () => localDb.getRecordCount(from, to),
+  });
+}
+
 export function isoDate(d: Date) {
   return d.toISOString().slice(0, 10);
 }

@@ -6,7 +6,7 @@ import { Search, X, ChevronRight, ChevronLeft, Users, UserCheck } from "lucide-r
 import { localDb } from "@/lib/local-db";
 import { AppShell, btnPrimary, inputCls } from "@/components/AppShell";
 import { RecordsTable, type EditData } from "@/components/RecordsTable";
-import { computeHours, fullName, isoDate, useEmployees, useRecords, type Employee } from "@/lib/payroll";
+import { computeHours, fullName, isoDate, useEmployees, useRecordsPaged, useRecordCount, type Employee } from "@/lib/payroll";
 
 export const Route = createFileRoute("/_authenticated/records")({
   head: () => ({ meta: [{ title: "Time records — Meridian Payroll" }] }),
@@ -57,7 +57,12 @@ function RecordsPage() {
   const { data: employees = [] } = useEmployees();
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  const { data: records = [] } = useRecords(from || undefined, to || undefined);
+  const PAGE_SIZE = 40;
+  const [pageCount, setPageCount] = useState(1);
+  const limit = PAGE_SIZE * pageCount;
+  const { data: records = [] } = useRecordsPaged(from || undefined, to || undefined, limit, 0);
+  const { data: totalCount = 0 } = useRecordCount(from || undefined, to || undefined);
+  const hasMore = records.length < totalCount;
 
   const [mode, setMode] = useState<"clock" | "hours">("clock");
   const [f, setF] = useState({ work_date: isoDate(new Date()), clock_in: "09:00", clock_out: "17:00", lunch_minutes: "30", hours: "8" });
@@ -93,16 +98,22 @@ function RecordsPage() {
     toast.success(rows.length === 1 ? "Record added" : `${rows.length} records added`);
     setPicked([]);
     qc.invalidateQueries({ queryKey: ["records"] });
+    qc.invalidateQueries({ queryKey: ["records-paged"] });
+    qc.invalidateQueries({ queryKey: ["record-count"] });
   };
 
   const del = async (id: string) => {
     await localDb.deleteRecord(id);
     qc.invalidateQueries({ queryKey: ["records"] });
+    qc.invalidateQueries({ queryKey: ["records-paged"] });
+    qc.invalidateQueries({ queryKey: ["record-count"] });
   };
 
   const delMany = async (ids: string[]) => {
     for (const id of ids) await localDb.deleteRecord(id);
     qc.invalidateQueries({ queryKey: ["records"] });
+    qc.invalidateQueries({ queryKey: ["records-paged"] });
+    qc.invalidateQueries({ queryKey: ["record-count"] });
     toast.success(`Deleted ${ids.length} record${ids.length > 1 ? "s" : ""}`);
   };
 
@@ -110,6 +121,7 @@ function RecordsPage() {
     try {
       await localDb.updateRecord(id, data);
       qc.invalidateQueries({ queryKey: ["records"] });
+      qc.invalidateQueries({ queryKey: ["records-paged"] });
       toast.success("Record updated");
     } catch (err) {
       toast.error((err as Error).message);
@@ -120,6 +132,7 @@ function RecordsPage() {
     try {
       for (const id of ids) await localDb.updateRecord(id, data);
       qc.invalidateQueries({ queryKey: ["records"] });
+      qc.invalidateQueries({ queryKey: ["records-paged"] });
       toast.success(`Updated ${ids.length} record${ids.length > 1 ? "s" : ""}`);
     } catch (err) {
       toast.error((err as Error).message);
@@ -236,16 +249,27 @@ function RecordsPage() {
       <div className="glass-panel space-y-3 p-5">
         <div className="flex flex-wrap items-center gap-3">
           <span className="label-mono">Date range</span>
-          <input type="date" className={`${inputCls} max-w-[11rem]`} value={from} onChange={(e) => setFrom(e.target.value)} />
+          <input type="date" className={`${inputCls} max-w-[11rem]`} value={from} onChange={(e) => { setFrom(e.target.value); setPageCount(1); }} />
           <span className="text-muted-foreground">→</span>
-          <input type="date" className={`${inputCls} max-w-[11rem]`} value={to} onChange={(e) => setTo(e.target.value)} />
+          <input type="date" className={`${inputCls} max-w-[11rem]`} value={to} onChange={(e) => { setTo(e.target.value); setPageCount(1); }} />
           {(from || to) && (
-            <button onClick={() => { setFrom(""); setTo(""); }} className="text-xs text-muted-foreground hover:text-foreground">Clear dates</button>
+            <button onClick={() => { setFrom(""); setTo(""); setPageCount(1); }} className="text-xs text-muted-foreground hover:text-foreground">Clear dates</button>
           )}
         </div>
       </div>
 
-      <RecordsTable records={records} employees={employees} title={`${records.length} records`} onDelete={del} onDeleteMany={delMany} onEdit={editOne} onEditMany={editMany} />
+      <RecordsTable records={records} employees={employees} title={`${records.length} of ${totalCount} records`} onDelete={del} onDeleteMany={delMany} onEdit={editOne} onEditMany={editMany} />
+
+      {hasMore && (
+        <div className="flex justify-center">
+          <button
+            onClick={() => setPageCount((c) => c + 1)}
+            className="rounded-xl bg-secondary px-6 py-2.5 text-sm font-medium ring-1 ring-border text-muted-foreground hover:text-foreground transition-colors"
+          >
+            Load more ({totalCount - records.length} remaining)
+          </button>
+        </div>
+      )}
     </AppShell>
   );
 }

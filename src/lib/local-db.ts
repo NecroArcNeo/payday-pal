@@ -336,16 +336,20 @@ export const localDb = {
     await db.query("DELETE FROM employees WHERE id = $1", [id]);
   },
 
-  async getRecords(from?: string, to?: string): Promise<RecordWithEmp[]> {
+  async getRecords(from?: string, to?: string, limit?: number, offset?: number): Promise<RecordWithEmp[]> {
     const db = await getDb();
     let sql = `SELECT t.*, e.first_name, e.last_name, e.employee_code, e.hourly_rate
                FROM time_records t LEFT JOIN employees e ON t.employee_id = e.id`;
     const conditions: string[] = [];
     const params: unknown[] = [];
-    if (from) { conditions.push(`t.work_date >= $${params.length + 1}`); params.push(from); }
-    if (to) { conditions.push(`t.work_date <= $${params.length + 1}`); params.push(to); }
+    if (from) { conditions.push(`t.work_date >= ${params.length + 1}`); params.push(from); }
+    if (to) { conditions.push(`t.work_date <= ${params.length + 1}`); params.push(to); }
     if (conditions.length) sql += " WHERE " + conditions.join(" AND ");
-    sql += " ORDER BY t.work_date DESC, t.created_at DESC LIMIT 1000";
+    sql += " ORDER BY t.work_date DESC, t.created_at DESC";
+    if (limit !== undefined) {
+      sql += ` LIMIT ${params.length + 1}`; params.push(limit);
+      if (offset !== undefined) { sql += ` OFFSET ${params.length + 1}`; params.push(offset); }
+    }
     const result = await db.query(sql, params);
     return result.rows.map((r) => {
       const row = r as Record<string, unknown>;
@@ -419,6 +423,18 @@ export const localDb = {
   async deleteRecord(id: string): Promise<void> {
     const db = await getDb();
     await db.query("DELETE FROM time_records WHERE id = $1", [id]);
+  },
+
+  async getRecordCount(from?: string, to?: string): Promise<number> {
+    const db = await getDb();
+    let sql = "SELECT COUNT(*) as cnt FROM time_records";
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    if (from) { conditions.push(`work_date >= ${params.length + 1}`); params.push(from); }
+    if (to) { conditions.push(`work_date <= ${params.length + 1}`); params.push(to); }
+    if (conditions.length) sql += " WHERE " + conditions.join(" AND ");
+    const result = await db.query(sql, params);
+    return Number((result.rows[0] as Record<string, unknown>)?.cnt ?? 0);
   },
 
   async getFieldDefs(): Promise<FieldDefRow[]> {
