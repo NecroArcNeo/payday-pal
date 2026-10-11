@@ -114,7 +114,7 @@ function parsePeople(sheet: SheetInfo, existing: Employee[], defs: FieldDef[], t
   const byName = new Map(existing.map((e) => [`${e.first_name} ${e.last_name}`.toLowerCase(), e]));
   const defByLabel = new Map(defs.map((d) => [norm(d.label), d.id]));
   let n = existing.length + 1;
-  sheet.rows.slice(0, 5000).forEach((r, i) => {
+  sheet.rows.slice(0, 25000).forEach((r, i) => {
     const line = `${sheet.name} row ${i + 2}`;
     let first = pick(r, ...A.first), last = pick(r, ...A.last);
     if (!first && !last) {
@@ -159,7 +159,7 @@ function parseRecords(sheet: SheetInfo, people: { id?: string | undefined; emplo
   const byCode = new Map(people.map((e) => [e.employee_code.toLowerCase(), e]));
   const byEmail = new Map(people.filter((e) => e.email).map((e) => [e.email!.toLowerCase(), e]));
   const byName = new Map(people.map((e) => [`${e.first_name} ${e.last_name}`.toLowerCase(), e]));
-  sheet.rows.slice(0, 5000).forEach((r, i) => {
+  sheet.rows.slice(0, 25000).forEach((r, i) => {
     const line = `${sheet.name} row ${i + 2}`;
     const code = pick(r, ...A.code).toLowerCase();
     const email = pick(r, ...A.email).toLowerCase();
@@ -279,7 +279,7 @@ function ImportPage() {
           className={`cursor-pointer rounded-xl border-2 border-dashed p-12 text-center transition-colors ${drag ? "border-primary bg-accent" : "border-primary/30 bg-accent/50"}`}
         >
           <div className="font-mono text-sm text-accent-foreground">Drop CSV / XLSX</div>
-          <div className="mt-1 text-xs text-muted-foreground">or click to browse · up to 5,000 rows per sheet</div>
+          <div className="mt-1 text-xs text-muted-foreground">or click to browse · up to 25,000 rows per sheet</div>
           <input ref={inputRef} type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handle(f); e.target.value = ""; }} />
         </div>
       </div>
