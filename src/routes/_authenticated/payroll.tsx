@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
+import { localDb } from "@/lib/local-db";
 import { AppShell, StatCard, btnGhost, btnPrimary, inputCls } from "@/components/AppShell";
 import {
   currentWeek, fullName, money, splitHours, useAdjustments, useEmployees, useFieldDefs, usePayrollSettings, useRecords,
@@ -163,8 +163,7 @@ function SettingsPanel({ settings, cols, onSaved }: {
     const t = Number(threshold), m = Number(mult);
     if (!Number.isFinite(t) || t < 0 || t > 168) { toast.error("Overtime threshold must be 0–168 hours"); return; }
     if (!Number.isFinite(m) || m < 1 || m > 5) { toast.error("Overtime multiplier must be between 1 and 5"); return; }
-    const { error } = await supabase.from("payroll_settings").upsert({ id: true, ot_threshold: t, ot_multiplier: m, visible_columns: vis, updated_at: new Date().toISOString() });
-    if (error) { toast.error(error.message); return; }
+    try { await localDb.upsertPayrollSettings({ ot_threshold: t, ot_multiplier: m, visible_columns: vis }); } catch (err) { toast.error((err as Error).message); return; }
     toast.success("Payroll settings saved");
     onSaved();
   };
@@ -216,15 +215,13 @@ function ExtrasPanel({ employees, adjustments, defaultDate, onChange }: {
     if (!emp) { toast.error("Pick an employee"); return; }
     if (!category.trim() || category.length > 40) { toast.error("Enter a category name (up to 40 characters)"); return; }
     if (!Number.isFinite(amt) || amount === "") { toast.error("Enter an amount"); return; }
-    const { error } = await supabase.from("pay_adjustments").insert({ employee_id: emp, category: category.trim(), amount: amt, pay_date: date, note: note.trim().slice(0, 300) || null });
-    if (error) { toast.error(error.message); return; }
+    try { await localDb.insertAdjustment({ employee_id: emp, category: category.trim(), amount: amt, pay_date: date, note: note.trim().slice(0, 300) || null }); } catch (err) { toast.error((err as Error).message); return; }
     toast.success("Extra pay added");
     setAmount(""); setNote("");
     onChange();
   };
   const remove = async (id: string) => {
-    const { error } = await supabase.from("pay_adjustments").delete().eq("id", id);
-    if (error) toast.error(error.message); else onChange();
+    try { await localDb.deleteAdjustment(id); onChange(); } catch (err) { toast.error((err as Error).message); }
   };
 
   return (

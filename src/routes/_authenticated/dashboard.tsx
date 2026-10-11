@@ -36,7 +36,7 @@ function Dashboard() {
       <section className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard label="Gross pay" value={money(gross)} sub={`${byEmp.size} employees · ${hours.toFixed(2)} h`} />
         <StatCard label="Total hours" value={hours.toFixed(2)} sub={`${lunch.toFixed(2)} h unpaid break`} delay={60} />
-        <StatCard label="Employees" value={String(employees.length)} sub={`${employees.filter((e) => e.user_id).length} with accounts`} delay={120} />
+        <StatCard label="Employees" value={String(employees.length)} sub={`${employees.filter((e) => e.active).length} active`} delay={120} />
         <StatCard label="Records" value={`${records.length} rows`} sub="this week" highlight delay={180} />
       </section>
       <section className="grid gap-6 lg:grid-cols-3">

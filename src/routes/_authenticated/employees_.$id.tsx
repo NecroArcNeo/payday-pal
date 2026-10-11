@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
+import { localDb } from "@/lib/local-db";
 import { AppShell, btnPrimary, inputCls } from "@/components/AppShell";
 import { fullName, useEmployees, useFieldDefs } from "@/lib/payroll";
 import { ArrowLeft, Plus, Trash2 } from "lucide-react";
@@ -49,21 +49,18 @@ function ProfilePage() {
     const label = newLabel.trim();
     if (!label) return;
     if (label.length > 60) { toast.error("Keep the category name under 60 characters"); return; }
-    const { error } = await supabase.from("employee_field_defs").insert({ label, field_type: newType, sort_order: defs.length });
-    if (error) { toast.error(error.message); return; }
+    try { await localDb.insertFieldDef({ label, field_type: newType, sort_order: defs.length }); } catch (err) { toast.error((err as Error).message); return; }
     setNewLabel("");
     toast.success(`"${label}" added for every employee`);
     qc.invalidateQueries({ queryKey: ["field-defs"] });
   };
   const renameCategory = async (defId: string, label: string) => {
     if (!label.trim()) return;
-    const { error } = await supabase.from("employee_field_defs").update({ label: label.trim() }).eq("id", defId);
-    if (error) toast.error(error.message); else qc.invalidateQueries({ queryKey: ["field-defs"] });
+    try { await localDb.updateFieldDef(defId, { label: label.trim() }); qc.invalidateQueries({ queryKey: ["field-defs"] }); } catch (err) { toast.error((err as Error).message); }
   };
   const removeCategory = async (defId: string, label: string) => {
     if (!confirm(`Remove the "${label}" category for all employees?`)) return;
-    const { error } = await supabase.from("employee_field_defs").delete().eq("id", defId);
-    if (error) toast.error(error.message); else qc.invalidateQueries({ queryKey: ["field-defs"] });
+    try { await localDb.deleteFieldDef(defId); qc.invalidateQueries({ queryKey: ["field-defs"] }); } catch (err) { toast.error((err as Error).message); }
   };
 
   useEffect(() => {
@@ -92,8 +89,7 @@ function ProfilePage() {
     const cf: Record<string, string> = {};
     for (const [k, v] of Object.entries(custom)) if (v.trim()) cf[k] = v.trim().slice(0, 1000);
     (row as Record<string, unknown>)["custom_fields"] = cf;
-    const { error } = await supabase.from("employees").update(row as never).eq("id", id);
-    if (error) { toast.error(error.message); return; }
+    try { await localDb.updateEmployee(id, { ...row, custom_fields: cf } as never); } catch (err) { toast.error((err as Error).message); return; }
     toast.success("Profile saved");
     qc.invalidateQueries({ queryKey: ["employees"] });
   };

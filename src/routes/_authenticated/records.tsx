@@ -2,8 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
-import type { TablesInsert } from "@/integrations/supabase/types";
+import { localDb } from "@/lib/local-db";
 import { AppShell, btnPrimary, inputCls } from "@/components/AppShell";
 import { RecordsTable } from "@/components/RecordsTable";
 import { computeHours, fullName, isoDate, useEmployees, useRecords } from "@/lib/payroll";
@@ -34,20 +33,18 @@ function RecordsPage() {
     const hours = Number(f.hours);
     if (mode === "clock" && (!Number.isFinite(lunch) || lunch < 0 || lunch > 600)) { toast.error("Lunch minutes must be 0–600"); return; }
     if (mode === "hours" && (!Number.isFinite(hours) || hours < 0 || hours > 24)) { toast.error("Hours must be 0–24"); return; }
-    const rows: TablesInsert<"time_records">[] = picked.map((employee_id) =>
+    const rows = picked.map((employee_id) =>
       mode === "clock"
-        ? { employee_id, work_date: f.work_date, entry_mode: "clock", clock_in: f.clock_in, clock_out: f.clock_out, lunch_minutes: lunch }
-        : { employee_id, work_date: f.work_date, entry_mode: "hours", hours });
-    const { error } = await supabase.from("time_records").insert(rows);
-    if (error) { toast.error(error.message); return; }
+        ? { employee_id, work_date: f.work_date, entry_mode: "clock" as const, clock_in: f.clock_in, clock_out: f.clock_out, lunch_minutes: lunch }
+        : { employee_id, work_date: f.work_date, entry_mode: "hours" as const, hours });
+    try { await localDb.insertRecords(rows); } catch (err) { toast.error((err as Error).message); return; }
     toast.success(rows.length === 1 ? "Record added" : `${rows.length} records added`);
     setPicked([]);
     qc.invalidateQueries({ queryKey: ["records"] });
   };
 
   const del = async (id: string) => {
-    const { error } = await supabase.from("time_records").delete().eq("id", id);
-    if (error) { toast.error(error.message); return; }
+    await localDb.deleteRecord(id);
     qc.invalidateQueries({ queryKey: ["records"] });
   };
 

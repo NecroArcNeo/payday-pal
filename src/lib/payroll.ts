@@ -1,10 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
-import type { Tables } from "@/integrations/supabase/types";
+import { localDb, type EmployeeRow, type TimeRecordRow, type RecordWithEmp, type FieldDefRow, type AdjustmentRow, type PayrollSettingsRow } from "./local-db";
 
-export type Employee = Tables<"employees">;
-export type TimeRecord = Tables<"time_records">;
-export type RecordWithEmp = TimeRecord & { employees: Pick<Employee, "first_name" | "last_name" | "employee_code" | "hourly_rate"> | null };
+export type Employee = EmployeeRow;
+export type TimeRecord = TimeRecordRow;
+export type RecordWithEmp = RecordWithEmp;
+export type FieldDef = FieldDefRow;
+export type Adjustment = AdjustmentRow;
+export type PayrollSettings = PayrollSettingsRow;
 
 export const money = (n: number) =>
   n.toLocaleString("en-US", { style: "currency", currency: "USD" });
@@ -14,29 +16,14 @@ export const fullName = (e: Pick<Employee, "first_name" | "last_name">) => `${e.
 export function useEmployees() {
   return useQuery({
     queryKey: ["employees"],
-    queryFn: async () => {
-      const { data, error } = await supabase.from("employees").select("*").order("last_name");
-      if (error) throw error;
-      return data;
-    },
+    queryFn: () => localDb.getEmployees(),
   });
 }
 
 export function useRecords(from?: string, to?: string) {
   return useQuery({
     queryKey: ["records", from, to],
-    queryFn: async () => {
-      let q = supabase
-        .from("time_records")
-        .select("*, employees(first_name,last_name,employee_code,hourly_rate)")
-        .order("work_date", { ascending: false })
-        .limit(1000);
-      if (from) q = q.gte("work_date", from);
-      if (to) q = q.lte("work_date", to);
-      const { data, error } = await q;
-      if (error) throw error;
-      return data as RecordWithEmp[];
-    },
+    queryFn: () => localDb.getRecords(from, to),
   });
 }
 
@@ -62,32 +49,17 @@ export function computeHours(clockIn: string, clockOut: string, lunch: number) {
   return Math.max(0, (mins - lunch) / 60);
 }
 
-export type FieldDef = Tables<"employee_field_defs">;
-export type Adjustment = Tables<"pay_adjustments">;
-export type PayrollSettings = Tables<"payroll_settings">;
-
 export function useFieldDefs() {
   return useQuery({
     queryKey: ["field-defs"],
-    queryFn: async () => {
-      const { data, error } = await supabase.from("employee_field_defs").select("*").order("sort_order").order("created_at");
-      if (error) throw error;
-      return data;
-    },
+    queryFn: () => localDb.getFieldDefs(),
   });
 }
 
 export function useAdjustments(from?: string, to?: string) {
   return useQuery({
     queryKey: ["adjustments", from, to],
-    queryFn: async () => {
-      let q = supabase.from("pay_adjustments").select("*").order("pay_date", { ascending: false });
-      if (from) q = q.gte("pay_date", from);
-      if (to) q = q.lte("pay_date", to);
-      const { data, error } = await q;
-      if (error) throw error;
-      return data;
-    },
+    queryFn: () => localDb.getAdjustments(from, to),
   });
 }
 
@@ -97,11 +69,8 @@ export function usePayrollSettings() {
   return useQuery({
     queryKey: ["payroll-settings"],
     queryFn: async () => {
-      const { data, error } = await supabase.from("payroll_settings").select("*").maybeSingle();
-      if (error) throw error;
-      return data
-        ? { ot_threshold: Number(data.ot_threshold), ot_multiplier: Number(data.ot_multiplier), visible_columns: data.visible_columns }
-        : defaultSettings;
+      const s = await localDb.getPayrollSettings();
+      return { ot_threshold: s.ot_threshold, ot_multiplier: s.ot_multiplier, visible_columns: s.visible_columns };
     },
   });
 }

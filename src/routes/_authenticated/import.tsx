@@ -3,7 +3,7 @@ import { useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
-import { supabase } from "@/integrations/supabase/client";
+import { localDb } from "@/lib/local-db";
 import { AppShell, btnGhost, btnPrimary } from "@/components/AppShell";
 import { useEmployees, useFieldDefs, type Employee, type FieldDef } from "@/lib/payroll";
 
@@ -259,18 +259,12 @@ function ImportPage() {
     try {
       let fresh = employees;
       if (newPeople.length) {
-        const { error } = await supabase.from("employees").upsert(newPeople as never, { onConflict: "employee_code" });
-        if (error) throw error;
-        const { data, error: e2 } = await supabase.from("employees").select("*");
-        if (e2) throw e2;
-        fresh = data;
+        for (const p of newPeople) await localDb.upsertEmployee(p as never);
+        fresh = await localDb.getEmployees();
       }
       const recs = sheets.filter((s) => s.role === "records").flatMap((s) => parseRecords(s, fresh).ok)
         .map(({ _code, ...rest }) => rest);
-      if (recs.length) {
-        const { error } = await supabase.from("time_records").insert(recs as never);
-        if (error) throw error;
-      }
+      if (recs.length) await localDb.insertRecords(recs as never);
       toast.success(`Saved ${newPeople.length} people and ${recs.length} time records`);
       setSheets([]); setFile("");
       qc.invalidateQueries();

@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { ThemeToggle } from "./ThemeToggle";
+import { SyncButton } from "./SyncButton";
 
 const nav = [
   { to: "/dashboard", label: "Dashboard" },
@@ -47,6 +48,7 @@ export function AppShell({ eyebrow, title, actions, children }: { eyebrow: strin
             </div>
             <div className="flex items-center gap-3">
               {actions}
+              <SyncButton />
               <ThemeToggle />
             </div>
           </header>
