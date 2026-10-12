@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Search, X, Trash2, Filter, Pencil, XCircle } from "lucide-react";
+import { Search, X, Trash2, Filter, Pencil, XCircle, ChevronDown } from "lucide-react";
 import { fullName, money, computeHours, type Employee, type RecordWithEmp } from "@/lib/payroll";
 import { inputCls } from "@/components/AppShell";
 
@@ -12,6 +12,9 @@ interface Props {
   onEdit?: (id: string, data: EditData) => Promise<void>;
   onEditMany?: (ids: string[], data: EditData) => Promise<void>;
   showName?: boolean;
+  hasMore?: boolean;
+  remainingCount?: number;
+  onLoadMore?: () => void;
 }
 
 export interface EditData {
@@ -25,7 +28,7 @@ export interface EditData {
 
 type SortKey = "date" | "name" | "hours" | "pay";
 
-export function RecordsTable({ records, employees = [], title = "Time records", onDelete, onDeleteMany, onEdit, onEditMany, showName = true }: Props) {
+export function RecordsTable({ records, employees = [], title = "Time records", onDelete, onDeleteMany, onEdit, onEditMany, showName = true, hasMore = false, remainingCount = 0, onLoadMore }: Props) {
   const [mode, setMode] = useState<"all" | "clock" | "hours">("all");
   const [search, setSearch] = useState("");
   const [dept, setDept] = useState("");
@@ -403,6 +406,20 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
           </tbody>
         </table>
       </div>
+
+      {/* Load more */}
+      {hasMore && onLoadMore && (
+        <div className="flex items-center justify-center gap-3 border-t border-border px-5 py-4">
+          <button
+            onClick={onLoadMore}
+            className="flex items-center gap-2 rounded-xl bg-secondary px-5 py-2.5 text-sm font-medium ring-1 ring-border text-muted-foreground transition-all hover:text-foreground hover:ring-primary/30"
+          >
+            <ChevronDown className="h-4 w-4" />
+            Load {remainingCount > 40 ? "40 more" : `${remainingCount} more`}
+            {remainingCount > 0 && <span className="text-muted-foreground/70">({remainingCount} remaining)</span>}
+          </button>
+        </div>
+      )}
 
       {/* Single edit modal */}
       {editSingle && (

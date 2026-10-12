@@ -258,18 +258,7 @@ function RecordsPage() {
         </div>
       </div>
 
-      <RecordsTable records={records} employees={employees} title={`${records.length} of ${totalCount} records`} onDelete={del} onDeleteMany={delMany} onEdit={editOne} onEditMany={editMany} />
-
-      {hasMore && (
-        <div className="flex justify-center">
-          <button
-            onClick={() => setPageCount((c) => c + 1)}
-            className="rounded-xl bg-secondary px-6 py-2.5 text-sm font-medium ring-1 ring-border text-muted-foreground hover:text-foreground transition-colors"
-          >
-            Load more ({totalCount - records.length} remaining)
-          </button>
-        </div>
-      )}
+      <RecordsTable records={records} employees={employees} title={`${records.length} of ${totalCount} records`} onDelete={del} onDeleteMany={delMany} onEdit={editOne} onEditMany={editMany} hasMore={hasMore} remainingCount={totalCount - records.length} onLoadMore={() => setPageCount((c) => c + 1)} />
     </AppShell>
   );
 }
