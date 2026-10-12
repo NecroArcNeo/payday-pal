@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS employees (
   emergency_contact_name TEXT,
   emergency_contact_phone TEXT,
   notes TEXT,
-  custom_fields TEXT NOT NULL DEFAULT '{}'
+  custom_fields TEXT NOT NULL DEFAULT '{}',
+  shift_type_id TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS employees_email_unique
   ON employees (lower(email)) WHERE email IS NOT NULL;
@@ -79,6 +80,15 @@ CREATE TABLE IF NOT EXISTS payroll_settings (
   ot_multiplier NUMERIC NOT NULL DEFAULT 1.5,
   visible_columns TEXT NOT NULL DEFAULT '["employee_code","days"]',
   updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP::text)
+);
+
+CREATE TABLE IF NOT EXISTS shift_types (
+  id TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  color TEXT NOT NULL DEFAULT '#6b7280',
+  pay_multiplier NUMERIC NOT NULL DEFAULT 1.0,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP::text)
 );
 
 CREATE TABLE IF NOT EXISTS sync_meta (
@@ -161,6 +171,7 @@ export interface EmployeeRow {
   emergency_contact_phone: string | null;
   notes: string | null;
   custom_fields: Json;
+  shift_type_id: string | null;
 }
 
 export interface TimeRecordRow {
@@ -202,6 +213,15 @@ export interface PayrollSettingsRow {
   updated_at: string;
 }
 
+export interface ShiftTypeRow {
+  id: string;
+  label: string;
+  color: string;
+  pay_multiplier: number;
+  sort_order: number;
+  created_at: string;
+}
+
 export interface RecordWithEmp extends TimeRecordRow {
   employees: Pick<EmployeeRow, "first_name" | "last_name" | "employee_code" | "hourly_rate"> | null;
 }
@@ -234,6 +254,7 @@ function mapEmployee(row: Record<string, unknown>): EmployeeRow {
     emergency_contact_phone: row.emergency_contact_phone as string | null,
     notes: row.notes as string | null,
     custom_fields: parseJsonField(row.custom_fields),
+    shift_type_id: row.shift_type_id as string | null,
   };
 }
 
@@ -263,18 +284,18 @@ function computeHours(clockIn: string, clockOut: string, lunch: number): number 
 // ─── Seed data ──────────────────────────────────────────────
 
 const SEED_EMPLOYEES = [
-  { code: "EMP-001", first: "Alice", last: "Chen", dept: "Engineering", rate: 32.50, title: "Senior Developer" },
-  { code: "EMP-002", first: "Marcus", last: "Johnson", dept: "Sales", rate: 28.00, title: "Account Executive" },
-  { code: "EMP-003", first: "Priya", last: "Patel", dept: "Engineering", rate: 30.00, title: "Frontend Developer" },
-  { code: "EMP-004", first: "James", last: "O'Brien", dept: "Operations", rate: 24.50, title: "Logistics Coordinator" },
-  { code: "EMP-005", first: "Sofia", last: "Rodriguez", dept: "Marketing", rate: 27.00, title: "Marketing Specialist" },
-  { code: "EMP-006", first: "David", last: "Kim", dept: "Engineering", rate: 35.00, title: "Engineering Lead" },
-  { code: "EMP-007", first: "Emily", last: "Watson", dept: "HR", rate: 26.50, title: "HR Generalist" },
-  { code: "EMP-008", first: "Carlos", last: "Mendez", dept: "Sales", rate: 25.00, title: "Sales Representative" },
-  { code: "EMP-009", first: "Yuki", last: "Tanaka", dept: "Design", rate: 29.00, title: "UX Designer" },
-  { code: "EMP-010", first: "Olivia", last: "Bauer", dept: "Finance", rate: 31.00, title: "Financial Analyst" },
-  { code: "EMP-011", first: "Tyrell", last: "Washington", dept: "Operations", rate: 23.50, title: "Warehouse Associate" },
-  { code: "EMP-012", first: "Grace", last: "Liu", dept: "Design", rate: 28.50, title: "Graphic Designer" },
+  { code: "EMP-001", first: "Alice", last: "Chen", dept: "Engineering", rate: 32.50, title: "Senior Developer", shift: 0 },
+  { code: "EMP-002", first: "Marcus", last: "Johnson", dept: "Sales", rate: 28.00, title: "Account Executive", shift: 0 },
+  { code: "EMP-003", first: "Priya", last: "Patel", dept: "Engineering", rate: 30.00, title: "Frontend Developer", shift: 0 },
+  { code: "EMP-004", first: "James", last: "O'Brien", dept: "Operations", rate: 24.50, title: "Logistics Coordinator", shift: 1 },
+  { code: "EMP-005", first: "Sofia", last: "Rodriguez", dept: "Marketing", rate: 27.00, title: "Marketing Specialist", shift: 0 },
+  { code: "EMP-006", first: "David", last: "Kim", dept: "Engineering", rate: 35.00, title: "Engineering Lead", shift: 0 },
+  { code: "EMP-007", first: "Emily", last: "Watson", dept: "HR", rate: 26.50, title: "HR Generalist", shift: 0 },
+  { code: "EMP-008", first: "Carlos", last: "Mendez", dept: "Sales", rate: 25.00, title: "Sales Representative", shift: 1 },
+  { code: "EMP-009", first: "Yuki", last: "Tanaka", dept: "Design", rate: 29.00, title: "UX Designer", shift: 0 },
+  { code: "EMP-010", first: "Olivia", last: "Bauer", dept: "Finance", rate: 31.00, title: "Financial Analyst", shift: 0 },
+  { code: "EMP-011", first: "Tyrell", last: "Washington", dept: "Operations", rate: 23.50, title: "Warehouse Associate", shift: 1 },
+  { code: "EMP-012", first: "Grace", last: "Liu", dept: "Design", rate: 28.50, title: "Graphic Designer", shift: 2 },
 ];
 
 function dateOffset(days: number): string {
@@ -292,37 +313,66 @@ const CLOCK_PRESETS = [
   { in: "08:00", out: "17:00", lunch: 45 },
 ];
 
+const NIGHT_CLOCK_PRESETS = [
+  { in: "22:00", out: "06:00", lunch: 30 },
+  { in: "23:00", out: "07:00", lunch: 45 },
+  { in: "21:00", out: "05:00", lunch: 30 },
+];
+
+const SWING_CLOCK_PRESETS = [
+  { in: "15:00", out: "23:30", lunch: 30 },
+  { in: "16:00", out: "00:30", lunch: 45 },
+];
+
+const SEED_SHIFTS = [
+  { label: "Day", color: "#3b82f6", multiplier: 1.0 },
+  { label: "Night", color: "#8b5cf6", multiplier: 1.15 },
+  { label: "Swing", color: "#f59e0b", multiplier: 1.08 },
+];
+
 async function seedIfEmpty(): Promise<void> {
   const db = await getDb();
   const check = await db.query("SELECT COUNT(*) as cnt FROM employees");
   const count = Number((check.rows[0] as Record<string, unknown>)?.cnt ?? 0);
   if (count > 0) return;
 
+  const shiftIds: string[] = [];
+  for (let i = 0; i < SEED_SHIFTS.length; i++) {
+    const sid = uuid();
+    shiftIds.push(sid);
+    await db.query(
+      "INSERT INTO shift_types (id, label, color, pay_multiplier, sort_order, created_at) VALUES ($1,$2,$3,$4,$5,$6)",
+      [sid, SEED_SHIFTS[i].label, SEED_SHIFTS[i].color, SEED_SHIFTS[i].multiplier, i, now()],
+    );
+  }
+
   const empIds: string[] = [];
   for (const e of SEED_EMPLOYEES) {
     const id = uuid();
     empIds.push(id);
+    const shiftId = shiftIds[e.shift] ?? null;
     await db.query(
       `INSERT INTO employees (id, user_id, employee_code, first_name, last_name, email, department, hourly_rate, active,
         phone, job_title, address_line1, address_line2, city, state, postal_code, country,
-        date_of_birth, hire_date, emergency_contact_name, emergency_contact_phone, notes, custom_fields, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)`,
+        date_of_birth, hire_date, emergency_contact_name, emergency_contact_phone, notes, custom_fields, shift_type_id, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)`,
       [id, null, e.code, e.first, e.last,
        e.first.toLowerCase() + "." + e.last.toLowerCase() + "@company.com",
        e.dept, e.rate, true,
        null, e.title, null, null, null, null, null, null,
-       null, null, null, null, null, "{}", now()],
+       null, null, null, null, null, "{}", shiftId, now()],
     );
   }
 
-  // Generate ~80 time records across the past 4 weeks
   for (let dayOffset = -1; dayOffset >= -28; dayOffset--) {
     const dow = new Date(dateOffset(dayOffset) + "T00:00:00Z").getUTCDay();
-    if (dow === 0 || dow === 6) continue; // skip weekends
+    const isWeekend = dow === 0 || dow === 6;
     for (let i = 0; i < empIds.length; i++) {
-      // ~70% attendance rate
-      if (Math.random() < 0.3) continue;
-      const preset = CLOCK_PRESETS[(i + Math.abs(dayOffset)) % CLOCK_PRESETS.length];
+      if (!isWeekend && Math.random() < 0.3) continue;
+      if (isWeekend && Math.random() < 0.6) continue;
+      const shiftIdx = SEED_EMPLOYEES[i].shift;
+      const presets = shiftIdx === 1 ? NIGHT_CLOCK_PRESETS : shiftIdx === 2 ? SWING_CLOCK_PRESETS : CLOCK_PRESETS;
+      const preset = presets[(i + Math.abs(dayOffset)) % presets.length];
       const recId = uuid();
       const hours = computeHours(preset.in, preset.out, preset.lunch);
       await db.query(
@@ -356,8 +406,8 @@ export const localDb = {
     await db.query(
       `INSERT INTO employees (id, user_id, employee_code, first_name, last_name, email, department, hourly_rate, active,
         phone, job_title, address_line1, address_line2, city, state, postal_code, country,
-        date_of_birth, hire_date, emergency_contact_name, emergency_contact_phone, notes, custom_fields, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)`,
+        date_of_birth, hire_date, emergency_contact_name, emergency_contact_phone, notes, custom_fields, shift_type_id, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)`,
       [
         id, data.user_id ?? null, data.employee_code, data.first_name, data.last_name,
         data.email ?? null, data.department ?? null, data.hourly_rate ?? 0, data.active ?? true,
@@ -365,7 +415,7 @@ export const localDb = {
         data.city ?? null, data.state ?? null, data.postal_code ?? null, data.country ?? null,
         data.date_of_birth ?? null, data.hire_date ?? null,
         data.emergency_contact_name ?? null, data.emergency_contact_phone ?? null,
-        data.notes ?? null, toJsonString(data.custom_fields), now(),
+        data.notes ?? null, toJsonString(data.custom_fields), data.shift_type_id ?? null, now(),
       ],
     );
   },
@@ -382,7 +432,7 @@ export const localDb = {
       city: "city", state: "state", postal_code: "postal_code", country: "country",
       date_of_birth: "date_of_birth", hire_date: "hire_date",
       emergency_contact_name: "emergency_contact_name", emergency_contact_phone: "emergency_contact_phone",
-      notes: "notes", custom_fields: "custom_fields",
+      notes: "notes", custom_fields: "custom_fields", shift_type_id: "shift_type_id",
     };
     for (const [key, col] of Object.entries(colMap)) {
       if (key in data) {
@@ -615,6 +665,52 @@ export const localDb = {
     );
   },
 
+  // ─── Shift types ────────────────────────────────────────
+
+  async getShiftTypes(): Promise<ShiftTypeRow[]> {
+    const db = await getDb();
+    const result = await db.query("SELECT * FROM shift_types ORDER BY sort_order, created_at");
+    return result.rows.map((r) => {
+      const row = r as Record<string, unknown>;
+      return {
+        id: String(row.id),
+        label: String(row.label),
+        color: String(row.color),
+        pay_multiplier: Number(row.pay_multiplier),
+        sort_order: Number(row.sort_order),
+        created_at: String(row.created_at),
+      };
+    });
+  },
+
+  async insertShiftType(data: { label: string; color?: string; pay_multiplier?: number; sort_order?: number }): Promise<void> {
+    const db = await getDb();
+    await db.query(
+      "INSERT INTO shift_types (id, label, color, pay_multiplier, sort_order, created_at) VALUES ($1,$2,$3,$4,$5,$6)",
+      [uuid(), data.label, data.color ?? "#6b7280", data.pay_multiplier ?? 1.0, data.sort_order ?? 0, now()],
+    );
+  },
+
+  async updateShiftType(id: string, data: { label?: string; color?: string; pay_multiplier?: number; sort_order?: number }): Promise<void> {
+    const db = await getDb();
+    const fields: string[] = [];
+    const values: unknown[] = [];
+    let idx = 1;
+    if (data.label !== undefined) { fields.push("label = $" + `${idx++}`); values.push(data.label); }
+    if (data.color !== undefined) { fields.push("color = $" + `${idx++}`); values.push(data.color); }
+    if (data.pay_multiplier !== undefined) { fields.push("pay_multiplier = $" + `${idx++}`); values.push(data.pay_multiplier); }
+    if (data.sort_order !== undefined) { fields.push("sort_order = $" + `${idx++}`); values.push(data.sort_order); }
+    if (!fields.length) return;
+    values.push(id);
+    await db.query(`UPDATE shift_types SET ${fields.join(", ")} WHERE id = $` + `${idx}`, values);
+  },
+
+  async deleteShiftType(id: string): Promise<void> {
+    const db = await getDb();
+    await db.query("UPDATE employees SET shift_type_id = NULL WHERE shift_type_id = $1", [id]);
+    await db.query("DELETE FROM shift_types WHERE id = $1", [id]);
+  },
+
   // ─── Sync helpers ───────────────────────────────────────
 
   async exportAll(): Promise<{
@@ -646,18 +742,20 @@ export const localDb = {
     await db.exec("DELETE FROM pay_adjustments");
     await db.exec("DELETE FROM employee_field_defs");
     await db.exec("DELETE FROM employees");
+    await db.exec("DELETE FROM shift_types");
     await db.exec("DELETE FROM payroll_settings");
 
     for (const e of data.employees) {
       await db.query(
         `INSERT INTO employees (id, user_id, employee_code, first_name, last_name, email, department, hourly_rate, active,
           phone, job_title, address_line1, address_line2, city, state, postal_code, country,
-          date_of_birth, hire_date, emergency_contact_name, emergency_contact_phone, notes, custom_fields, created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)`,
+          date_of_birth, hire_date, emergency_contact_name, emergency_contact_phone, notes, custom_fields, shift_type_id, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)`,
         [e.id, e.user_id, e.employee_code, e.first_name, e.last_name, e.email, e.department, e.hourly_rate, e.active,
          e.phone, e.job_title, e.address_line1, e.address_line2, e.city, e.state, e.postal_code, e.country,
          e.date_of_birth, e.hire_date, e.emergency_contact_name, e.emergency_contact_phone, e.notes,
-         typeof e.custom_fields === "string" ? e.custom_fields : JSON.stringify(e.custom_fields), e.created_at],
+         typeof e.custom_fields === "string" ? e.custom_fields : JSON.stringify(e.custom_fields),
+         e.shift_type_id ?? null, e.created_at],
       );
     }
     for (const r of data.time_records) {

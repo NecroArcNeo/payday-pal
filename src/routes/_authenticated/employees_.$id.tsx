@@ -4,7 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { localDb } from "@/lib/local-db";
 import { AppShell, btnPrimary, inputCls } from "@/components/AppShell";
-import { fullName, useEmployees, useFieldDefs } from "@/lib/payroll";
+import { fullName, useEmployees, useFieldDefs, useShiftTypes } from "@/lib/payroll";
 import { ArrowLeft, Plus, Trash2 } from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated/employees_/$id")({
@@ -42,6 +42,7 @@ function ProfilePage() {
   const [form, setForm] = useState<Record<string, string>>({});
   const [custom, setCustom] = useState<Record<string, string>>({});
   const { data: defs = [] } = useFieldDefs();
+  const { data: shiftTypes = [] } = useShiftTypes();
   const [newLabel, setNewLabel] = useState("");
   const [newType, setNewType] = useState("text");
 
@@ -86,6 +87,7 @@ function ProfilePage() {
     for (const s of sections) for (const f of s.fields) row[f.k] = form[f.k]?.trim() || null;
     row["hourly_rate"] = rate;
     row["notes"] = form["notes"]?.trim() || null;
+    row["shift_type_id"] = form["shift_type_id"] || null;
     const cf: Record<string, string> = {};
     for (const [k, v] of Object.entries(custom)) if (v.trim()) cf[k] = v.trim().slice(0, 1000);
     (row as Record<string, unknown>)["custom_fields"] = cf;
@@ -93,6 +95,8 @@ function ProfilePage() {
     toast.success("Profile saved");
     qc.invalidateQueries({ queryKey: ["employees"] });
   };
+
+  const selectedShift = shiftTypes.find((s) => s.id === form["shift_type_id"]);
 
   return (
     <AppShell eyebrow="Profile" title={fullName(emp)}>
@@ -102,6 +106,27 @@ function ProfilePage() {
           <div key={s.title} className="glass-panel p-5">
             <div className="mb-4 font-display font-extrabold tracking-tight">{s.title}</div>
             <div className="grid gap-3 md:grid-cols-3">
+              {s.title === "Payroll" && (
+                <label>
+                  <span className="label-mono">Shift type</span>
+                  <select
+                    className={`${inputCls} mt-1`}
+                    value={form["shift_type_id"] ?? ""}
+                    onChange={(e) => setForm({ ...form, shift_type_id: e.target.value })}
+                  >
+                    <option value="">No shift assigned</option>
+                    {shiftTypes.map((st) => (
+                      <option key={st.id} value={st.id}>{st.label} ({st.pay_multiplier}x)</option>
+                    ))}
+                  </select>
+                  {selectedShift && (
+                    <span className="mt-1.5 inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-medium" style={{ backgroundColor: `${selectedShift.color}20`, color: selectedShift.color }}>
+                      <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: selectedShift.color }} />
+                      {selectedShift.label} · {selectedShift.pay_multiplier}x pay
+                    </span>
+                  )}
+                </label>
+              )}
               {s.fields.map((f) => (
                 <label key={f.k} className={f.span ? "md:col-span-3" : ""}>
                   <span className="label-mono">{f.label}</span>

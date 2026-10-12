@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Search, X, Trash2, Filter, Pencil, XCircle, ChevronDown } from "lucide-react";
-import { fullName, money, computeHours, type Employee, type RecordWithEmp } from "@/lib/payroll";
+import { fullName, money, computeHours, dayOfWeek, isWeekend, type Employee, type RecordWithEmp } from "@/lib/payroll";
 import { inputCls } from "@/components/AppShell";
 
 interface Props {
@@ -322,6 +322,7 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
               )}
               {showName && <th className="px-5 py-3 text-left font-medium">{sortBtn("name", "Employee")}</th>}
               <th className="px-3 py-3 text-left font-medium">{sortBtn("date", "Date")}</th>
+              <th className="px-3 py-3 text-left font-medium">Day</th>
               <th className="px-3 py-3 text-left font-medium">Type</th>
               <th className="px-3 py-3 text-right font-medium">In</th>
               <th className="px-3 py-3 text-right font-medium">Out</th>
@@ -335,7 +336,7 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
           <tbody className="font-mono text-[13px]">
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={11} className="px-5 py-10 text-center font-body text-muted-foreground">
+                <td colSpan={12} className="px-5 py-10 text-center font-body text-muted-foreground">
                   {hasFilters ? "No records match your filters." : "No time records yet."}
                 </td>
               </tr>
@@ -344,6 +345,8 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
               const emp = empById.get(r.employee_id) ?? r.employees;
               const rate = Number(emp?.hourly_rate ?? 0);
               const isChecked = checked.has(r.id);
+              const weekend = isWeekend(r.work_date);
+              const dow = dayOfWeek(r.work_date);
               return (
                 <tr
                   key={r.id}
@@ -365,6 +368,11 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
                     </td>
                   )}
                   <td className="px-3 py-3">{r.work_date}</td>
+                  <td className="px-3 py-3">
+                    <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${weekend ? "bg-amber-500/15 text-amber-600 dark:text-amber-400" : "bg-secondary text-muted-foreground"}`}>
+                      {dow}
+                    </span>
+                  </td>
                   <td className="px-3 py-3">
                     <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${r.entry_mode === "clock" ? "bg-primary/15 text-primary" : "bg-accent/15 text-accent-foreground"}`}>
                       {r.entry_mode === "clock" ? "Clock" : "Hours"}
@@ -429,7 +437,7 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
               <div>
                 <div className="font-display text-lg font-extrabold">Edit record</div>
                 <div className="text-xs text-muted-foreground">
-                  {editSingle.employees ? fullName(editSingle.employees) : "Unknown"} · {editSingle.work_date}
+                  {editSingle.employees ? fullName(editSingle.employees) : "Unknown"} · {editSingle.work_date} · {dayOfWeek(editSingle.work_date)}
                 </div>
               </div>
               <button onClick={() => setEditSingle(null)} className="text-muted-foreground hover:text-foreground">
