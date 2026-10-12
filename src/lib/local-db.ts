@@ -260,10 +260,85 @@ function computeHours(clockIn: string, clockOut: string, lunch: number): number 
   return Math.max(0, Math.round((mins - lunch) / 60 * 100) / 100);
 }
 
+// ─── Seed data ──────────────────────────────────────────────
+
+const SEED_EMPLOYEES = [
+  { code: "EMP-001", first: "Alice", last: "Chen", dept: "Engineering", rate: 32.50, title: "Senior Developer" },
+  { code: "EMP-002", first: "Marcus", last: "Johnson", dept: "Sales", rate: 28.00, title: "Account Executive" },
+  { code: "EMP-003", first: "Priya", last: "Patel", dept: "Engineering", rate: 30.00, title: "Frontend Developer" },
+  { code: "EMP-004", first: "James", last: "O'Brien", dept: "Operations", rate: 24.50, title: "Logistics Coordinator" },
+  { code: "EMP-005", first: "Sofia", last: "Rodriguez", dept: "Marketing", rate: 27.00, title: "Marketing Specialist" },
+  { code: "EMP-006", first: "David", last: "Kim", dept: "Engineering", rate: 35.00, title: "Engineering Lead" },
+  { code: "EMP-007", first: "Emily", last: "Watson", dept: "HR", rate: 26.50, title: "HR Generalist" },
+  { code: "EMP-008", first: "Carlos", last: "Mendez", dept: "Sales", rate: 25.00, title: "Sales Representative" },
+  { code: "EMP-009", first: "Yuki", last: "Tanaka", dept: "Design", rate: 29.00, title: "UX Designer" },
+  { code: "EMP-010", first: "Olivia", last: "Bauer", dept: "Finance", rate: 31.00, title: "Financial Analyst" },
+  { code: "EMP-011", first: "Tyrell", last: "Washington", dept: "Operations", rate: 23.50, title: "Warehouse Associate" },
+  { code: "EMP-012", first: "Grace", last: "Liu", dept: "Design", rate: 28.50, title: "Graphic Designer" },
+];
+
+function dateOffset(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+const CLOCK_PRESETS = [
+  { in: "08:00", out: "16:30", lunch: 30 },
+  { in: "09:00", out: "17:30", lunch: 45 },
+  { in: "08:30", out: "17:00", lunch: 30 },
+  { in: "07:00", out: "15:30", lunch: 30 },
+  { in: "09:30", out: "18:00", lunch: 60 },
+  { in: "08:00", out: "17:00", lunch: 45 },
+];
+
+async function seedIfEmpty(): Promise<void> {
+  const db = await getDb();
+  const check = await db.query("SELECT COUNT(*) as cnt FROM employees");
+  const count = Number((check.rows[0] as Record<string, unknown>)?.cnt ?? 0);
+  if (count > 0) return;
+
+  const empIds: string[] = [];
+  for (const e of SEED_EMPLOYEES) {
+    const id = uuid();
+    empIds.push(id);
+    await db.query(
+      `INSERT INTO employees (id, user_id, employee_code, first_name, last_name, email, department, hourly_rate, active,
+        phone, job_title, address_line1, address_line2, city, state, postal_code, country,
+        date_of_birth, hire_date, emergency_contact_name, emergency_contact_phone, notes, custom_fields, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)`,
+      [id, null, e.code, e.first, e.last,
+       e.first.toLowerCase() + "." + e.last.toLowerCase() + "@company.com",
+       e.dept, e.rate, true,
+       null, e.title, null, null, null, null, null, null,
+       null, null, null, null, null, "{}", now()],
+    );
+  }
+
+  // Generate ~80 time records across the past 4 weeks
+  for (let dayOffset = -1; dayOffset >= -28; dayOffset--) {
+    const dow = new Date(dateOffset(dayOffset) + "T00:00:00Z").getUTCDay();
+    if (dow === 0 || dow === 6) continue; // skip weekends
+    for (let i = 0; i < empIds.length; i++) {
+      // ~70% attendance rate
+      if (Math.random() < 0.3) continue;
+      const preset = CLOCK_PRESETS[(i + Math.abs(dayOffset)) % CLOCK_PRESETS.length];
+      const recId = uuid();
+      const hours = computeHours(preset.in, preset.out, preset.lunch);
+      await db.query(
+        `INSERT INTO time_records (id, employee_id, work_date, entry_mode, clock_in, clock_out, lunch_minutes, hours, note, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        [recId, empIds[i], dateOffset(dayOffset), "clock", preset.in, preset.out, preset.lunch, hours, null, now()],
+      );
+    }
+  }
+}
+
 // ─── Public API ─────────────────────────────────────────────
 
 export const localDb = {
   async getEmployees(): Promise<EmployeeRow[]> {
+    await seedIfEmpty();
     const db = await getDb();
     const result = await db.query("SELECT * FROM employees ORDER BY last_name, first_name");
     return result.rows.map((r) => mapEmployee(r as Record<string, unknown>));
@@ -311,14 +386,14 @@ export const localDb = {
     };
     for (const [key, col] of Object.entries(colMap)) {
       if (key in data) {
-        fields.push(`${col} = $${idx++}`);
+        fields.push(`${col} = $` + `${idx++}`);
         if (key === "custom_fields") values.push(toJsonString(data.custom_fields));
         else values.push(data[key as keyof EmployeeRow]);
       }
     }
     if (!fields.length) return;
     values.push(id);
-    await db.query(`UPDATE employees SET ${fields.join(", ")} WHERE id = $${idx}`, values);
+    await db.query(`UPDATE employees SET ${fields.join(", ")} WHERE id = $` + `${idx}`, values);
   },
 
   async upsertEmployee(data: Partial<EmployeeRow> & { employee_code: string; first_name: string; last_name: string }): Promise<void> {
@@ -342,13 +417,13 @@ export const localDb = {
                FROM time_records t LEFT JOIN employees e ON t.employee_id = e.id`;
     const conditions: string[] = [];
     const params: unknown[] = [];
-    if (from) { conditions.push(`t.work_date >= ${params.length + 1}`); params.push(from); }
-    if (to) { conditions.push(`t.work_date <= ${params.length + 1}`); params.push(to); }
+    if (from) { conditions.push("t.work_date >= $" + `${params.length + 1}`); params.push(from); }
+    if (to) { conditions.push("t.work_date <= $" + `${params.length + 1}`); params.push(to); }
     if (conditions.length) sql += " WHERE " + conditions.join(" AND ");
     sql += " ORDER BY t.work_date DESC, t.created_at DESC";
     if (limit !== undefined) {
-      sql += ` LIMIT ${params.length + 1}`; params.push(limit);
-      if (offset !== undefined) { sql += ` OFFSET ${params.length + 1}`; params.push(offset); }
+      sql += " LIMIT $" + `${params.length + 1}`; params.push(limit);
+      if (offset !== undefined) { sql += " OFFSET $" + `${params.length + 1}`; params.push(offset); }
     }
     const result = await db.query(sql, params);
     return result.rows.map((r) => {
@@ -395,29 +470,28 @@ export const localDb = {
     const values: unknown[] = [];
     let idx = 1;
 
-    if (data.work_date !== undefined) { fields.push(`work_date = ${idx++}`); values.push(data.work_date); }
-    if (data.entry_mode !== undefined) { fields.push(`entry_mode = ${idx++}`); values.push(data.entry_mode); }
-    if (data.clock_in !== undefined) { fields.push(`clock_in = ${idx++}`); values.push(data.clock_in); }
-    if (data.clock_out !== undefined) { fields.push(`clock_out = ${idx++}`); values.push(data.clock_out); }
-    if (data.lunch_minutes !== undefined) { fields.push(`lunch_minutes = ${idx++}`); values.push(data.lunch_minutes); }
-    if (data.hours !== undefined) { fields.push(`hours = ${idx++}`); values.push(data.hours); }
-    if (data.note !== undefined) { fields.push(`note = ${idx++}`); values.push(data.note); }
+    if (data.work_date !== undefined) { fields.push("work_date = $" + `${idx++}`); values.push(data.work_date); }
+    if (data.entry_mode !== undefined) { fields.push("entry_mode = $" + `${idx++}`); values.push(data.entry_mode); }
+    if (data.clock_in !== undefined) { fields.push("clock_in = $" + `${idx++}`); values.push(data.clock_in); }
+    if (data.clock_out !== undefined) { fields.push("clock_out = $" + `${idx++}`); values.push(data.clock_out); }
+    if (data.lunch_minutes !== undefined) { fields.push("lunch_minutes = $" + `${idx++}`); values.push(data.lunch_minutes); }
+    if (data.hours !== undefined) { fields.push("hours = $" + `${idx++}`); values.push(data.hours); }
+    if (data.note !== undefined) { fields.push("note = $" + `${idx++}`); values.push(data.note); }
 
-    // Recompute hours if clock fields were updated
     const mode = data.entry_mode;
     if (mode === "clock" && data.clock_in != null && data.clock_out != null) {
       const lunch = data.lunch_minutes ?? 0;
       const computed = computeHours(data.clock_in, data.clock_out, lunch);
-      fields.push(`hours = ${idx++}`); values.push(computed);
+      fields.push("hours = $" + `${idx++}`); values.push(computed);
     } else if (mode === "hours" && data.hours !== undefined) {
-      fields.push(`clock_in = ${idx++}`); values.push(null);
-      fields.push(`clock_out = ${idx++}`); values.push(null);
-      fields.push(`lunch_minutes = ${idx++}`); values.push(0);
+      fields.push("clock_in = $" + `${idx++}`); values.push(null);
+      fields.push("clock_out = $" + `${idx++}`); values.push(null);
+      fields.push("lunch_minutes = $" + `${idx++}`); values.push(0);
     }
 
     if (!fields.length) return;
     values.push(id);
-    await db.query(`UPDATE time_records SET ${fields.join(", ")} WHERE id = ${idx}`, values);
+    await db.query(`UPDATE time_records SET ${fields.join(", ")} WHERE id = $` + `${idx}`, values);
   },
 
   async deleteRecord(id: string): Promise<void> {
@@ -430,8 +504,8 @@ export const localDb = {
     let sql = "SELECT COUNT(*) as cnt FROM time_records";
     const conditions: string[] = [];
     const params: unknown[] = [];
-    if (from) { conditions.push(`work_date >= ${params.length + 1}`); params.push(from); }
-    if (to) { conditions.push(`work_date <= ${params.length + 1}`); params.push(to); }
+    if (from) { conditions.push("work_date >= $" + `${params.length + 1}`); params.push(from); }
+    if (to) { conditions.push("work_date <= $" + `${params.length + 1}`); params.push(to); }
     if (conditions.length) sql += " WHERE " + conditions.join(" AND ");
     const result = await db.query(sql, params);
     return Number((result.rows[0] as Record<string, unknown>)?.cnt ?? 0);
@@ -465,12 +539,12 @@ export const localDb = {
     const fields: string[] = [];
     const values: unknown[] = [];
     let idx = 1;
-    if (data.label !== undefined) { fields.push(`label = $${idx++}`); values.push(data.label); }
-    if (data.field_type !== undefined) { fields.push(`field_type = $${idx++}`); values.push(data.field_type); }
-    if (data.sort_order !== undefined) { fields.push(`sort_order = $${idx++}`); values.push(data.sort_order); }
+    if (data.label !== undefined) { fields.push("label = $" + `${idx++}`); values.push(data.label); }
+    if (data.field_type !== undefined) { fields.push("field_type = $" + `${idx++}`); values.push(data.field_type); }
+    if (data.sort_order !== undefined) { fields.push("sort_order = $" + `${idx++}`); values.push(data.sort_order); }
     if (!fields.length) return;
     values.push(id);
-    await db.query(`UPDATE employee_field_defs SET ${fields.join(", ")} WHERE id = $${idx}`, values);
+    await db.query(`UPDATE employee_field_defs SET ${fields.join(", ")} WHERE id = $` + `${idx}`, values);
   },
 
   async deleteFieldDef(id: string): Promise<void> {
@@ -483,8 +557,8 @@ export const localDb = {
     let sql = "SELECT * FROM pay_adjustments";
     const conditions: string[] = [];
     const params: unknown[] = [];
-    if (from) { conditions.push(`pay_date >= $${params.length + 1}`); params.push(from); }
-    if (to) { conditions.push(`pay_date <= $${params.length + 1}`); params.push(to); }
+    if (from) { conditions.push("pay_date >= $" + `${params.length + 1}`); params.push(from); }
+    if (to) { conditions.push("pay_date <= $" + `${params.length + 1}`); params.push(to); }
     if (conditions.length) sql += " WHERE " + conditions.join(" AND ");
     sql += " ORDER BY pay_date DESC, created_at DESC";
     const result = await db.query(sql, params);
