@@ -3,7 +3,7 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { z } from "zod";
-import { supabase } from "@/integrations/supabase/client";
+import { localDb } from "@/lib/local-db";
 import { AppShell, btnGhost, btnPrimary, inputCls } from "@/components/AppShell";
 import { fullName, money, useEmployees, type Employee } from "@/lib/payroll";
 import { Pencil, Trash2 } from "lucide-react";
@@ -36,10 +36,10 @@ function EmployeesPage() {
     const parsed = schema.safeParse(form);
     if (!parsed.success) { toast.error(parsed.error.issues[0]?.message ?? "Invalid input"); return; }
     const row = { ...parsed.data, email: parsed.data.email || null, department: parsed.data.department || null };
-    const { error } = editing
-      ? await supabase.from("employees").update(row).eq("id", editing)
-      : await supabase.from("employees").insert(row);
-    if (error) { toast.error(error.message); return; }
+    try {
+      if (editing) await localDb.updateEmployee(editing, row);
+      else await localDb.insertEmployee(row);
+    } catch (err) { toast.error((err as Error).message); return; }
     toast.success(editing ? "Employee updated" : "Employee added");
     setForm(empty);
     setEditing(null);
@@ -53,8 +53,7 @@ function EmployeesPage() {
 
   const remove = async (id: string) => {
     if (!confirm("Delete this employee and all their time records?")) return;
-    const { error } = await supabase.from("employees").delete().eq("id", id);
-    if (error) { toast.error(error.message); return; }
+    await localDb.deleteEmployee(id);
     qc.invalidateQueries();
   };
 
