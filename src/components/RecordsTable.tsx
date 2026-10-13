@@ -61,7 +61,7 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
     entry_mode: "clock",
     clock_in: "09:00",
     clock_out: "17:00",
-    lunch_minutes: "30",
+    lunch_minutes: "0.5",
     hours: "8",
     useDate: false,
     useMode: false,
@@ -163,7 +163,7 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
       entry_mode: r.entry_mode as "clock" | "hours",
       clock_in: r.clock_in ?? "09:00",
       clock_out: r.clock_out ?? "17:00",
-      lunch_minutes: String(r.lunch_minutes ?? 0),
+      lunch_minutes: String((r.lunch_minutes ?? 0) / 60),
       hours: String(r.hours ?? 0),
     });
     setEditSingle(r);
@@ -178,7 +178,7 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
     if (singleForm.entry_mode === "clock") {
       data.clock_in = singleForm.clock_in;
       data.clock_out = singleForm.clock_out;
-      data.lunch_minutes = Number(singleForm.lunch_minutes) || 0;
+      data.lunch_minutes = Math.round((Number(singleForm.lunch_minutes) || 0) * 60);
     } else {
       data.hours = Number(singleForm.hours) || 0;
     }
@@ -194,7 +194,7 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
     if (bulkForm.useMode && bulkForm.entry_mode === "clock") {
       if (bulkForm.useClockIn) data.clock_in = bulkForm.clock_in;
       if (bulkForm.useClockOut) data.clock_out = bulkForm.clock_out;
-      if (bulkForm.useLunch) data.lunch_minutes = Number(bulkForm.lunch_minutes) || 0;
+      if (bulkForm.useLunch) data.lunch_minutes = Math.round((Number(bulkForm.lunch_minutes) || 0) * 60);
     }
     if (bulkForm.useMode && bulkForm.entry_mode === "hours") {
       if (bulkForm.useHours) data.hours = Number(bulkForm.hours) || 0;
@@ -203,7 +203,7 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
       // Keep existing mode but allow field overrides
       if (bulkForm.useClockIn) data.clock_in = bulkForm.clock_in;
       if (bulkForm.useClockOut) data.clock_out = bulkForm.clock_out;
-      if (bulkForm.useLunch) data.lunch_minutes = Number(bulkForm.lunch_minutes) || 0;
+      if (bulkForm.useLunch) data.lunch_minutes = Math.round((Number(bulkForm.lunch_minutes) || 0) * 60);
       if (bulkForm.useHours) data.hours = Number(bulkForm.hours) || 0;
     }
     await onEditMany([...checked], data);
@@ -227,7 +227,7 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
 
   const hasFilters = search || dept || position || mode !== "all";
   const singlePreview = singleForm.entry_mode === "clock"
-    ? computeHours(singleForm.clock_in, singleForm.clock_out, Number(singleForm.lunch_minutes) || 0)
+    ? computeHours(singleForm.clock_in, singleForm.clock_out, (Number(singleForm.lunch_minutes) || 0) * 60)
     : Number(singleForm.hours) || 0;
 
   return (
@@ -326,7 +326,7 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
               <th className="px-3 py-3 text-left font-medium">Type</th>
               <th className="px-3 py-3 text-right font-medium">In</th>
               <th className="px-3 py-3 text-right font-medium">Out</th>
-              <th className="px-3 py-3 text-right font-medium">Lunch</th>
+              <th className="px-3 py-3 text-right font-medium">Break</th>
               <th className="px-3 py-3 text-right font-medium">{sortBtn("hours", "Hours")}</th>
               <th className="px-3 py-3 text-right font-medium">Rate</th>
               <th className="px-5 py-3 text-right font-medium">{sortBtn("pay", "Gross")}</th>
@@ -380,7 +380,7 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
                   </td>
                   <td className="px-3 py-3 text-right text-muted-foreground">{r.clock_in?.slice(0, 5) ?? "—"}</td>
                   <td className="px-3 py-3 text-right text-muted-foreground">{r.clock_out?.slice(0, 5) ?? "—"}</td>
-                  <td className="px-3 py-3 text-right text-muted-foreground">{r.entry_mode === "clock" ? r.lunch_minutes : "—"}</td>
+                  <td className="px-3 py-3 text-right text-muted-foreground">{r.entry_mode === "clock" ? (r.lunch_minutes / 60).toFixed(2) : "—"}</td>
                   <td className="px-3 py-3 text-right font-semibold">{Number(r.hours).toFixed(2)}</td>
                   <td className="px-3 py-3 text-right text-muted-foreground">{money(rate)}</td>
                   <td className="px-5 py-3 text-right font-semibold">{money(rate * Number(r.hours))}</td>
@@ -474,8 +474,8 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
                     <input type="time" className={`${inputCls} mt-1`} value={singleForm.clock_out} onChange={(e) => setSingleForm((f) => ({ ...f, clock_out: e.target.value }))} />
                   </label>
                   <label>
-                    <span className="label-mono">Lunch (min)</span>
-                    <input type="number" min={0} className={`${inputCls} mt-1`} value={singleForm.lunch_minutes} onChange={(e) => setSingleForm((f) => ({ ...f, lunch_minutes: e.target.value }))} />
+                    <span className="label-mono">Break (hrs)</span>
+                    <input type="number" min={0} step={0.25} max={10} className={`${inputCls} mt-1`} value={singleForm.lunch_minutes} onChange={(e) => setSingleForm((f) => ({ ...f, lunch_minutes: e.target.value }))} />
                   </label>
                 </>
               ) : (
@@ -567,8 +567,8 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
                 <label className={`flex items-center gap-2 rounded-xl bg-secondary p-3 ring-1 ring-border ${!bulkForm.useLunch ? "opacity-60" : ""}`}>
                   <input type="checkbox" checked={bulkForm.useLunch} onChange={() => setBulkForm((f) => ({ ...f, useLunch: !f.useLunch }))} className="h-4 w-4" />
                   <div className="flex-1">
-                    <span className="label-mono">Lunch</span>
-                    <input type="number" min={0} disabled={!bulkForm.useLunch} className={`${inputCls} mt-1`} value={bulkForm.lunch_minutes} onChange={(e) => setBulkForm((f) => ({ ...f, lunch_minutes: e.target.value }))} />
+                    <span className="label-mono">Break (hrs)</span>
+                    <input type="number" min={0} step={0.25} max={10} disabled={!bulkForm.useLunch} className={`${inputCls} mt-1`} value={bulkForm.lunch_minutes} onChange={(e) => setBulkForm((f) => ({ ...f, lunch_minutes: e.target.value }))} />
                   </div>
                 </label>
               </div>

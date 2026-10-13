@@ -67,7 +67,7 @@ const RECORD_FIELDS: { key: string; label: string; aliases: string[] }[] = [
   { key: "work_date", label: "Date", aliases: ["date", "workdate", "day", "shiftdate"] },
   { key: "clock_in", label: "Clock in", aliases: ["clockin", "timein", "in", "start", "starttime"] },
   { key: "clock_out", label: "Clock out", aliases: ["clockout", "timeout", "out", "end", "endtime"] },
-  { key: "lunch_minutes", label: "Lunch minutes", aliases: ["lunchminutes", "lunch", "break", "breakminutes", "lunchmins"] },
+  { key: "lunch_minutes", label: "Break hours", aliases: ["breakhours", "break", "lunchhours", "lunch", "breakminutes", "lunchminutes", "lunchmins"] },
   { key: "hours", label: "Hours", aliases: ["hours", "totalhours", "hoursworked", "hrs"] },
 ];
 
@@ -264,9 +264,9 @@ function parseRecords(
     const cout = parseTime(get("clock_out"));
     const base = { employee_id: emp.id, _code: emp.employee_code, work_date: date };
     if (cin && cout) {
-      const lunch = Number(get("lunch_minutes") || 0);
-      if (!Number.isFinite(lunch) || lunch < 0 || lunch > 600) { errs.push(`${line}: invalid lunch minutes`); return; }
-      ok.push({ ...base, entry_mode: "clock", clock_in: cin, clock_out: cout, lunch_minutes: lunch });
+      const breakHrs = Number(get("lunch_minutes") || 0);
+      if (!Number.isFinite(breakHrs) || breakHrs < 0 || breakHrs > 10) { errs.push(`${line}: invalid break hours`); return; }
+      ok.push({ ...base, entry_mode: "clock", clock_in: cin, clock_out: cout, lunch_minutes: Math.round(breakHrs * 60) });
     } else {
       const hours = Number(get("hours"));
       if (!Number.isFinite(hours) || hours <= 0 || hours > 24) { errs.push(`${line}: needs clock in/out or hours (0–24)`); return; }
@@ -283,8 +283,8 @@ const template = () => {
     ["E100", "Nadia Okafor", "nadia@example.com", "555-0100", "Picker", "Warehouse", 28, "12 Elm St", "Austin", "TX", "78701", "2026-01-15"],
   ]), "New people");
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-    ["Employee ID", "Date", "Clock in", "Clock out", "Lunch minutes", "Hours"],
-    ["E100", "2026-10-05", "09:00", "17:30", 30, ""],
+    ["Employee ID", "Date", "Clock in", "Clock out", "Break hours", "Hours"],
+    ["E100", "2026-10-05", "09:00", "17:30", 0.5, ""],
     ["E100", "2026-10-06", "", "", "", 7.5],
   ]), "Hours");
   XLSX.writeFile(wb, "payroll_import_template.xlsx");

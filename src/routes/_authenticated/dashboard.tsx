@@ -15,7 +15,7 @@ function Dashboard() {
 
   const hours = records.reduce((s, r) => s + Number(r.hours), 0);
   const gross = records.reduce((s, r) => s + Number(r.hours) * Number(r.employees?.hourly_rate ?? 0), 0);
-  const lunch = records.reduce((s, r) => s + r.lunch_minutes, 0) / 60;
+  const breakHours = records.reduce((s, r) => s + r.lunch_minutes, 0) / 60;
 
   const byEmp = new Map<string, { name: string; hours: number; pay: number }>();
   records.forEach((r) => {
@@ -35,7 +35,7 @@ function Dashboard() {
     >
       <section className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard label="Gross pay" value={money(gross)} sub={`${byEmp.size} employees · ${hours.toFixed(2)} h`} />
-        <StatCard label="Total hours" value={hours.toFixed(2)} sub={`${lunch.toFixed(2)} h unpaid break`} delay={60} />
+        <StatCard label="Total hours" value={hours.toFixed(2)} sub={`${breakHours.toFixed(2)} h unpaid break`} delay={60} />
         <StatCard label="Employees" value={String(employees.length)} sub={`${employees.filter((e) => e.active).length} active`} delay={120} />
         <StatCard label="Records" value={`${records.length} rows`} sub="this week" highlight delay={180} />
       </section>
