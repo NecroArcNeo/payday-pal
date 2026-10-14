@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
+import { toast } from "sonner";
 import { Search, X, Trash2, Filter, Pencil, XCircle, ChevronDown } from "lucide-react";
-import { fullName, money, computeHours, dayOfWeek, isWeekend, type Employee, type RecordWithEmp } from "@/lib/payroll";
+import { fullName, money, computeHours, dayOfWeek, isWeekend, computeRecordOvertime, type Employee, type RecordWithEmp } from "@/lib/payroll";
 import { inputCls } from "@/components/AppShell";
 
 interface Props {
@@ -15,6 +16,8 @@ interface Props {
   hasMore?: boolean;
   remainingCount?: number;
   onLoadMore?: () => void;
+  otThreshold?: number;
+  otMultiplier?: number;
 }
 
 export interface EditData {
@@ -28,7 +31,7 @@ export interface EditData {
 
 type SortKey = "date" | "name" | "hours" | "pay";
 
-export function RecordsTable({ records, employees = [], title = "Time records", onDelete, onDeleteMany, onEdit, onEditMany, showName = true, hasMore = false, remainingCount = 0, onLoadMore }: Props) {
+export function RecordsTable({ records, employees = [], title = "Time records", onDelete, onDeleteMany, onEdit, onEditMany, showName = true, hasMore = false, remainingCount = 0, onLoadMore, otThreshold = 40, otMultiplier = 1.5 }: Props) {
   const [mode, setMode] = useState<"all" | "clock" | "hours">("all");
   const [search, setSearch] = useState("");
   const [dept, setDept] = useState("");
@@ -94,6 +97,8 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
   }, [employees]);
 
   const empById = useMemo(() => new Map(employees.map((e) => [e.id, e])), [employees]);
+
+  const otMap = useMemo(() => computeRecordOvertime(records.map((r) => ({ id: r.id, employee_id: r.employee_id, work_date: r.work_date, hours: r.hours })), otThreshold), [records, otThreshold]);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim();
@@ -169,21 +174,30 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
     setEditSingle(r);
   };
 
+  const [editSaving, setEditSaving] = useState(false);
   const submitSingleEdit = async () => {
     if (!editSingle || !onEdit) return;
-    const data: EditData = {
-      work_date: singleForm.work_date,
-      entry_mode: singleForm.entry_mode,
-    };
-    if (singleForm.entry_mode === "clock") {
-      data.clock_in = singleForm.clock_in;
-      data.clock_out = singleForm.clock_out;
-      data.lunch_minutes = Math.round((Number(singleForm.lunch_minutes) || 0) * 60);
-    } else {
-      data.hours = Number(singleForm.hours) || 0;
+    setEditSaving(true);
+    try {
+      const data: EditData = {
+        work_date: singleForm.work_date,
+        entry_mode: singleForm.entry_mode,
+      };
+      if (singleForm.entry_mode === "clock") {
+        data.clock_in = singleForm.clock_in;
+        data.clock_out = singleForm.clock_out;
+        data.lunch_minutes = Math.round((Number(singleForm.lunch_minutes) || 0) * 60);
+      } else {
+        data.hours = Number(singleForm.hours) || 0;
+      }
+      await onEdit(editSingle.id, data);
+      setEditSingle(null);
+    } catch (err) {
+      toast.error((err as Error).message);
+      throw err;
+    } finally {
+      setEditSaving(false);
     }
-    await onEdit(editSingle.id, data);
-    setEditSingle(null);
   };
 
   const submitBulkEdit = async () => {
@@ -327,16 +341,20 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
               <th className="px-3 py-3 text-right font-medium">In</th>
               <th className="px-3 py-3 text-right font-medium">Out</th>
               <th className="px-3 py-3 text-right font-medium">Break</th>
-              <th className="px-3 py-3 text-right font-medium">{sortBtn("hours", "Hours")}</th>
+              <th className="px-3 py-3 text-right font-medium">Total</th>
+              <th className="px-3 py-3 text-right font-medium">Reg</th>
+              <th className="px-3 py-3 text-right font-medium">OT</th>
               <th className="px-3 py-3 text-right font-medium">Rate</th>
-              <th className="px-5 py-3 text-right font-medium">{sortBtn("pay", "Gross")}</th>
+              <th className="px-3 py-3 text-right font-medium">Reg Pay</th>
+              <th className="px-3 py-3 text-right font-medium">OT Pay</th>
+              <th className="px-5 py-3 text-right font-medium">Total Pay</th>
               {(onDelete || onEdit) && <th className="w-20" />}
             </tr>
           </thead>
           <tbody className="font-mono text-[13px]">
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={12} className="px-5 py-10 text-center font-body text-muted-foreground">
+                <td colSpan={15} className="px-5 py-10 text-center font-body text-muted-foreground">
                   {hasFilters ? "No records match your filters." : "No time records yet."}
                 </td>
               </tr>
@@ -347,6 +365,7 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
               const isChecked = checked.has(r.id);
               const weekend = isWeekend(r.work_date);
               const dow = dayOfWeek(r.work_date);
+              const otSplit = otMap.get(r.id) ?? { otHours: 0, regHours: Number(r.hours) };
               return (
                 <tr
                   key={r.id}
@@ -382,8 +401,12 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
                   <td className="px-3 py-3 text-right text-muted-foreground">{r.clock_out?.slice(0, 5) ?? "—"}</td>
                   <td className="px-3 py-3 text-right text-muted-foreground">{r.entry_mode === "clock" ? (r.lunch_minutes / 60).toFixed(2) : "—"}</td>
                   <td className="px-3 py-3 text-right font-semibold">{Number(r.hours).toFixed(2)}</td>
+                  <td className="px-3 py-3 text-right text-muted-foreground">{otSplit.regHours.toFixed(2)}</td>
+                  <td className="px-3 py-3 text-right text-amber-600 dark:text-amber-400">{otSplit.otHours.toFixed(2)}</td>
                   <td className="px-3 py-3 text-right text-muted-foreground">{money(rate)}</td>
-                  <td className="px-5 py-3 text-right font-semibold">{money(rate * Number(r.hours))}</td>
+                  <td className="px-3 py-3 text-right text-muted-foreground">{money(rate * otSplit.regHours)}</td>
+                  <td className="px-3 py-3 text-right text-amber-600 dark:text-amber-400">{money(rate * otMultiplier * otSplit.otHours)}</td>
+                  <td className="px-5 py-3 text-right font-semibold">{money(rate * otSplit.regHours + rate * otMultiplier * otSplit.otHours)}</td>
                   {(onDelete || onEdit) && (
                     <td className="pr-4">
                       <div className="flex items-center gap-2">
@@ -489,8 +512,8 @@ export function RecordsTable({ records, employees = [], title = "Time records", 
             <div className="flex items-center justify-between">
               <span className="font-mono text-xs text-muted-foreground">{singlePreview.toFixed(2)} hours</span>
               <div className="flex gap-2">
-                <button onClick={() => setEditSingle(null)} className="rounded-xl bg-secondary px-4 py-2 text-sm font-medium ring-1 ring-border text-muted-foreground hover:text-foreground">Cancel</button>
-                <button onClick={submitSingleEdit} className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90">Save changes</button>
+                <button type="button" onClick={() => setEditSingle(null)} className="rounded-xl bg-secondary px-4 py-2 text-sm font-medium ring-1 ring-border text-muted-foreground hover:text-foreground">Cancel</button>
+                <button type="button" onClick={submitSingleEdit} disabled={editSaving} className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50">{editSaving ? "Saving…" : "Save changes"}</button>
               </div>
             </div>
           </div>

@@ -6,7 +6,7 @@ import { Search, X, ChevronRight, ChevronLeft, Users, UserCheck } from "lucide-r
 import { localDb } from "@/lib/local-db";
 import { AppShell, btnPrimary, inputCls } from "@/components/AppShell";
 import { RecordsTable, type EditData } from "@/components/RecordsTable";
-import { computeHours, fullName, isoDate, useEmployees, useRecordsPaged, useRecordCount, type Employee } from "@/lib/payroll";
+import { computeHours, fullName, isoDate, useEmployees, useRecordsPaged, useRecordCount, usePayrollSettings, type Employee } from "@/lib/payroll";
 
 export const Route = createFileRoute("/_authenticated/records")({
   head: () => ({ meta: [{ title: "Time records — Meridian Payroll" }] }),
@@ -62,6 +62,7 @@ function RecordsPage() {
   const limit = PAGE_SIZE * pageCount;
   const { data: records = [] } = useRecordsPaged(from || undefined, to || undefined, limit, 0);
   const { data: totalCount = 0 } = useRecordCount(from || undefined, to || undefined);
+  const { data: settings } = usePayrollSettings();
   const hasMore = records.length < totalCount;
 
   const [mode, setMode] = useState<"clock" | "hours">("clock");
@@ -118,25 +119,17 @@ function RecordsPage() {
   };
 
   const editOne = async (id: string, data: EditData) => {
-    try {
-      await localDb.updateRecord(id, data);
-      qc.invalidateQueries({ queryKey: ["records"] });
-      qc.invalidateQueries({ queryKey: ["records-paged"] });
-      toast.success("Record updated");
-    } catch (err) {
-      toast.error((err as Error).message);
-    }
+    await localDb.updateRecord(id, data);
+    qc.invalidateQueries({ queryKey: ["records"] });
+    qc.invalidateQueries({ queryKey: ["records-paged"] });
+    toast.success("Record updated");
   };
 
   const editMany = async (ids: string[], data: EditData) => {
-    try {
-      for (const id of ids) await localDb.updateRecord(id, data);
-      qc.invalidateQueries({ queryKey: ["records"] });
-      qc.invalidateQueries({ queryKey: ["records-paged"] });
-      toast.success(`Updated ${ids.length} record${ids.length > 1 ? "s" : ""}`);
-    } catch (err) {
-      toast.error((err as Error).message);
-    }
+    for (const id of ids) await localDb.updateRecord(id, data);
+    qc.invalidateQueries({ queryKey: ["records"] });
+    qc.invalidateQueries({ queryKey: ["records-paged"] });
+    toast.success(`Updated ${ids.length} record${ids.length > 1 ? "s" : ""}`);
   };
 
   return (
@@ -258,7 +251,7 @@ function RecordsPage() {
         </div>
       </div>
 
-      <RecordsTable records={records} employees={employees} title={`${records.length} of ${totalCount} records`} onDelete={del} onDeleteMany={delMany} onEdit={editOne} onEditMany={editMany} hasMore={hasMore} remainingCount={totalCount - records.length} onLoadMore={() => setPageCount((c) => c + 1)} />
+      <RecordsTable records={records} employees={employees} title={`${records.length} of ${totalCount} records`} onDelete={del} onDeleteMany={delMany} onEdit={editOne} onEditMany={editMany} hasMore={hasMore} remainingCount={totalCount - records.length} onLoadMore={() => setPageCount((c) => c + 1)} otThreshold={settings?.ot_threshold ?? 40} otMultiplier={settings?.ot_multiplier ?? 1.5} />
     </AppShell>
   );
 }
