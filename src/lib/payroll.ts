@@ -166,3 +166,37 @@ export function splitHours(records: { work_date: string; hours: number | string 
   for (const h of weeks.values()) { regular += Math.min(h, threshold); overtime += Math.max(0, h - threshold); }
   return { regular, overtime };
 }
+
+/**
+ * Compute per-record OT/regular split.
+ * Weekend records: all hours are OT.
+ * Weekday records: accumulated per employee per week; hours beyond the threshold are OT.
+ */
+export function computeRecordOvertime(
+  records: { id: string; employee_id: string; work_date: string; hours: number | string }[],
+  threshold: number,
+): Map<string, { otHours: number; regHours: number }> {
+  const result = new Map<string, { otHours: number; regHours: number }>();
+  const groups = new Map<string, { id: string; work_date: string; hours: number }[]>();
+  for (const r of records) {
+    const wk = `${r.employee_id}:${weekKey(r.work_date)}`;
+    if (!groups.has(wk)) groups.set(wk, []);
+    groups.get(wk)!.push({ id: r.id, work_date: r.work_date, hours: Number(r.hours) });
+  }
+  for (const group of groups.values()) {
+    group.sort((a, b) => a.work_date.localeCompare(b.work_date));
+    let weekdayAcc = 0;
+    for (const r of group) {
+      if (isWeekend(r.work_date)) {
+        result.set(r.id, { otHours: r.hours, regHours: 0 });
+      } else {
+        const before = weekdayAcc;
+        const regHours = Math.max(0, Math.min(r.hours, threshold - before));
+        const otHours = Math.max(0, r.hours - regHours);
+        result.set(r.id, { otHours, regHours });
+        weekdayAcc = before + r.hours;
+      }
+    }
+  }
+  return result;
+}

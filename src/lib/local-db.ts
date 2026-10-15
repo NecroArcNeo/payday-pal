@@ -525,7 +525,6 @@ export const localDb = {
     if (data.clock_in !== undefined) { fields.push("clock_in = $" + `${idx++}`); values.push(data.clock_in); }
     if (data.clock_out !== undefined) { fields.push("clock_out = $" + `${idx++}`); values.push(data.clock_out); }
     if (data.lunch_minutes !== undefined) { fields.push("lunch_minutes = $" + `${idx++}`); values.push(data.lunch_minutes); }
-    if (data.hours !== undefined) { fields.push("hours = $" + `${idx++}`); values.push(data.hours); }
     if (data.note !== undefined) { fields.push("note = $" + `${idx++}`); values.push(data.note); }
 
     const mode = data.entry_mode;
@@ -534,9 +533,12 @@ export const localDb = {
       const computed = computeHours(data.clock_in, data.clock_out, lunch);
       fields.push("hours = $" + `${idx++}`); values.push(computed);
     } else if (mode === "hours" && data.hours !== undefined) {
+      fields.push("hours = $" + `${idx++}`); values.push(data.hours);
       fields.push("clock_in = $" + `${idx++}`); values.push(null);
       fields.push("clock_out = $" + `${idx++}`); values.push(null);
       fields.push("lunch_minutes = $" + `${idx++}`); values.push(0);
+    } else if (data.hours !== undefined) {
+      fields.push("hours = $" + `${idx++}`); values.push(data.hours);
     }
 
     if (!fields.length) return;

@@ -6,7 +6,7 @@ import { Search, X, ChevronRight, ChevronLeft, Users, UserCheck } from "lucide-r
 import { localDb } from "@/lib/local-db";
 import { AppShell, btnPrimary, inputCls } from "@/components/AppShell";
 import { RecordsTable, type EditData } from "@/components/RecordsTable";
-import { computeHours, fullName, isoDate, useEmployees, useRecordsPaged, useRecordCount, type Employee } from "@/lib/payroll";
+import { computeHours, fullName, isoDate, useEmployees, useRecordsPaged, useRecordCount, usePayrollSettings, type Employee } from "@/lib/payroll";
 
 export const Route = createFileRoute("/_authenticated/records")({
   head: () => ({ meta: [{ title: "Time records — Meridian Payroll" }] }),
@@ -62,10 +62,11 @@ function RecordsPage() {
   const limit = PAGE_SIZE * pageCount;
   const { data: records = [] } = useRecordsPaged(from || undefined, to || undefined, limit, 0);
   const { data: totalCount = 0 } = useRecordCount(from || undefined, to || undefined);
+  const { data: settings } = usePayrollSettings();
   const hasMore = records.length < totalCount;
 
   const [mode, setMode] = useState<"clock" | "hours">("clock");
-  const [f, setF] = useState({ work_date: isoDate(new Date()), clock_in: "09:00", clock_out: "17:00", lunch_minutes: "30", hours: "8" });
+  const [f, setF] = useState({ work_date: isoDate(new Date()), clock_in: "09:00", clock_out: "17:00", lunch_minutes: "0.5", hours: "8" });
   const [picked, setPicked] = useState<string[]>([]);
   const [empSearch, setEmpSearch] = useState("");
 
@@ -81,18 +82,18 @@ function RecordsPage() {
 
   const toggle = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
-  const preview = mode === "clock" ? computeHours(f.clock_in, f.clock_out, Number(f.lunch_minutes) || 0) : Number(f.hours) || 0;
+  const preview = mode === "clock" ? computeHours(f.clock_in, f.clock_out, (Number(f.lunch_minutes) || 0) * 60) : Number(f.hours) || 0;
 
   const add = async (e: React.FormEvent) => {
     e.preventDefault();
     if (picked.length === 0) { toast.error("Pick at least one employee"); return; }
-    const lunch = Number(f.lunch_minutes);
+    const breakMin = Math.round((Number(f.lunch_minutes) || 0) * 60);
     const hours = Number(f.hours);
-    if (mode === "clock" && (!Number.isFinite(lunch) || lunch < 0 || lunch > 600)) { toast.error("Lunch minutes must be 0–600"); return; }
+    if (mode === "clock" && (!Number.isFinite(breakMin) || breakMin < 0 || breakMin > 600)) { toast.error("Break hours must be 0–10"); return; }
     if (mode === "hours" && (!Number.isFinite(hours) || hours < 0 || hours > 24)) { toast.error("Hours must be 0–24"); return; }
     const rows = picked.map((employee_id) =>
       mode === "clock"
-        ? { employee_id, work_date: f.work_date, entry_mode: "clock" as const, clock_in: f.clock_in, clock_out: f.clock_out, lunch_minutes: lunch }
+        ? { employee_id, work_date: f.work_date, entry_mode: "clock" as const, clock_in: f.clock_in, clock_out: f.clock_out, lunch_minutes: breakMin }
         : { employee_id, work_date: f.work_date, entry_mode: "hours" as const, hours });
     try { await localDb.insertRecords(rows); } catch (err) { toast.error((err as Error).message); return; }
     toast.success(rows.length === 1 ? "Record added" : `${rows.length} records added`);
@@ -118,25 +119,17 @@ function RecordsPage() {
   };
 
   const editOne = async (id: string, data: EditData) => {
-    try {
-      await localDb.updateRecord(id, data);
-      qc.invalidateQueries({ queryKey: ["records"] });
-      qc.invalidateQueries({ queryKey: ["records-paged"] });
-      toast.success("Record updated");
-    } catch (err) {
-      toast.error((err as Error).message);
-    }
+    await localDb.updateRecord(id, data);
+    qc.invalidateQueries({ queryKey: ["records"] });
+    qc.invalidateQueries({ queryKey: ["records-paged"] });
+    toast.success("Record updated");
   };
 
   const editMany = async (ids: string[], data: EditData) => {
-    try {
-      for (const id of ids) await localDb.updateRecord(id, data);
-      qc.invalidateQueries({ queryKey: ["records"] });
-      qc.invalidateQueries({ queryKey: ["records-paged"] });
-      toast.success(`Updated ${ids.length} record${ids.length > 1 ? "s" : ""}`);
-    } catch (err) {
-      toast.error((err as Error).message);
-    }
+    for (const id of ids) await localDb.updateRecord(id, data);
+    qc.invalidateQueries({ queryKey: ["records"] });
+    qc.invalidateQueries({ queryKey: ["records-paged"] });
+    toast.success(`Updated ${ids.length} record${ids.length > 1 ? "s" : ""}`);
   };
 
   return (
@@ -233,7 +226,7 @@ function RecordsPage() {
             <>
               <label><span className="label-mono">Clock in</span><input type="time" className={`${inputCls} mt-1`} value={f.clock_in} onChange={(e) => setF({ ...f, clock_in: e.target.value })} required /></label>
               <label><span className="label-mono">Clock out</span><input type="time" className={`${inputCls} mt-1`} value={f.clock_out} onChange={(e) => setF({ ...f, clock_out: e.target.value })} required /></label>
-              <label><span className="label-mono">Lunch (min)</span><input type="number" min={0} className={`${inputCls} mt-1`} value={f.lunch_minutes} onChange={(e) => setF({ ...f, lunch_minutes: e.target.value })} /></label>
+              <label><span className="label-mono">Break (hrs)</span><input type="number" min={0} step={0.25} max={10} className={`${inputCls} mt-1`} value={f.lunch_minutes} onChange={(e) => setF({ ...f, lunch_minutes: e.target.value })} /></label>
             </>
           ) : (
             <label className="md:col-span-3"><span className="label-mono">Hours worked</span><input type="number" step="0.25" min={0} max={24} className={`${inputCls} mt-1`} value={f.hours} onChange={(e) => setF({ ...f, hours: e.target.value })} /></label>
@@ -258,7 +251,7 @@ function RecordsPage() {
         </div>
       </div>
 
-      <RecordsTable records={records} employees={employees} title={`${records.length} of ${totalCount} records`} onDelete={del} onDeleteMany={delMany} onEdit={editOne} onEditMany={editMany} hasMore={hasMore} remainingCount={totalCount - records.length} onLoadMore={() => setPageCount((c) => c + 1)} />
+      <RecordsTable records={records} employees={employees} title={`${records.length} of ${totalCount} records`} onDelete={del} onDeleteMany={delMany} onEdit={editOne} onEditMany={editMany} hasMore={hasMore} remainingCount={totalCount - records.length} onLoadMore={() => setPageCount((c) => c + 1)} otThreshold={settings?.ot_threshold ?? 40} otMultiplier={settings?.ot_multiplier ?? 1.5} />
     </AppShell>
   );
 }
