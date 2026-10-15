@@ -1,55 +1,51 @@
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
-import type { Tables } from "@/integrations/supabase/types";
+import { localDb, type EmployeeRow, type TimeRecordRow, type RecordWithEmp, type FieldDefRow, type AdjustmentRow, type PayrollSettingsRow, type ShiftTypeRow } from "./local-db";
 
-export type Employee = Tables<"employees">;
-export type TimeRecord = Tables<"time_records">;
-export type RecordWithEmp = TimeRecord & { employees: Pick<Employee, "first_name" | "last_name" | "employee_code" | "hourly_rate"> | null };
+export type Employee = EmployeeRow;
+export type TimeRecord = TimeRecordRow;
+export type RecordWithEmp = RecordWithEmp;
+export type FieldDef = FieldDefRow;
+export type Adjustment = AdjustmentRow;
+export type PayrollSettings = PayrollSettingsRow;
+export type ShiftType = ShiftTypeRow;
 
 export const money = (n: number) =>
   n.toLocaleString("en-US", { style: "currency", currency: "USD" });
 
 export const fullName = (e: Pick<Employee, "first_name" | "last_name">) => `${e.first_name} ${e.last_name}`;
 
-export function useSession() {
-  return useQuery({
-    queryKey: ["session-role"],
-    queryFn: async () => {
-      const { data } = await supabase.auth.getUser();
-      const user = data.user;
-      if (!user) return { user: null, isAdmin: false };
-      const { data: roles } = await supabase.from("user_roles").select("role").eq("user_id", user.id);
-      return { user, isAdmin: !!roles?.some((r) => r.role === "admin") };
-    },
-  });
-}
-
 export function useEmployees() {
   return useQuery({
     queryKey: ["employees"],
-    queryFn: async () => {
-      const { data, error } = await supabase.from("employees").select("*").order("last_name");
-      if (error) throw error;
-      return data;
-    },
+    queryFn: () => localDb.getEmployees(),
   });
 }
 
 export function useRecords(from?: string, to?: string) {
   return useQuery({
     queryKey: ["records", from, to],
-    queryFn: async () => {
-      let q = supabase
-        .from("time_records")
-        .select("*, employees(first_name,last_name,employee_code,hourly_rate)")
-        .order("work_date", { ascending: false })
-        .limit(1000);
-      if (from) q = q.gte("work_date", from);
-      if (to) q = q.lte("work_date", to);
-      const { data, error } = await q;
-      if (error) throw error;
-      return data as RecordWithEmp[];
-    },
+    queryFn: () => localDb.getRecords(from, to),
+  });
+}
+
+export function useRecordsPaged(from: string | undefined, to: string | undefined, limit: number, offset: number) {
+  return useQuery({
+    queryKey: ["records-paged", from, to, limit, offset],
+    queryFn: () => localDb.getRecords(from, to, limit, offset),
+  });
+}
+
+export function useRecordCount(from?: string, to?: string) {
+  return useQuery({
+    queryKey: ["record-count", from, to],
+    queryFn: () => localDb.getRecordCount(from, to),
+  });
+}
+
+export function useShiftTypes() {
+  return useQuery({
+    queryKey: ["shift-types"],
+    queryFn: () => localDb.getShiftTypes(),
   });
 }
 
@@ -75,32 +71,17 @@ export function computeHours(clockIn: string, clockOut: string, lunch: number) {
   return Math.max(0, (mins - lunch) / 60);
 }
 
-export type FieldDef = Tables<"employee_field_defs">;
-export type Adjustment = Tables<"pay_adjustments">;
-export type PayrollSettings = Tables<"payroll_settings">;
-
 export function useFieldDefs() {
   return useQuery({
     queryKey: ["field-defs"],
-    queryFn: async () => {
-      const { data, error } = await supabase.from("employee_field_defs").select("*").order("sort_order").order("created_at");
-      if (error) throw error;
-      return data;
-    },
+    queryFn: () => localDb.getFieldDefs(),
   });
 }
 
 export function useAdjustments(from?: string, to?: string) {
   return useQuery({
     queryKey: ["adjustments", from, to],
-    queryFn: async () => {
-      let q = supabase.from("pay_adjustments").select("*").order("pay_date", { ascending: false });
-      if (from) q = q.gte("pay_date", from);
-      if (to) q = q.lte("pay_date", to);
-      const { data, error } = await q;
-      if (error) throw error;
-      return data;
-    },
+    queryFn: () => localDb.getAdjustments(from, to),
   });
 }
 
@@ -110,11 +91,8 @@ export function usePayrollSettings() {
   return useQuery({
     queryKey: ["payroll-settings"],
     queryFn: async () => {
-      const { data, error } = await supabase.from("payroll_settings").select("*").maybeSingle();
-      if (error) throw error;
-      return data
-        ? { ot_threshold: Number(data.ot_threshold), ot_multiplier: Number(data.ot_multiplier), visible_columns: data.visible_columns }
-        : defaultSettings;
+      const s = await localDb.getPayrollSettings();
+      return { ot_threshold: s.ot_threshold, ot_multiplier: s.ot_multiplier, visible_columns: s.visible_columns };
     },
   });
 }
@@ -127,6 +105,59 @@ export function weekKey(date: string) {
   return d.toISOString().slice(0, 10);
 }
 
+const DOW_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/** Returns the abbreviated day name for an ISO date string. */
+export function dayOfWeek(dateStr: string): string {
+  const d = new Date(dateStr + "T00:00:00Z");
+  return DOW_NAMES[d.getUTCDay()];
+}
+
+/** Returns true if the ISO date falls on a Saturday or Sunday. */
+export function isWeekend(dateStr: string): boolean {
+  const d = new Date(dateStr + "T00:00:00Z");
+  const dow = d.getUTCDay();
+  return dow === 0 || dow === 6;
+}
+
+/**
+ * Compute pay breakdown: regular, weekly overtime, weekend overtime, and shift-adjusted pay.
+ * Weekend hours are always treated as overtime. Weekly overtime is hours beyond the threshold on weekdays.
+ * Shift multiplier applies to regular hours only; overtime uses the ot_multiplier.
+ */
+export function computePayBreakdown(
+  records: { work_date: string; hours: number | string; employee_id: string }[],
+  threshold: number,
+  otMultiplier: number,
+  shiftMultiplier: number,
+) {
+  const weekdayRecords = records.filter((r) => !isWeekend(r.work_date));
+  const weekendRecords = records.filter((r) => isWeekend(r.work_date));
+
+  const { regular: weekdayRegular, overtime: weekdayOT } = splitHours(weekdayRecords, threshold);
+  const weekendHours = weekendRecords.reduce((s, r) => s + Number(r.hours), 0);
+
+  const regular = weekdayRegular;
+  const weeklyOT = weekdayOT;
+  const weekendOT = weekendHours;
+
+  const regPay = regular * shiftMultiplier;
+  const weeklyOTPay = weeklyOT * otMultiplier * shiftMultiplier;
+  const weekendOTPay = weekendOT * otMultiplier * shiftMultiplier;
+
+  return {
+    regular,
+    weeklyOT,
+    weekendOT,
+    overtime: weeklyOT + weekendOT,
+    regPay,
+    weeklyOTPay,
+    weekendOTPay,
+    otPay: weeklyOTPay + weekendOTPay,
+    gross: regPay + weeklyOTPay + weekendOTPay,
+  };
+}
+
 /** Overtime = hours above the weekly threshold (Mon–Sun). */
 export function splitHours(records: { work_date: string; hours: number | string }[], threshold: number) {
   const weeks = new Map<string, number>();
@@ -134,4 +165,38 @@ export function splitHours(records: { work_date: string; hours: number | string 
   let regular = 0, overtime = 0;
   for (const h of weeks.values()) { regular += Math.min(h, threshold); overtime += Math.max(0, h - threshold); }
   return { regular, overtime };
+}
+
+/**
+ * Compute per-record OT/regular split.
+ * Weekend records: all hours are OT.
+ * Weekday records: accumulated per employee per week; hours beyond the threshold are OT.
+ */
+export function computeRecordOvertime(
+  records: { id: string; employee_id: string; work_date: string; hours: number | string }[],
+  threshold: number,
+): Map<string, { otHours: number; regHours: number }> {
+  const result = new Map<string, { otHours: number; regHours: number }>();
+  const groups = new Map<string, { id: string; work_date: string; hours: number }[]>();
+  for (const r of records) {
+    const wk = `${r.employee_id}:${weekKey(r.work_date)}`;
+    if (!groups.has(wk)) groups.set(wk, []);
+    groups.get(wk)!.push({ id: r.id, work_date: r.work_date, hours: Number(r.hours) });
+  }
+  for (const group of groups.values()) {
+    group.sort((a, b) => a.work_date.localeCompare(b.work_date));
+    let weekdayAcc = 0;
+    for (const r of group) {
+      if (isWeekend(r.work_date)) {
+        result.set(r.id, { otHours: r.hours, regHours: 0 });
+      } else {
+        const before = weekdayAcc;
+        const regHours = Math.max(0, Math.min(r.hours, threshold - before));
+        const otHours = Math.max(0, r.hours - regHours);
+        result.set(r.id, { otHours, regHours });
+        weekdayAcc = before + r.hours;
+      }
+    }
+  }
+  return result;
 }
