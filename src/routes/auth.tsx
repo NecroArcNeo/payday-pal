@@ -2,7 +2,6 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
-import { lovable } from "@/integrations/lovable";
 import { btnPrimary, inputCls } from "@/components/AppShell";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
@@ -47,11 +46,6 @@ function AuthPage() {
     if (mode === "up") toast.success("Check your email to confirm your account.");
   };
 
-  const google = async () => {
-    const r = await lovable.auth.signInWithOAuth("google", { redirect_uri: window.location.origin + "/auth" });
-    if (r.error) toast.error(r.error.message);
-  };
-
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-6">
       <div className="anim-breathe pointer-events-none fixed -left-40 -top-48 h-[42rem] w-[42rem] rounded-full bg-glow-a blur-3xl" />
@@ -66,9 +60,6 @@ function AuthPage() {
           <input className={inputCls} type="password" required minLength={6} placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} />
           <button disabled={busy} className={`${btnPrimary} w-full`}>{mode === "in" ? "Sign in" : "Sign up"}</button>
         </form>
-        <button onClick={google} className="mt-3 w-full rounded-xl bg-secondary px-4 py-2 text-sm font-medium ring-1 ring-border hover:bg-accent">
-          Continue with Google
-        </button>
         <button onClick={() => setMode(mode === "in" ? "up" : "in")} className="mt-4 w-full text-center text-xs text-muted-foreground hover:text-foreground">
           {mode === "in" ? "No account? Sign up" : "Have an account? Sign in"}
         </button>
