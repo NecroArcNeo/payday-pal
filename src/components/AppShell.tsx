@@ -1,31 +1,30 @@
-import { Link, useNavigate } from "@tanstack/react-router";
-import { useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useSession } from "@/lib/payroll";
+import { setDataMode, useDataMode } from "@/lib/db/mode";
 import { ThemeToggle } from "./ThemeToggle";
-import { LogOut } from "lucide-react";
+import { Cloud, HardDrive, LogOut } from "lucide-react";
 
 const adminNav = [
   { to: "/dashboard", label: "Dashboard" },
   { to: "/employees", label: "Employees" },
   { to: "/records", label: "Time records" },
+  { to: "/timesheet", label: "Timesheet" },
   { to: "/import", label: "Import" },
   { to: "/payroll", label: "Payroll" },
+  { to: "/sync", label: "Sync & backup" },
 ] as const;
 
 export function AppShell({ eyebrow, title, actions, children }: { eyebrow: string; title: string; actions?: ReactNode; children: ReactNode }) {
   const { data: session } = useSession();
-  const qc = useQueryClient();
-  const navigate = useNavigate();
-  const nav = session?.isAdmin ? adminNav : ([{ to: "/me", label: "My hours & pay" }] as const);
+  const mode = useDataMode();
   const email = session?.user?.email ?? "";
 
+  // Only disconnects the cloud account; this device's data stays as it is.
   const signOut = async () => {
-    await qc.cancelQueries();
-    qc.clear();
+    setDataMode("local");
     await supabase.auth.signOut();
-    navigate({ to: "/auth", replace: true });
   };
 
   return (
@@ -43,7 +42,7 @@ export function AppShell({ eyebrow, title, actions, children }: { eyebrow: strin
             </div>
           </div>
           <nav className="space-y-1 p-3">
-            {nav.map((n, i) => (
+            {adminNav.map((n, i) => (
               <Link
                 key={n.to}
                 to={n.to}
@@ -57,15 +56,17 @@ export function AppShell({ eyebrow, title, actions, children }: { eyebrow: strin
           <div className="mt-auto border-t border-border p-3">
             <div className="flex items-center gap-3 rounded-xl bg-secondary p-3 ring-1 ring-border">
               <div className="grid h-9 w-9 place-items-center rounded-full bg-accent font-display text-sm font-bold text-accent-foreground">
-                {email.slice(0, 2).toUpperCase()}
+                {email ? email.slice(0, 2).toUpperCase() : <HardDrive className="h-4 w-4" />}
               </div>
               <div className="min-w-0 flex-1">
-                <div className="truncate text-[13px] font-semibold leading-none">{email}</div>
-                <div className="mt-1 text-[11px] text-muted-foreground">{session?.isAdmin ? "Payroll admin" : "Employee"}</div>
+                <div className="truncate text-[13px] font-semibold leading-none">{email || "Local only"}</div>
+                <div className="mt-1 text-[11px] text-muted-foreground">{email ? "Cloud account" : <Link to="/sync" className="underline">Sign in to sync</Link>}</div>
               </div>
-              <button onClick={signOut} aria-label="Sign out" className="text-muted-foreground hover:text-foreground">
-                <LogOut className="h-4 w-4" />
-              </button>
+              {email && (
+                <button onClick={signOut} aria-label="Sign out" className="text-muted-foreground hover:text-foreground">
+                  <LogOut className="h-4 w-4" />
+                </button>
+              )}
             </div>
           </div>
         </aside>
@@ -78,6 +79,14 @@ export function AppShell({ eyebrow, title, actions, children }: { eyebrow: strin
             </div>
             <div className="flex items-center gap-3">
               {actions}
+              <Link
+                to="/sync"
+                title={mode === "cloud" ? "Changes are saved straight to your cloud account" : "Changes are saved on this device"}
+                className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium ring-1 ${mode === "cloud" ? "bg-primary/10 text-primary ring-primary/30" : "bg-secondary text-muted-foreground ring-border"}`}
+              >
+                {mode === "cloud" ? <Cloud className="h-3.5 w-3.5" /> : <HardDrive className="h-3.5 w-3.5" />}
+                {mode === "cloud" ? "Editing cloud" : "This device"}
+              </Link>
               <ThemeToggle />
             </div>
           </header>

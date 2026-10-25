@@ -45,6 +45,8 @@ export type Database = {
           address_line2: string | null
           city: string | null
           country: string | null
+          gender: string | null
+          nationality: string | null
           created_at: string
           custom_fields: Json
           date_of_birth: string | null
@@ -62,6 +64,8 @@ export type Database = {
           notes: string | null
           phone: string | null
           postal_code: string | null
+          shift_id: string | null
+          pay_type: string
           state: string | null
           user_id: string | null
         }
@@ -71,6 +75,8 @@ export type Database = {
           address_line2?: string | null
           city?: string | null
           country?: string | null
+          gender?: string | null
+          nationality?: string | null
           created_at?: string
           custom_fields?: Json
           date_of_birth?: string | null
@@ -88,6 +94,8 @@ export type Database = {
           notes?: string | null
           phone?: string | null
           postal_code?: string | null
+          shift_id?: string | null
+          pay_type?: string
           state?: string | null
           user_id?: string | null
         }
@@ -97,6 +105,8 @@ export type Database = {
           address_line2?: string | null
           city?: string | null
           country?: string | null
+          gender?: string | null
+          nationality?: string | null
           created_at?: string
           custom_fields?: Json
           date_of_birth?: string | null
@@ -114,6 +124,8 @@ export type Database = {
           notes?: string | null
           phone?: string | null
           postal_code?: string | null
+          shift_id?: string | null
+          pay_type?: string
           state?: string | null
           user_id?: string | null
         }
@@ -162,6 +174,7 @@ export type Database = {
           id: boolean
           ot_multiplier: number
           ot_threshold: number
+          weekend_overtime: boolean
           updated_at: string
           visible_columns: string[]
         }
@@ -169,6 +182,7 @@ export type Database = {
           id?: boolean
           ot_multiplier?: number
           ot_threshold?: number
+          weekend_overtime?: boolean
           updated_at?: string
           visible_columns?: string[]
         }
@@ -176,6 +190,7 @@ export type Database = {
           id?: boolean
           ot_multiplier?: number
           ot_threshold?: number
+          weekend_overtime?: boolean
           updated_at?: string
           visible_columns?: string[]
         }
@@ -191,6 +206,7 @@ export type Database = {
           hours: number
           id: string
           lunch_minutes: number
+          pay_override: number | null
           note: string | null
           work_date: string
         }
@@ -203,6 +219,7 @@ export type Database = {
           hours?: number
           id?: string
           lunch_minutes?: number
+          pay_override?: number | null
           note?: string | null
           work_date: string
         }
@@ -215,6 +232,7 @@ export type Database = {
           hours?: number
           id?: string
           lunch_minutes?: number
+          pay_override?: number | null
           note?: string | null
           work_date?: string
         }
@@ -227,6 +245,43 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      shifts: {
+        Row: {
+          created_at: string
+          id: string
+          multiplier: number
+          name: string
+          sort_order: number
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          multiplier?: number
+          name: string
+          sort_order?: number
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          multiplier?: number
+          name?: string
+          sort_order?: number
+        }
+        Relationships: []
+      }
+      cloud_backups: {
+        Row: {
+          created_at: string
+          id: number
+          owner_id: string
+          reason: string
+          snapshot: Json
+          version: number
+        }
+        Insert: never
+        Update: never
+        Relationships: []
       }
       user_roles: {
         Row: {
@@ -258,6 +313,12 @@ export type Database = {
         }
         Returns: boolean
       }
+      pull_snapshot: { Args: never; Returns: Json }
+      push_snapshot: {
+        Args: { p_expected_version: number; p_snapshot: Json }
+        Returns: number
+      }
+      sync_status: { Args: never; Returns: Json }
     }
     Enums: {
       app_role: "admin" | "employee"

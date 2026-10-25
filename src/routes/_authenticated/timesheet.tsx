@@ -1,0 +1,310 @@
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { AppShell, StatCard, btnGhost, inputCls } from "@/components/AppShell";
+import { EmployeePicker } from "@/components/EmployeeSearch";
+import { RECORD_PAY_COLUMNS, RecordPayCells, RecordPayHeaders } from "@/components/RecordPay";
+import { EMPLOYEE_SECTIONS } from "@/lib/employee-fields";
+import {
+  addDays, currentWeek, fullName, isoDate, money, useAdjustments, useAllRecords, useEmployees, useFieldDefs, usePayrollSettings, useShifts, weekday,
+  type Adjustment, type Employee, type FieldDef, type Shift, type TimeRecord,
+} from "@/lib/payroll";
+import { employeePay, shiftFor, weekEnd, weekStart, type PayLine } from "@/lib/pay";
+import { Printer } from "lucide-react";
+
+/** Shown in the sheet's heading, so not repeated in the details grid. */
+const IN_HEADER = ["first_name", "last_name", "employee_code"];
+
+type Search = { employee?: string | undefined; from?: string | undefined; to?: string | undefined };
+const isDate = (d: unknown): d is string => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d);
+
+export const Route = createFileRoute("/_authenticated/timesheet")({
+  head: () => ({ meta: [{ title: "Timesheet — Meridian Payroll" }] }),
+  // The employee and range live in the URL, so a timesheet can be linked to, bookmarked or reopened.
+  validateSearch: (s: Record<string, unknown>): Search => ({
+    employee: typeof s["employee"] === "string" ? s["employee"] : undefined,
+    from: isDate(s["from"]) ? s["from"] : undefined,
+    to: isDate(s["to"]) ? s["to"] : undefined,
+  }),
+  component: TimesheetPage,
+});
+
+function presets() {
+  const now = new Date();
+  const week = currentWeek();
+  const monthStart = isoDate(new Date(now.getFullYear(), now.getMonth(), 1));
+  const monthEnd = isoDate(new Date(now.getFullYear(), now.getMonth() + 1, 0));
+  const lastMonthStart = isoDate(new Date(now.getFullYear(), now.getMonth() - 1, 1));
+  const lastMonthEnd = isoDate(new Date(now.getFullYear(), now.getMonth(), 0));
+  return [
+    { label: "This week", from: week.from, to: week.to },
+    { label: "Last week", from: addDays(week.from, -7), to: addDays(week.to, -7) },
+    { label: "Last 2 weeks", from: addDays(week.from, -7), to: week.to },
+    { label: "This month", from: monthStart, to: monthEnd },
+    { label: "Last month", from: lastMonthStart, to: lastMonthEnd },
+  ];
+}
+
+function TimesheetPage() {
+  const search = Route.useSearch();
+  const navigate = Route.useNavigate();
+  const week = currentWeek();
+  const from = search.from ?? week.from;
+  const to = search.to ?? week.to;
+  const set = (patch: Search) => navigate({ search: (s) => ({ ...s, ...patch }), replace: true });
+
+  const { data: employees = [] } = useEmployees();
+  const { data: shifts = [] } = useShifts();
+  const { data: defs = [] } = useFieldDefs();
+  const { data: settings } = usePayrollSettings();
+  // Whole Mon–Sun weeks around the range, so weekly overtime and salary weeks are right.
+  const { data: records = [], isLoading } = useAllRecords(weekStart(from), weekEnd(to));
+  const { data: adjustments = [] } = useAdjustments(from, to);
+  const emp = employees.find((e) => e.id === search.employee);
+  const badRange = from > to;
+
+  return (
+    <AppShell eyebrow="Timesheet" title={emp ? fullName(emp) : "Timesheet"} actions={
+      emp && <button onClick={() => window.print()} className={`${btnGhost} print:hidden`}><Printer className="mr-1 inline h-4 w-4" />Print</button>
+    }>
+      <div className="glass-panel flex flex-wrap items-end gap-3 p-5 print:hidden">
+        <label className="min-w-[16rem] flex-1">
+          <span className="label-mono">Employee</span>
+          <div className="mt-1"><EmployeePicker employees={employees} value={search.employee ?? ""} onChange={(id) => set({ employee: id || undefined })} /></div>
+        </label>
+        <label>
+          <span className="label-mono">From · {weekday(from)}</span>
+          <input type="date" className={`${inputCls} mt-1`} value={from} onChange={(e) => isDate(e.target.value) && set({ from: e.target.value })} />
+        </label>
+        <label>
+          <span className="label-mono">To · {weekday(to)}</span>
+          <input type="date" className={`${inputCls} mt-1`} value={to} onChange={(e) => isDate(e.target.value) && set({ to: e.target.value })} />
+        </label>
+        <div className="flex flex-wrap gap-1.5">
+          {presets().map((p) => (
+            <button key={p.label} type="button" onClick={() => set({ from: p.from, to: p.to })}
+              className={`rounded-lg px-2.5 py-1.5 text-xs ring-1 ring-border ${p.from === from && p.to === to ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground hover:text-foreground"}`}>
+              {p.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {!emp ? (
+        <div className="glass-panel px-5 py-12 text-center text-muted-foreground">
+          {search.employee && employees.length ? "That employee no longer exists. Pick another one above." : "Pick an employee to see their timesheet."}
+        </div>
+      ) : badRange ? (
+        <div className="glass-panel px-5 py-12 text-center text-muted-foreground">The start date is after the end date.</div>
+      ) : (
+        <Sheet emp={emp} from={from} to={to} loading={isLoading}
+          records={records.filter((r) => r.employee_id === emp.id)}
+          adjustments={adjustments.filter((a) => a.employee_id === emp.id)}
+          shifts={shifts} defs={defs}
+          rules={{ threshold: settings?.ot_threshold ?? 40, otMultiplier: settings?.ot_multiplier ?? 1.5, weekendOvertime: settings?.weekend_overtime ?? true }} />
+      )}
+    </AppShell>
+  );
+}
+
+function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loading }: {
+  emp: Employee; from: string; to: string; records: TimeRecord[]; loading: boolean;
+  adjustments: Adjustment[]; shifts: Shift[]; defs: FieldDef[];
+  rules: { threshold: number; otMultiplier: number; weekendOvertime: boolean };
+}) {
+  const shift = shiftFor(emp.shift_id, shifts);
+  const rate = Number(emp.hourly_rate);
+  const salary = emp.pay_type === "salary";
+  const pay = employeePay(records, { rate, shiftMultiplier: shift.multiplier, rules, payType: emp.pay_type, from, to });
+  const lineById = new Map(pay.lines.map((l) => [l.id, l]));
+  const shown = records
+    .filter((r) => r.work_date >= from && r.work_date <= to)
+    .sort((a, b) => a.work_date.localeCompare(b.work_date) || (a.clock_in ?? "").localeCompare(b.clock_in ?? ""));
+  const extras = adjustments.reduce((s, a) => s + Number(a.amount), 0);
+  const lunchHours = shown.reduce((s, r) => s + r.lunch_minutes, 0) / 60;
+
+  // Group by Mon–Sun week for subtotals.
+  const weeks: { start: string; rows: TimeRecord[] }[] = [];
+  for (const r of shown) {
+    const start = weekStart(r.work_date);
+    if (weeks.at(-1)?.start !== start) weeks.push({ start, rows: [] });
+    weeks.at(-1)!.rows.push(r);
+  }
+  const subtotal = (rows: TimeRecord[]) => {
+    const ls = rows.map((r) => lineById.get(r.id)).filter((l): l is PayLine => !!l);
+    const sum = (f: (l: PayLine) => number) => ls.reduce((s, l) => s + f(l), 0);
+    return { hours: rows.reduce((s, r) => s + Number(r.hours), 0), regular: sum((l) => l.regular), overtime: sum((l) => l.overtime), regPay: sum((l) => l.regPay), otPay: sum((l) => l.otPay), pay: sum((l) => l.pay) };
+  };
+
+  const custom = (emp.custom_fields ?? {}) as Record<string, unknown>;
+  const info = (label: string, value: React.ReactNode) => (
+    <div key={label} className="min-w-0">
+      <div className="label-mono">{label}</div>
+      <div className="mt-0.5 truncate text-sm" title={typeof value === "string" ? value : undefined}>{value === "" || value === null || value === undefined ? <span className="text-muted-foreground">—</span> : value}</div>
+    </div>
+  );
+  const fieldValue = (k: string, type?: string) => {
+    const v = (emp as Record<string, unknown>)[k];
+    if (v === null || v === undefined || v === "") return "";
+    return type === "number" && k === "hourly_rate" ? money(Number(v)) : String(v);
+  };
+
+  const th = "px-3 py-3 font-medium whitespace-nowrap";
+  const totalCells = (t: ReturnType<typeof subtotal>) => (
+    <>
+      <td className="px-3 py-2 text-right">{t.hours.toFixed(2)}</td>
+      <td className="px-3 py-2 text-right">{t.regular.toFixed(2)}</td>
+      <td className="px-3 py-2 text-right">{t.overtime.toFixed(2)}</td>
+      <td className="px-3 py-2 text-right">{money(t.regPay)}</td>
+      <td className="px-3 py-2 text-right">{money(t.otPay)}</td>
+      <td className="px-3 py-2 text-right">{money(t.pay)}</td>
+      <td />
+    </>
+  );
+
+  return (
+    <>
+      <div className="glass-panel space-y-5 p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="font-display text-xl font-extrabold tracking-tight">
+              {fullName(emp)} <span className="font-mono text-sm font-normal text-muted-foreground">{emp.employee_code}</span>
+              {!emp.active && <span className="ml-2 rounded bg-secondary px-1.5 py-0.5 align-middle text-[10px] font-normal text-muted-foreground ring-1 ring-border">Inactive</span>}
+            </div>
+            <div className="text-sm text-muted-foreground">
+              {weekday(from)} {from} – {weekday(to)} {to}
+            </div>
+          </div>
+          <Link to="/employees/$id" params={{ id: emp.id }} className={`${btnGhost} print:hidden`}>Edit profile</Link>
+        </div>
+        {EMPLOYEE_SECTIONS.map((s) => (
+          <div key={s.title}>
+            <div className="mb-2 text-xs font-semibold text-muted-foreground">{s.title}</div>
+            <div className="grid grid-cols-2 gap-x-6 gap-y-3 md:grid-cols-4">
+              {s.fields.filter((f) => !IN_HEADER.includes(f.k)).map((f) => info(f.label, fieldValue(f.k, f.type)))}
+              {s.title === "Payroll" && (
+                <>
+                  {info("Pay type", salary ? `Salary (${rules.threshold} h × rate a week)` : "Hourly")}
+                  {info("Shift", `${shift.name}${shift.multiplier !== 1 ? ` · ×${shift.multiplier} (${money(rate * shift.multiplier)}/h)` : ""}`)}
+                  {info("Status", emp.active ? "Active" : "Inactive")}
+                </>
+              )}
+            </div>
+          </div>
+        ))}
+        {defs.length > 0 && (
+          <div>
+            <div className="mb-2 text-xs font-semibold text-muted-foreground">Other details</div>
+            <div className="grid grid-cols-2 gap-x-6 gap-y-3 md:grid-cols-4">
+              {defs.map((d) => info(d.label, custom[d.id] === undefined ? "" : String(custom[d.id])))}
+            </div>
+          </div>
+        )}
+        {emp.notes && (
+          <div>
+            <div className="mb-1 text-xs font-semibold text-muted-foreground">Notes</div>
+            <p className="whitespace-pre-wrap text-sm">{emp.notes}</p>
+          </div>
+        )}
+      </div>
+
+      <section className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        <StatCard label="Gross pay" value={money(pay.total + extras)} {...(extras ? { sub: `incl. ${money(extras)} extra pay` } : {})} highlight />
+        <StatCard label="Hours worked" value={(pay.regular + pay.overtime).toFixed(2)} sub={`${pay.days} day${pay.days === 1 ? "" : "s"} · ${lunchHours.toFixed(2)} h unpaid break`} delay={60} />
+        <StatCard label="Regular hours" value={pay.regular.toFixed(2)} sub={money(pay.regPay)} delay={120} />
+        <StatCard label="Overtime hours" value={pay.overtime.toFixed(2)} sub={salary ? "salaried: no overtime" : money(pay.otPay)} delay={180} />
+      </section>
+
+      <div className="glass-panel overflow-hidden">
+        <div className="border-b border-border px-5 py-4">
+          <div className="font-display font-extrabold tracking-tight">Hours and pay</div>
+          <p className="text-xs text-muted-foreground">
+            {salary
+              ? `Salaried: ${rules.threshold} h × ${money(rate * shift.multiplier)} for each week worked, shared across its days by hours.`
+              : `Overtime (${rules.otMultiplier}×): ${rules.weekendOvertime ? "every Saturday and Sunday hour, plus " : ""}weekday hours over ${rules.threshold} in a Mon–Sun week.`}
+            {" "}Weeks that start before or end after this range count their other days toward overtime, but only days in the range are paid here.
+          </p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
+                <th className={`${th} pl-5 text-left`}>Date</th>
+                <th className={`${th} text-left`}>In</th>
+                <th className={`${th} text-left`}>Out</th>
+                <th className={`${th} text-right`}>Lunch min</th>
+                <th className={`${th} text-right`}>Hours</th>
+                <RecordPayHeaders className={`${th} text-right`} />
+                <th className={`${th} pr-5 text-left`}>Note</th>
+              </tr>
+            </thead>
+            <tbody className="font-mono text-[13px]">
+              {shown.length === 0 && (
+                <tr><td colSpan={6 + RECORD_PAY_COLUMNS} className="px-5 py-10 text-center font-body text-muted-foreground">
+                  {loading ? "Loading…" : "No hours recorded in this range."}
+                </td></tr>
+              )}
+              {weeks.map((w) => (
+                <WeekRows key={w.start} start={w.start} rows={w.rows} lineById={lineById} total={totalCells(subtotal(w.rows))} showSubtotal={weeks.length > 1} />
+              ))}
+            </tbody>
+            {shown.length > 0 && (
+              <tfoot className="font-mono text-[13px] font-semibold">
+                <tr className="border-t-2 border-border">
+                  <td colSpan={4} className="px-5 py-3 font-body">Total</td>
+                  {totalCells(subtotal(shown))}
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      </div>
+
+      {adjustments.length > 0 && (
+        <div className="glass-panel overflow-hidden">
+          <div className="border-b border-border px-5 py-4 font-display font-extrabold tracking-tight">Extra pay</div>
+          <table className="w-full text-sm">
+            <tbody className="font-mono text-[13px]">
+              {[...adjustments].sort((a, b) => a.pay_date.localeCompare(b.pay_date)).map((a) => (
+                <tr key={a.id} className="border-b border-border last:border-0">
+                  <td className="whitespace-nowrap px-5 py-2.5"><span className="inline-block w-9 font-body text-muted-foreground">{weekday(a.pay_date)}</span>{a.pay_date}</td>
+                  <td className="px-3 py-2.5 font-body">{a.category}</td>
+                  <td className="px-3 py-2.5 font-body text-xs text-muted-foreground">{a.note}</td>
+                  <td className="px-5 py-2.5 text-right">{money(Number(a.amount))}</td>
+                </tr>
+              ))}
+              <tr className="border-t-2 border-border font-semibold">
+                <td colSpan={3} className="px-5 py-2.5 font-body">Hours pay {money(pay.total)} + extra pay</td>
+                <td className="px-5 py-2.5 text-right">{money(pay.total + extras)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
+  );
+}
+
+function WeekRows({ start, rows, lineById, total, showSubtotal }: {
+  start: string; rows: TimeRecord[]; lineById: Map<string, PayLine>; total: React.ReactNode; showSubtotal: boolean;
+}) {
+  return (
+    <>
+      {rows.map((r) => (
+        <tr key={r.id} className="border-b border-border hover:bg-secondary">
+          <td className="whitespace-nowrap px-5 py-2.5"><span className="inline-block w-9 font-body text-muted-foreground">{weekday(r.work_date)}</span>{r.work_date}</td>
+          <td className="px-3 py-2.5">{r.entry_mode === "clock" ? r.clock_in?.slice(0, 5) : <span className="font-body text-xs text-muted-foreground">daily hours</span>}</td>
+          <td className="px-3 py-2.5">{r.clock_out?.slice(0, 5)}</td>
+          <td className="px-3 py-2.5 text-right">{r.entry_mode === "clock" ? r.lunch_minutes : ""}</td>
+          <td className="px-3 py-2.5 text-right">{Number(r.hours).toFixed(2)}</td>
+          <RecordPayCells line={lineById.get(r.id)} cell="px-3 py-2.5 text-right" />
+          <td className="max-w-[14rem] truncate px-3 py-2.5 pr-5 font-body text-xs text-muted-foreground" title={r.note ?? ""}>{r.note}</td>
+        </tr>
+      ))}
+      {showSubtotal && (
+        <tr className="border-b border-border bg-secondary/60 font-semibold">
+          <td colSpan={4} className="px-5 py-2 font-body text-xs">Week of {start} – {weekEnd(start)}</td>
+          {total}
+        </tr>
+      )}
+    </>
+  );
+}

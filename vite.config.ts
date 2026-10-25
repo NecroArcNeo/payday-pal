@@ -11,6 +11,8 @@ export default defineConfig(({ command }) => ({
     alias: { "@": `${process.cwd()}/src` },
     dedupe: ["react", "react-dom", "react/jsx-runtime", "react/jsx-dev-runtime", "@tanstack/react-query", "@tanstack/query-core"],
   },
+  // PGlite loads its own WebAssembly and data files; pre-bundling breaks those paths in dev.
+  optimizeDeps: { exclude: ["@electric-sql/pglite"] },
   plugins: [
     tailwindcss(),
     tsConfigPaths({ projects: ["./tsconfig.json"] }),

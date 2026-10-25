@@ -22,6 +22,34 @@
       "when": 1791598819990,
       "tag": "0002_custom_fields_overtime_adjustments",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792867200000,
+      "tag": "0003_local_first_sync",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792953600000,
+      "tag": "0004_shifts_manual_pay",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1793040000000,
+      "tag": "0005_pay_type",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793126400000,
+      "tag": "0006_gender_nationality",
+      "breakpoints": true
     }
   ]
 }

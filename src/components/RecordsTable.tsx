@@ -1,10 +1,12 @@
 import { useState } from "react";
-import { fullName, money, type RecordWithEmp } from "@/lib/payroll";
+import { fullName, money, useRecordPay, weekday, type RecordWithEmp } from "@/lib/payroll";
+import { RecordPayCells, RecordPayHeaders } from "@/components/RecordPay";
 import { Trash2 } from "lucide-react";
 
 export function RecordsTable({ records, title = "Time records", onDelete, showName = true }: { records: RecordWithEmp[]; title?: string; onDelete?: (id: string) => void; showName?: boolean }) {
   const [mode, setMode] = useState<"clock" | "hours">("clock");
   const rows = records.filter((r) => r.entry_mode === mode);
+  const pay = useRecordPay(records);
 
   return (
     <div className="glass-panel overflow-hidden">
@@ -37,14 +39,14 @@ export function RecordsTable({ records, title = "Time records", onDelete, showNa
               )}
               <th className="px-3 py-3 text-right font-medium">Hours</th>
               <th className="px-3 py-3 text-right font-medium">Rate</th>
-              <th className="px-5 py-3 text-right font-medium">Gross pay</th>
+              <RecordPayHeaders />
               {onDelete && <th className="w-10" />}
             </tr>
           </thead>
           <tbody className="font-mono text-[13px]">
             {rows.length === 0 && (
               <tr>
-                <td colSpan={9} className="px-5 py-10 text-center font-body text-muted-foreground">
+                <td colSpan={14} className="px-5 py-10 text-center font-body text-muted-foreground">
                   No {mode === "clock" ? "clock in/out" : "daily hours"} records yet.
                 </td>
               </tr>
@@ -54,7 +56,7 @@ export function RecordsTable({ records, title = "Time records", onDelete, showNa
               return (
                 <tr key={r.id} className="border-b border-border last:border-0 hover:bg-secondary">
                   {showName && <td className="px-5 py-3 font-body">{r.employees ? fullName(r.employees) : "—"}</td>}
-                  <td className="px-3 py-3">{r.work_date}</td>
+                  <td className="whitespace-nowrap px-3 py-3"><span className="inline-block w-9 font-body text-muted-foreground">{weekday(r.work_date)}</span>{r.work_date}</td>
                   {mode === "clock" && (
                     <>
                       <td className="px-3 py-3">{r.clock_in?.slice(0, 5)}</td>
@@ -64,7 +66,7 @@ export function RecordsTable({ records, title = "Time records", onDelete, showNa
                   )}
                   <td className="px-3 py-3 text-right">{Number(r.hours).toFixed(2)}</td>
                   <td className="px-3 py-3 text-right">{money(rate)}</td>
-                  <td className="px-5 py-3 text-right font-semibold">{money(rate * Number(r.hours))}</td>
+                  <RecordPayCells line={pay?.get(r.id)} />
                   {onDelete && (
                     <td className="pr-4">
                       <button onClick={() => onDelete(r.id)} aria-label="Delete record" className="text-muted-foreground hover:text-destructive">

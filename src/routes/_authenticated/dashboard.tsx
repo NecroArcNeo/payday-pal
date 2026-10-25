@@ -1,7 +1,8 @@
-import { createFileRoute, Link, Navigate } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell, StatCard, btnPrimary } from "@/components/AppShell";
 import { RecordsTable } from "@/components/RecordsTable";
-import { currentWeek, fullName, money, useEmployees, useRecords, useSession } from "@/lib/payroll";
+import { currentWeek, fullName, money, useAllRecords, useEmployees, usePayrollSettings, useRecords, useShifts } from "@/lib/payroll";
+import { employeePay, shiftFor } from "@/lib/pay";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
   head: () => ({ meta: [{ title: "Dashboard — Meridian Payroll" }] }),
@@ -9,25 +10,26 @@ export const Route = createFileRoute("/_authenticated/dashboard")({
 });
 
 function Dashboard() {
-  const { data: session, isLoading } = useSession();
   const week = currentWeek();
   const { data: employees = [] } = useEmployees();
   const { data: records = [] } = useRecords(week.from, week.to);
-  if (isLoading) return null;
-  if (!session?.isAdmin) return <Navigate to="/me" />;
+  const { data: all = [] } = useAllRecords(week.from, week.to);
+  const { data: shifts = [] } = useShifts();
+  const { data: settings } = usePayrollSettings();
+  const rules = { threshold: settings?.ot_threshold ?? 40, otMultiplier: settings?.ot_multiplier ?? 1.5, weekendOvertime: settings?.weekend_overtime ?? true };
 
-  const hours = records.reduce((s, r) => s + Number(r.hours), 0);
-  const gross = records.reduce((s, r) => s + Number(r.hours) * Number(r.employees?.hourly_rate ?? 0), 0);
-  const lunch = records.reduce((s, r) => s + r.lunch_minutes, 0) / 60;
+  const hours = all.reduce((s, r) => s + Number(r.hours), 0);
+  const lunch = all.reduce((s, r) => s + r.lunch_minutes, 0) / 60;
 
+  // Same pay rules as the Payroll page: weekend and weekly overtime, shift multipliers, manual day pay.
   const byEmp = new Map<string, { name: string; hours: number; pay: number }>();
-  records.forEach((r) => {
-    const k = r.employee_id;
-    const cur = byEmp.get(k) ?? { name: r.employees ? fullName(r.employees) : "—", hours: 0, pay: 0 };
-    cur.hours += Number(r.hours);
-    cur.pay += Number(r.hours) * Number(r.employees?.hourly_rate ?? 0);
-    byEmp.set(k, cur);
-  });
+  for (const e of employees) {
+    const recs = all.filter((r) => r.employee_id === e.id);
+    if (!recs.length) continue;
+    const p = employeePay(recs, { rate: Number(e.hourly_rate), shiftMultiplier: shiftFor(e.shift_id, shifts).multiplier, rules, payType: e.pay_type, from: week.from, to: week.to });
+    byEmp.set(e.id, { name: fullName(e), hours: p.regular + p.overtime, pay: p.total });
+  }
+  const gross = [...byEmp.values()].reduce((s, x) => s + x.pay, 0);
   const top = [...byEmp.values()].sort((a, b) => b.pay - a.pay).slice(0, 5);
 
   return (
@@ -40,7 +42,7 @@ function Dashboard() {
         <StatCard label="Gross pay" value={money(gross)} sub={`${byEmp.size} employees · ${hours.toFixed(2)} h`} />
         <StatCard label="Total hours" value={hours.toFixed(2)} sub={`${lunch.toFixed(2)} h unpaid break`} delay={60} />
         <StatCard label="Employees" value={String(employees.length)} sub={`${employees.filter((e) => e.user_id).length} with accounts`} delay={120} />
-        <StatCard label="Records" value={`${records.length} rows`} sub="this week" highlight delay={180} />
+        <StatCard label="Records" value={`${all.length} rows`} sub="this week" highlight delay={180} />
       </section>
       <section className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2">

@@ -12,6 +12,7 @@ import { useEffect, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
 import { supabase } from "@/integrations/supabase/client";
+import { cloudConfigured, getDataMode, setDataMode } from "@/lib/db/mode";
 import { Toaster } from "@/components/ui/sonner";
 
 function NotFoundComponent() {
@@ -123,17 +124,21 @@ function RootComponent() {
   const router = useRouter();
 
   useEffect(() => {
+    // Signing in is optional (it only enables cloud sync), and impossible without Supabase env vars.
+    if (!cloudConfigured) return;
     try {
       const { data } = supabase.auth.onAuthStateChange((event) => {
         if (event !== "SIGNED_IN" && event !== "SIGNED_OUT" && event !== "USER_UPDATED") return;
+        // Leaving the account means leaving its cloud copy too.
+        if (event === "SIGNED_OUT" && getDataMode() === "cloud") setDataMode("local");
         router.invalidate();
-        if (event !== "SIGNED_OUT") queryClient.invalidateQueries();
+        queryClient.invalidateQueries();
       });
       return () => data.subscription.unsubscribe();
     } catch (error) {
-      // Missing local VITE_SUPABASE_* env takes down the whole tree in React 19
-      // because failed effects are caught by the route error boundary.
+      // A failed effect would be caught by the route error boundary and take down the whole tree.
       console.error(error);
+      return undefined;
     }
   }, [router, queryClient]);
 

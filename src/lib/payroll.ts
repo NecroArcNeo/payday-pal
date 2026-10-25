@@ -1,6 +1,9 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import type { Tables } from "@/integrations/supabase/types";
+import { cloudConfigured, storeFor, useDataMode } from "@/lib/db/mode";
+import { payByRecord, weekEnd, weekStart, type PayLine } from "@/lib/pay";
 
 export type Employee = Tables<"employees">;
 export type TimeRecord = Tables<"time_records">;
@@ -11,49 +14,41 @@ export const money = (n: number) =>
 
 export const fullName = (e: Pick<Employee, "first_name" | "last_name">) => `${e.first_name} ${e.last_name}`;
 
+/** The optional cloud account. Read from the stored session, so it works offline. */
 export function useSession() {
   return useQuery({
-    queryKey: ["session-role"],
+    queryKey: ["session"],
     queryFn: async () => {
-      const { data } = await supabase.auth.getUser();
-      const user = data.user;
-      if (!user) return { user: null, isAdmin: false };
-      const { data: roles } = await supabase.from("user_roles").select("role").eq("user_id", user.id);
-      return { user, isAdmin: !!roles?.some((r) => r.role === "admin") };
+      if (!cloudConfigured) return { user: null };
+      const { data } = await supabase.auth.getSession();
+      return { user: data.session?.user ?? null };
     },
   });
 }
 
+// Query keys end with the data mode so this device's and the cloud's data never share a cache entry.
 export function useEmployees() {
-  return useQuery({
-    queryKey: ["employees"],
-    queryFn: async () => {
-      const { data, error } = await supabase.from("employees").select("*").order("last_name");
-      if (error) throw error;
-      return data;
-    },
-  });
+  const mode = useDataMode();
+  return useQuery({ queryKey: ["employees", mode], queryFn: () => storeFor(mode).listEmployees() });
 }
 
 export function useRecords(from?: string, to?: string) {
-  return useQuery({
-    queryKey: ["records", from, to],
-    queryFn: async () => {
-      let q = supabase
-        .from("time_records")
-        .select("*, employees(first_name,last_name,employee_code,hourly_rate)")
-        .order("work_date", { ascending: false })
-        .limit(1000);
-      if (from) q = q.gte("work_date", from);
-      if (to) q = q.lte("work_date", to);
-      const { data, error } = await q;
-      if (error) throw error;
-      return data as RecordWithEmp[];
-    },
-  });
+  const mode = useDataMode();
+  return useQuery({ queryKey: ["records", from, to, mode], queryFn: () => storeFor(mode).listRecords(from, to) });
 }
 
+/** "Mon", "Tue"… for an ISO date, without timezone drift. */
+export const weekday = (date: string) => new Date(`${date}T00:00:00Z`).toLocaleDateString("en-US", { weekday: "short", timeZone: "UTC" });
+
+/** The calendar date in the user's own timezone (toISOString would give UTC's, which is tomorrow by evening in the Americas). */
 export function isoDate(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** An ISO date moved by whole days. */
+export function addDays(date: string, days: number) {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
 }
 
@@ -80,58 +75,68 @@ export type Adjustment = Tables<"pay_adjustments">;
 export type PayrollSettings = Tables<"payroll_settings">;
 
 export function useFieldDefs() {
-  return useQuery({
-    queryKey: ["field-defs"],
-    queryFn: async () => {
-      const { data, error } = await supabase.from("employee_field_defs").select("*").order("sort_order").order("created_at");
-      if (error) throw error;
-      return data;
-    },
-  });
+  const mode = useDataMode();
+  return useQuery({ queryKey: ["field-defs", mode], queryFn: () => storeFor(mode).listFieldDefs() });
 }
 
 export function useAdjustments(from?: string, to?: string) {
-  return useQuery({
-    queryKey: ["adjustments", from, to],
-    queryFn: async () => {
-      let q = supabase.from("pay_adjustments").select("*").order("pay_date", { ascending: false });
-      if (from) q = q.gte("pay_date", from);
-      if (to) q = q.lte("pay_date", to);
-      const { data, error } = await q;
-      if (error) throw error;
-      return data;
-    },
-  });
+  const mode = useDataMode();
+  return useQuery({ queryKey: ["adjustments", from, to, mode], queryFn: () => storeFor(mode).listAdjustments(from, to) });
 }
 
-export const defaultSettings = { ot_threshold: 40, ot_multiplier: 1.5, visible_columns: ["employee_code", "days"] };
+export const defaultSettings = { ot_threshold: 40, ot_multiplier: 1.5, weekend_overtime: true, visible_columns: ["employee_code", "days"] };
 
 export function usePayrollSettings() {
+  const mode = useDataMode();
   return useQuery({
-    queryKey: ["payroll-settings"],
+    queryKey: ["payroll-settings", mode],
     queryFn: async () => {
-      const { data, error } = await supabase.from("payroll_settings").select("*").maybeSingle();
-      if (error) throw error;
+      const data = await storeFor(mode).getSettings();
       return data
-        ? { ot_threshold: Number(data.ot_threshold), ot_multiplier: Number(data.ot_multiplier), visible_columns: data.visible_columns }
+        ? { ot_threshold: Number(data.ot_threshold), ot_multiplier: Number(data.ot_multiplier), weekend_overtime: data.weekend_overtime ?? true, visible_columns: data.visible_columns }
         : defaultSettings;
     },
   });
 }
 
-/** Monday of the week containing an ISO date string. */
-export function weekKey(date: string) {
-  const d = new Date(date + "T00:00:00Z");
-  const day = (d.getUTCDay() + 6) % 7;
-  d.setUTCDate(d.getUTCDate() - day);
-  return d.toISOString().slice(0, 10);
+export type Shift = Tables<"shifts">;
+
+export function useShifts() {
+  const mode = useDataMode();
+  return useQuery({ queryKey: ["shifts", mode], queryFn: () => storeFor(mode).listShifts() });
 }
 
-/** Overtime = hours above the weekly threshold (Mon–Sun). */
-export function splitHours(records: { work_date: string; hours: number | string }[], threshold: number) {
-  const weeks = new Map<string, number>();
-  for (const r of records) weeks.set(weekKey(r.work_date), (weeks.get(weekKey(r.work_date)) ?? 0) + Number(r.hours));
-  let regular = 0, overtime = 0;
-  for (const h of weeks.values()) { regular += Math.min(h, threshold); overtime += Math.max(0, h - threshold); }
-  return { regular, overtime };
+/** Every record in a date range — no row cap, so pay totals are never cut short. */
+export function useAllRecords(from: string, to: string) {
+  const mode = useDataMode();
+  return useQuery({ queryKey: ["records", "all", from, to, mode], queryFn: () => storeFor(mode).listRecordsMatching({ from, to }) });
+}
+
+/**
+ * Regular/overtime hours and pay for each of `rows`, keyed by record id. Loads
+ * every record in the whole Mon–Sun weeks they span, so overtime and salary
+ * match the Payroll page. Undefined while loading.
+ */
+export function useRecordPay(rows: Pick<TimeRecord, "work_date">[]): Map<string, PayLine> | undefined {
+  const mode = useDataMode();
+  const { data: employees } = useEmployees();
+  const { data: shifts } = useShifts();
+  const { data: settings } = usePayrollSettings();
+  let first = "", last = "";
+  for (const r of rows) {
+    if (!first || r.work_date < first) first = r.work_date;
+    if (!last || r.work_date > last) last = r.work_date;
+  }
+  const from = first && weekStart(first), to = last && weekEnd(last);
+  const { data: context } = useQuery({
+    queryKey: ["records", "all", from, to, mode],
+    queryFn: () => storeFor(mode).listRecordsMatching({ from, to }),
+    enabled: !!from,
+    placeholderData: keepPreviousData,
+  });
+  return useMemo(() => {
+    if (!context || !employees || !shifts || !settings) return undefined;
+    const rules = { threshold: settings.ot_threshold, otMultiplier: settings.ot_multiplier, weekendOvertime: settings.weekend_overtime };
+    return payByRecord(context, employees, shifts, rules);
+  }, [context, employees, shifts, settings]);
 }
