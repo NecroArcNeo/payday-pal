@@ -1,5 +1,5 @@
-import { money } from "@/lib/payroll";
-import type { PayLine } from "@/lib/pay";
+import { money, type Shift } from "@/lib/payroll";
+import { shiftForRecord, type PayLine } from "@/lib/pay";
 
 /** Headers for the per-record pay columns, matching <RecordPayCells>. */
 export function RecordPayHeaders({ className = "px-3 py-3 text-right font-medium" }: { className?: string }) {
@@ -34,5 +34,30 @@ export function RecordPayCells({ line, cell = "px-3 py-3 text-right" }: { line: 
         {line.manual ? <div className={`${tag} text-primary`}>manual</div> : line.salary && <div className={`${tag} text-muted-foreground`}>salary</div>}
       </td>
     </>
+  );
+}
+
+/** The shift a record was worked on, flagged when it isn't the employee's usual one. */
+export function RecordShiftCell({ shiftId, employeeShiftId, shifts, cell = "px-3 py-3" }: {
+  shiftId: string | null | undefined; employeeShiftId: string | null | undefined; shifts: Shift[]; cell?: string;
+}) {
+  const s = shiftForRecord(shiftId, employeeShiftId, shifts);
+  return (
+    <td className={`${cell} whitespace-nowrap font-body`}>
+      {s.name}{s.multiplier !== 1 && <span className="ml-1 font-mono text-[11px] text-muted-foreground">×{s.multiplier}</span>}
+      {s.changed && <div className="text-[10px] text-primary" title="Worked on a different shift than usual">changed</div>}
+    </td>
+  );
+}
+
+/** Picks a record's shift. "" = the employee's own shift (named when there's one employee). */
+export function RecordShiftSelect({ value, onChange, shifts, ownLabel, className }: {
+  value: string; onChange: (id: string) => void; shifts: Shift[]; ownLabel: string; className?: string;
+}) {
+  return (
+    <select className={className} value={value} onChange={(e) => onChange(e.target.value)} aria-label="Shift">
+      <option value="">{ownLabel}</option>
+      {shifts.map((x) => <option key={x.id} value={x.id}>{x.name}{Number(x.multiplier) !== 1 ? ` (×${Number(x.multiplier)})` : ""}</option>)}
+    </select>
   );
 }

@@ -35,6 +35,9 @@ const applySyncMigration = async (cloud: PGlite) => {
   await cloud.exec(migration("0004_shifts_manual_pay.sql"));
   await cloud.exec(migration("0005_pay_type.sql"));
   await cloud.exec(migration("0006_gender_nationality.sql"));
+  await cloud.exec(migration("0007_employee_defaults.sql"));
+  await cloud.exec(migration("0008_id_documents_category_sections.sql"));
+  await cloud.exec(migration("0009_record_shift.sql"));
 };
 
 function cloudAs(db: PGlite, uid: string): CloudSync {
@@ -212,6 +215,73 @@ describe("gender and nationality (schema 4)", () => {
   });
 });
 
+describe("default profile (schema 5)", () => {
+  it("saves without touching pay settings, survives a backup round trip, and restores a schema 4 backup empty", async () => {
+    const db = await newLocal();
+    const { store } = await seed(db, "E1");
+    await store.saveSettings({ ot_threshold: 38, ot_multiplier: 2, weekend_overtime: false, visible_columns: ["days"] });
+    expect((await store.saveEmployeeDefaults({ department: "Ops", hourly_rate: 18, custom_fields: { x: "1" } })).error).toBeNull();
+    expect(await store.getSettings()).toMatchObject({ ot_threshold: 38, weekend_overtime: false, employee_defaults: { department: "Ops", hourly_rate: 18, custom_fields: { x: "1" } } });
+    await store.saveSettings({ ot_threshold: 40, ot_multiplier: 1.5, weekend_overtime: true, visible_columns: ["days"] });
+    expect((await store.getSettings())!.employee_defaults).toEqual({ department: "Ops", hourly_rate: 18, custom_fields: { x: "1" } });
+
+    const snap = await exportSnapshot(db);
+    const copy = await newLocal();
+    await replaceWithSnapshot(copy, snap);
+    expect((await createLocalStore(async () => copy).getSettings())!.employee_defaults).toEqual({ department: "Ops", hourly_rate: 18, custom_fields: { x: "1" } });
+
+    const v4 = structuredClone(snap) as unknown as { schema_version: number; data: Record<string, Record<string, unknown>[]> };
+    v4.schema_version = 4;
+    for (const x of v4.data["payroll_settings"]!) delete x["employee_defaults"];
+    const fresh = await newLocal();
+    await replaceWithSnapshot(fresh, v4 as never);
+    expect((await createLocalStore(async () => fresh).getSettings())!.employee_defaults).toEqual({});
+  });
+});
+
+describe("ID documents and category sections (schema 6)", () => {
+  it("stores them, and restores a schema 5 backup with them empty", async () => {
+    const db = await newLocal();
+    const { store, emp } = await seed(db, "E1");
+    expect((await store.update("employees", emp.id, { passport_no: "P1", ssn: "123", residential_status: "Citizen" })).error).toBeNull();
+    expect((await store.insert("employee_field_defs", { label: "Boot size", section: "Uniform" })).error).toBeNull();
+    const snap = await exportSnapshot(db);
+    expect(snap.data.employee_field_defs[0]).toMatchObject({ label: "Boot size", section: "Uniform" });
+
+    const v5 = structuredClone(snap) as unknown as { schema_version: number; data: Record<string, Record<string, unknown>[]> };
+    v5.schema_version = 5;
+    for (const e of v5.data["employees"]!) { delete e["passport_no"]; delete e["ssn"]; delete e["residential_status"]; }
+    for (const d of v5.data["employee_field_defs"]!) delete d["section"];
+    const fresh = await newLocal();
+    await replaceWithSnapshot(fresh, v5 as never);
+    const s = createLocalStore(async () => fresh);
+    expect((await s.listEmployees())[0]).toMatchObject({ passport_no: null, ssn: null, residential_status: null });
+    expect((await s.listFieldDefs())[0]).toMatchObject({ label: "Boot size", section: null });
+  });
+});
+
+describe("a record's own shift (schema 7)", () => {
+  it("stores it, falls back to the employee's shift when that shift is deleted, and restores a schema 6 backup empty", async () => {
+    const db = await newLocal();
+    const { store, emp } = await seed(db, "E1");
+    const night = (await store.listShifts()).find((s) => s.name === "Night")!;
+    const rec = (await store.listRecordsMatching({}))[0]!;
+    expect((await store.update("time_records", rec.id, { shift_id: night.id })).error).toBeNull();
+    const snap = await exportSnapshot(db);
+    expect(snap.data.time_records.find((r) => r["id"] === rec.id)!["shift_id"]).toBe(night.id);
+
+    const v6 = structuredClone(snap) as unknown as { schema_version: number; data: Record<string, Record<string, unknown>[]> };
+    v6.schema_version = 6;
+    for (const r of v6.data["time_records"]!) delete r["shift_id"];
+    const fresh = await newLocal();
+    await replaceWithSnapshot(fresh, v6 as never);
+    expect((await createLocalStore(async () => fresh).listRecordsMatching({})).every((r) => r.shift_id === null)).toBe(true);
+
+    expect((await store.remove("shifts", night.id)).error).toBeNull();
+    expect((await store.listRecordsMatching({ employeeIds: [emp.id] })).every((r) => r.shift_id === null)).toBe(true);
+  });
+});
+
 describe("record pages", () => {
   it("pages through records newest first, with an exact total, filtered by date, type and employee", async () => {
     const db = await newLocal();
@@ -325,7 +395,7 @@ describe("cloud migration", () => {
     const { rows } = await cloud.query<{ reason: string }>("select reason from public.cloud_backups");
     expect(rows).toEqual([{ reason: "before-local-first-migration" }]);
     // 0004: the admin's account gets Day/Night and existing employees go on Day.
-    expect(remote.snapshot.schema_version).toBe(4);
+    expect(remote.snapshot.schema_version).toBe(7);
     expect(remote.snapshot.data.employees[0]!["pay_type"]).toBe("hourly");
     expect(remote.snapshot.data.shifts.map((x) => x["name"])).toEqual(["Day", "Night"]);
     const day = remote.snapshot.data.shifts.find((x) => x["name"] === "Day")!;

@@ -7,10 +7,11 @@ import { db } from "@/lib/db/mode";
 import { backupBefore } from "@/lib/db/safety";
 import { AppShell, btnGhost, btnPrimary, inputCls } from "@/components/AppShell";
 import { SearchInput } from "@/components/EmployeeSearch";
-import { fullName, money, useEmployees, useFieldDefs, useShifts, type Employee, type FieldDef, type Shift } from "@/lib/payroll";
+import { fullName, money, useEmployeeDefaults, useEmployees, useFieldDefs, useShifts, type Employee, type FieldDef, type Shift } from "@/lib/payroll";
+import { NO_DEFAULTS, withDefaults } from "@/lib/employee-fields";
 import { PAY_TYPES, shiftFor } from "@/lib/pay";
 import { describeEmployeeFilter, isFiltering, NO_FILTER, searchEmployees, type EmployeeFilter } from "@/lib/employee-search";
-import { Pencil, Trash2, X } from "lucide-react";
+import { IdCard, Pencil, Trash2, X } from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated/employees")({
   head: () => ({ meta: [{ title: "Employees — Meridian Payroll" }] }),
@@ -32,8 +33,16 @@ function EmployeesPage() {
   const { data: employees = [] } = useEmployees();
   const { data: defs = [] } = useFieldDefs();
   const { data: shifts = [] } = useShifts();
+  const { data: defaults = NO_DEFAULTS } = useEmployeeDefaults();
   const qc = useQueryClient();
+  // The add form starts from the default profile.
+  const defaultShift = shiftFor(defaults["shift_id"] as string | undefined, shifts).id ?? "";
+  const blank = useMemo(() => {
+    const d = (k: string) => (defaults[k] == null ? "" : String(defaults[k]));
+    return { ...empty, email: d("email"), department: d("department"), hourly_rate: d("hourly_rate"), pay_type: defaults["pay_type"] === "salary" ? "salary" : "hourly", shift_id: defaultShift };
+  }, [defaults, defaultShift]);
   const [form, setForm] = useState<Record<string, string>>(empty);
+  useEffect(() => setForm(blank), [blank]);
   const [q, setQ] = useState<EmployeeFilter>(NO_FILTER);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkEdit, setBulkEdit] = useState(false);
@@ -53,10 +62,10 @@ function EmployeesPage() {
     const parsed = schema.safeParse(form);
     if (!parsed.success) { toast.error(parsed.error.issues[0]?.message ?? "Invalid input"); return; }
     const row = { ...parsed.data, email: parsed.data.email || null, department: parsed.data.department || null, shift_id: form["shift_id"] || shifts[0]?.id || null, pay_type: form["pay_type"] === "salary" ? "salary" : "hourly" };
-    const { error } = await db().insert("employees", row);
+    const { error } = await db().insert("employees", withDefaults(row, defaults));
     if (error) { toast.error(error.message); return; }
     toast.success("Employee added");
-    setForm(empty);
+    setForm(blank);
     qc.invalidateQueries({ queryKey: ["employees"] });
   };
 
@@ -128,6 +137,7 @@ function EmployeesPage() {
         </div>
       </form>
 
+
       {bulkEdit && picked.length > 0 && (
         <BulkEditPanel employees={picked} defs={defs} shifts={shifts} onClose={() => setBulkEdit(false)}
           onDone={() => { setBulkEdit(false); qc.invalidateQueries(); }} />
@@ -135,7 +145,10 @@ function EmployeesPage() {
 
       <div className="glass-panel overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
-          <div className="font-display font-extrabold tracking-tight">Roster</div>
+          <div className="flex items-center gap-3">
+            <div className="font-display font-extrabold tracking-tight">Roster</div>
+            <Link to="/employees/template" className={btnGhost} title="The profile every new employee starts with"><IdCard className="mr-1 inline h-4 w-4" />Default profile</Link>
+          </div>
           <SearchInput value={q} onChange={setQ} employees={employees} className="w-full max-w-2xl" />
         </div>
 
@@ -178,7 +191,7 @@ function EmployeesPage() {
                 <td className="pl-5"><input type="checkbox" aria-label={`Select ${fullName(e)}`} checked={selected.has(e.id)} onChange={() => toggle(e.id)} /></td>
                 <td className="px-3 py-3 font-medium">
                   <Link to="/employees/$id" params={{ id: e.id }} className="hover:underline">{fullName(e)}</Link>
-                  {!e.active && <span className="ml-2 rounded bg-secondary px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground ring-1 ring-border">Inactive</span>}
+                  {!e.active && <span className="ml-2 rounded bg-secondary px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground ring-1 ring-border">Resigned</span>}
                 </td>
                 <td className="px-3 py-3 font-mono text-[13px]">{e.employee_code}</td>
                 <td className="px-3 py-3 text-muted-foreground">{e.job_title ?? "—"}</td>
@@ -210,6 +223,7 @@ const textFields = [
   { key: "job_title", label: "Position / job title", max: 80 },
   { key: "gender", label: "Gender", max: 80 },
   { key: "nationality", label: "Nationality", max: 80 },
+  { key: "residential_status", label: "Residential status", max: 80 },
   { key: "city", label: "City", max: 80 },
   { key: "state", label: "State / region", max: 80 },
 ] as const;
@@ -240,7 +254,7 @@ function BulkEditPanel({ employees, defs, shifts, onClose, onDone }: { employees
   const changes: string[] = [];
   for (const f of textFields) if (on[f.key]) changes.push(val(f.key).trim() ? `${f.label} → “${val(f.key).trim()}”` : `clear ${f.label}`);
   if (on["rate"]) changes.push(rateMode === "set" ? `rate → ${money(rateNum || 0)}` : rateMode === "pct" ? `rate ${rateNum >= 0 ? "+" : ""}${rateNum || 0}%` : `rate ${rateNum >= 0 ? "+" : "−"}${money(Math.abs(rateNum || 0))}`);
-  if (on["active"]) changes.push(active ? "mark active" : "mark inactive");
+  if (on["active"]) changes.push(active ? "mark active" : "mark resigned");
   if (on["pay_type"]) changes.push(`pay type → ${payType === "salary" ? "salary" : "hourly"}`);
   if (on["shift"]) changes.push(`shift → ${shifts.find((s) => s.id === shiftId)?.name ?? "?"}`);
   for (const d of defs) if (on[`custom:${d.id}`]) changes.push(val(`custom:${d.id}`).trim() ? `${d.label} → “${val(`custom:${d.id}`).trim()}”` : `clear ${d.label}`);
@@ -319,7 +333,7 @@ function BulkEditPanel({ employees, defs, shifts, onClose, onDone }: { employees
         {row("active", "Status", (
           <select className={inputCls} value={active ? "1" : "0"} onChange={(e) => { setActive(e.target.value === "1"); setOn((o) => ({ ...o, active: true })); }}>
             <option value="1">Active</option>
-            <option value="0">Inactive</option>
+            <option value="0">Resigned</option>
           </select>
         ))}
         {row("pay_type", "Pay type", (

@@ -41,6 +41,8 @@ export interface DataStore {
   /** Insert or update employees matched on employee_code (used by file import). */
   upsertEmployeesByCode(rows: TablesInsert<"employees">[]): Promise<Result>;
   saveSettings(s: SettingsInput): Promise<Result>;
+  /** Replaces the default profile new employees start with. Leaves the other settings alone. */
+  saveEmployeeDefaults(d: Record<string, unknown>): Promise<Result>;
 }
 
 /** The cap the pages have always used for record lists. */
@@ -194,6 +196,14 @@ export function createLocalStore(getDb: () => Promise<SqlDb>): DataStore {
         [s.ot_threshold, s.ot_multiplier, s.visible_columns, s.weekend_overtime],
       );
     }),
+    saveEmployeeDefaults: (d) => attempt(async () => {
+      const db = await getDb();
+      await db.query(
+        `insert into payroll_settings (id, employee_defaults, updated_at) values (true, $1::jsonb, now())
+         on conflict (id) do update set employee_defaults = excluded.employee_defaults, updated_at = excluded.updated_at`,
+        [JSON.stringify(d)],
+      );
+    }),
   };
 }
 
@@ -291,4 +301,5 @@ export const cloudStore: DataStore = {
   removeMany: (table, ids) => wrap(supabase.from(table as "employees").delete().in("id", ids)),
   upsertEmployeesByCode: (rows) => wrap(supabase.from("employees").upsert(rows as never, { onConflict: "owner_id,employee_code" })),
   saveSettings: (s) => wrap(supabase.from("payroll_settings").upsert({ ...s, updated_at: new Date().toISOString() } as never, { onConflict: "owner_id" })),
+  saveEmployeeDefaults: (d) => wrap(supabase.from("payroll_settings").upsert({ employee_defaults: d, updated_at: new Date().toISOString() } as never, { onConflict: "owner_id" })),
 };

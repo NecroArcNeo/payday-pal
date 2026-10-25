@@ -1,8 +1,8 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell, StatCard, btnGhost, inputCls } from "@/components/AppShell";
 import { EmployeePicker } from "@/components/EmployeeSearch";
-import { RECORD_PAY_COLUMNS, RecordPayCells, RecordPayHeaders } from "@/components/RecordPay";
-import { EMPLOYEE_SECTIONS } from "@/lib/employee-fields";
+import { RECORD_PAY_COLUMNS, RecordPayCells, RecordPayHeaders, RecordShiftCell } from "@/components/RecordPay";
+import { profileSections } from "@/lib/employee-fields";
 import {
   addDays, currentWeek, fullName, isoDate, money, useAdjustments, useAllRecords, useEmployees, useFieldDefs, usePayrollSettings, useShifts, weekday,
   type Adjustment, type Employee, type FieldDef, type Shift, type TimeRecord,
@@ -12,6 +12,8 @@ import { Printer } from "lucide-react";
 
 /** Shown in the sheet's heading, so not repeated in the details grid. */
 const IN_HEADER = ["first_name", "last_name", "employee_code"];
+/** ID numbers stay on the profile, off timesheets that get printed and handed around. */
+const onSheet = (f: { k: string; sensitive?: boolean }) => !IN_HEADER.includes(f.k) && !f.sensitive;
 
 type Search = { employee?: string | undefined; from?: string | undefined; to?: string | undefined };
 const isDate = (d: unknown): d is string => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d);
@@ -113,7 +115,7 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
   const shift = shiftFor(emp.shift_id, shifts);
   const rate = Number(emp.hourly_rate);
   const salary = emp.pay_type === "salary";
-  const pay = employeePay(records, { rate, shiftMultiplier: shift.multiplier, rules, payType: emp.pay_type, from, to });
+  const pay = employeePay(records, { rate, shiftMultiplier: shift.multiplier, rules, payType: emp.pay_type, shifts, from, to });
   const lineById = new Map(pay.lines.map((l) => [l.id, l]));
   const shown = records
     .filter((r) => r.work_date >= from && r.work_date <= to)
@@ -167,7 +169,7 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
           <div>
             <div className="font-display text-xl font-extrabold tracking-tight">
               {fullName(emp)} <span className="font-mono text-sm font-normal text-muted-foreground">{emp.employee_code}</span>
-              {!emp.active && <span className="ml-2 rounded bg-secondary px-1.5 py-0.5 align-middle text-[10px] font-normal text-muted-foreground ring-1 ring-border">Inactive</span>}
+              {!emp.active && <span className="ml-2 rounded bg-secondary px-1.5 py-0.5 align-middle text-[10px] font-normal text-muted-foreground ring-1 ring-border">Resigned</span>}
             </div>
             <div className="text-sm text-muted-foreground">
               {weekday(from)} {from} – {weekday(to)} {to}
@@ -175,29 +177,22 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
           </div>
           <Link to="/employees/$id" params={{ id: emp.id }} className={`${btnGhost} print:hidden`}>Edit profile</Link>
         </div>
-        {EMPLOYEE_SECTIONS.map((s) => (
+        {profileSections(defs).filter((s) => s.fields.some(onSheet) || s.defs.length).map((s) => (
           <div key={s.title}>
             <div className="mb-2 text-xs font-semibold text-muted-foreground">{s.title}</div>
             <div className="grid grid-cols-2 gap-x-6 gap-y-3 md:grid-cols-4">
-              {s.fields.filter((f) => !IN_HEADER.includes(f.k)).map((f) => info(f.label, fieldValue(f.k, f.type)))}
+              {s.fields.filter(onSheet).map((f) => info(f.label, fieldValue(f.k, f.type)))}
               {s.title === "Payroll" && (
                 <>
                   {info("Pay type", salary ? `Salary (${rules.threshold} h × rate a week)` : "Hourly")}
                   {info("Shift", `${shift.name}${shift.multiplier !== 1 ? ` · ×${shift.multiplier} (${money(rate * shift.multiplier)}/h)` : ""}`)}
-                  {info("Status", emp.active ? "Active" : "Inactive")}
+                  {info("Status", emp.active ? "Active" : "Resigned")}
                 </>
               )}
+              {s.defs.map((d) => info(d.label, custom[d.id] === undefined ? "" : String(custom[d.id])))}
             </div>
           </div>
         ))}
-        {defs.length > 0 && (
-          <div>
-            <div className="mb-2 text-xs font-semibold text-muted-foreground">Other details</div>
-            <div className="grid grid-cols-2 gap-x-6 gap-y-3 md:grid-cols-4">
-              {defs.map((d) => info(d.label, custom[d.id] === undefined ? "" : String(custom[d.id])))}
-            </div>
-          </div>
-        )}
         {emp.notes && (
           <div>
             <div className="mb-1 text-xs font-semibold text-muted-foreground">Notes</div>
@@ -228,6 +223,7 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
             <thead>
               <tr className="border-b border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
                 <th className={`${th} pl-5 text-left`}>Date</th>
+                <th className={`${th} text-left`}>Shift</th>
                 <th className={`${th} text-left`}>In</th>
                 <th className={`${th} text-left`}>Out</th>
                 <th className={`${th} text-right`}>Lunch min</th>
@@ -238,18 +234,18 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
             </thead>
             <tbody className="font-mono text-[13px]">
               {shown.length === 0 && (
-                <tr><td colSpan={6 + RECORD_PAY_COLUMNS} className="px-5 py-10 text-center font-body text-muted-foreground">
+                <tr><td colSpan={7 + RECORD_PAY_COLUMNS} className="px-5 py-10 text-center font-body text-muted-foreground">
                   {loading ? "Loading…" : "No hours recorded in this range."}
                 </td></tr>
               )}
               {weeks.map((w) => (
-                <WeekRows key={w.start} start={w.start} rows={w.rows} lineById={lineById} total={totalCells(subtotal(w.rows))} showSubtotal={weeks.length > 1} />
+                <WeekRows key={w.start} start={w.start} rows={w.rows} lineById={lineById} shifts={shifts} employeeShiftId={emp.shift_id} total={totalCells(subtotal(w.rows))} showSubtotal={weeks.length > 1} />
               ))}
             </tbody>
             {shown.length > 0 && (
               <tfoot className="font-mono text-[13px] font-semibold">
                 <tr className="border-t-2 border-border">
-                  <td colSpan={4} className="px-5 py-3 font-body">Total</td>
+                  <td colSpan={5} className="px-5 py-3 font-body">Total</td>
                   {totalCells(subtotal(shown))}
                 </tr>
               </tfoot>
@@ -283,14 +279,15 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
   );
 }
 
-function WeekRows({ start, rows, lineById, total, showSubtotal }: {
-  start: string; rows: TimeRecord[]; lineById: Map<string, PayLine>; total: React.ReactNode; showSubtotal: boolean;
+function WeekRows({ start, rows, lineById, shifts, employeeShiftId, total, showSubtotal }: {
+  start: string; rows: TimeRecord[]; lineById: Map<string, PayLine>; shifts: Shift[]; employeeShiftId: string | null; total: React.ReactNode; showSubtotal: boolean;
 }) {
   return (
     <>
       {rows.map((r) => (
         <tr key={r.id} className="border-b border-border hover:bg-secondary">
           <td className="whitespace-nowrap px-5 py-2.5"><span className="inline-block w-9 font-body text-muted-foreground">{weekday(r.work_date)}</span>{r.work_date}</td>
+          <RecordShiftCell shiftId={r.shift_id} employeeShiftId={employeeShiftId} shifts={shifts} cell="px-3 py-2.5" />
           <td className="px-3 py-2.5">{r.entry_mode === "clock" ? r.clock_in?.slice(0, 5) : <span className="font-body text-xs text-muted-foreground">daily hours</span>}</td>
           <td className="px-3 py-2.5">{r.clock_out?.slice(0, 5)}</td>
           <td className="px-3 py-2.5 text-right">{r.entry_mode === "clock" ? r.lunch_minutes : ""}</td>
@@ -301,7 +298,7 @@ function WeekRows({ start, rows, lineById, total, showSubtotal }: {
       ))}
       {showSubtotal && (
         <tr className="border-b border-border bg-secondary/60 font-semibold">
-          <td colSpan={4} className="px-5 py-2 font-body text-xs">Week of {start} – {weekEnd(start)}</td>
+          <td colSpan={5} className="px-5 py-2 font-body text-xs">Week of {start} – {weekEnd(start)}</td>
           {total}
         </tr>
       )}

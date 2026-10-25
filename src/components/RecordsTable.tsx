@@ -1,12 +1,15 @@
 import { useState } from "react";
-import { fullName, money, useRecordPay, weekday, type RecordWithEmp } from "@/lib/payroll";
-import { RecordPayCells, RecordPayHeaders } from "@/components/RecordPay";
+import { fullName, money, useEmployees, useRecordPay, useShifts, weekday, type RecordWithEmp } from "@/lib/payroll";
+import { RecordPayCells, RecordPayHeaders, RecordShiftCell } from "@/components/RecordPay";
 import { Trash2 } from "lucide-react";
 
 export function RecordsTable({ records, title = "Time records", onDelete, showName = true }: { records: RecordWithEmp[]; title?: string; onDelete?: (id: string) => void; showName?: boolean }) {
   const [mode, setMode] = useState<"clock" | "hours">("clock");
   const rows = records.filter((r) => r.entry_mode === mode);
   const pay = useRecordPay(records);
+  const { data: shifts = [] } = useShifts();
+  const { data: employees = [] } = useEmployees();
+  const empById = new Map(employees.map((e) => [e.id, e]));
 
   return (
     <div className="glass-panel overflow-hidden">
@@ -30,6 +33,7 @@ export function RecordsTable({ records, title = "Time records", onDelete, showNa
             <tr className="border-b border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
               {showName && <th className="px-5 py-3 text-left font-medium">Employee</th>}
               <th className="px-3 py-3 text-left font-medium">Date</th>
+              <th className="px-3 py-3 text-left font-medium">Shift</th>
               {mode === "clock" && (
                 <>
                   <th className="px-3 py-3 text-left font-medium">Clock in</th>
@@ -57,6 +61,7 @@ export function RecordsTable({ records, title = "Time records", onDelete, showNa
                 <tr key={r.id} className="border-b border-border last:border-0 hover:bg-secondary">
                   {showName && <td className="px-5 py-3 font-body">{r.employees ? fullName(r.employees) : "—"}</td>}
                   <td className="whitespace-nowrap px-3 py-3"><span className="inline-block w-9 font-body text-muted-foreground">{weekday(r.work_date)}</span>{r.work_date}</td>
+                  <RecordShiftCell shiftId={r.shift_id} employeeShiftId={empById.get(r.employee_id)?.shift_id} shifts={shifts} />
                   {mode === "clock" && (
                     <>
                       <td className="px-3 py-3">{r.clock_in?.slice(0, 5)}</td>

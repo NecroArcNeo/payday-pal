@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { employeePay, isWeekend, payByRecord, recordPay, shiftFor, splitWeekly, weekEnd, weekStart, type PayRecord } from "./pay";
+import { employeePay, isWeekend, payByRecord, recordPay, shiftFor, shiftForRecord, splitWeekly, weekEnd, weekStart, type PayRecord } from "./pay";
 
 const rules = { threshold: 40, otMultiplier: 1.5, weekendOvertime: true };
 // The week of Mon 2026-10-19 … Sun 2026-10-25.
@@ -57,10 +57,26 @@ describe("overtime", () => {
 });
 
 describe("shifts and manual pay", () => {
-  it("scales the rate by the shift multiplier, with overtime on top", () => {
+  it("scales regular hours by the shift multiplier, but never stacks it with overtime", () => {
     const r = pay([day("2026-10-19", 8), day("2026-10-24", 2)], { shiftMultiplier: 1.25 });
     expect(r.regPay).toBe(8 * 25);
-    expect(r.otPay).toBe(2 * 25 * 1.5);
+    expect(r.otPay).toBe(2 * 20 * 1.5);
+    // A ×1.3 night worker past 40 weekday hours: shift pay for the 40, plain ×1.5 for the rest.
+    const night = pay(weekdays.map((d) => day(d, 9)), { shiftMultiplier: 1.3 });
+    expect([night.regular, night.overtime]).toEqual([40, 5]);
+    expect(night.regPay).toBeCloseTo(40 * 20 * 1.3);
+    expect(night.otPay).toBe(5 * 20 * 1.5);
+  });
+
+  it("pays a day at the record's own shift when it differs from the employee's", () => {
+    const shifts = [{ id: "d", name: "Day", multiplier: 1 }, { id: "n", name: "Night", multiplier: 1.3 }];
+    // A night worker covering a day shift on Monday, then nights the rest of the week.
+    const recs = [day("2026-10-19", 8, { shift_id: "d" }), day("2026-10-20", 8), day("2026-10-21", 8, { shift_id: "gone" })];
+    const r = pay(recs, { shiftMultiplier: 1.3, shifts });
+    expect(r.lines.map((l) => l.regPay)).toEqual([160, 8 * 20 * 1.3, 8 * 20 * 1.3]);
+    expect(shiftForRecord("d", "n", shifts)).toMatchObject({ name: "Day", changed: true });
+    expect(shiftForRecord(null, "n", shifts)).toMatchObject({ name: "Night", changed: false });
+    expect(shiftForRecord("n", "n", shifts)).toMatchObject({ name: "Night", changed: false });
   });
 
   it("pays a manual day exactly what was entered, while its hours still count toward the week", () => {
@@ -115,6 +131,9 @@ describe("salary", () => {
     const r = salary(recs, { to: "2026-11-01", shiftMultiplier: 1.5 });
     expect(r.total).toBe(2 * 40 * 30);
     expect(r.lines.map((l) => l.pay)).toEqual([900, 300, 1200]);
+    // A day on another shift is paid its share at that shift.
+    const covered = salary([day("2026-10-19", 4, { shift_id: "d" }), day("2026-10-20", 4)], { shiftMultiplier: 1.5, shifts: [{ id: "d", name: "Day", multiplier: 1 }] });
+    expect(covered.lines.map((l) => l.pay)).toEqual([400, 600]);
   });
 
   it("counts only the part of a week inside the period, and lets a manual day replace its share", () => {

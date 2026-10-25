@@ -20,6 +20,7 @@ export type Database = {
           field_type: string
           id: string
           label: string
+          section: string | null
           sort_order: number
         }
         Insert: {
@@ -27,6 +28,7 @@ export type Database = {
           field_type?: string
           id?: string
           label: string
+          section?: string | null
           sort_order?: number
         }
         Update: {
@@ -34,6 +36,7 @@ export type Database = {
           field_type?: string
           id?: string
           label?: string
+          section?: string | null
           sort_order?: number
         }
         Relationships: []
@@ -47,6 +50,9 @@ export type Database = {
           country: string | null
           gender: string | null
           nationality: string | null
+          passport_no: string | null
+          residential_status: string | null
+          ssn: string | null
           created_at: string
           custom_fields: Json
           date_of_birth: string | null
@@ -77,6 +83,9 @@ export type Database = {
           country?: string | null
           gender?: string | null
           nationality?: string | null
+          passport_no?: string | null
+          residential_status?: string | null
+          ssn?: string | null
           created_at?: string
           custom_fields?: Json
           date_of_birth?: string | null
@@ -107,6 +116,9 @@ export type Database = {
           country?: string | null
           gender?: string | null
           nationality?: string | null
+          passport_no?: string | null
+          residential_status?: string | null
+          ssn?: string | null
           created_at?: string
           custom_fields?: Json
           date_of_birth?: string | null
@@ -171,6 +183,7 @@ export type Database = {
       }
       payroll_settings: {
         Row: {
+          employee_defaults: Json
           id: boolean
           ot_multiplier: number
           ot_threshold: number
@@ -179,6 +192,7 @@ export type Database = {
           visible_columns: string[]
         }
         Insert: {
+          employee_defaults?: Json
           id?: boolean
           ot_multiplier?: number
           ot_threshold?: number
@@ -187,6 +201,7 @@ export type Database = {
           visible_columns?: string[]
         }
         Update: {
+          employee_defaults?: Json
           id?: boolean
           ot_multiplier?: number
           ot_threshold?: number
@@ -207,6 +222,7 @@ export type Database = {
           id: string
           lunch_minutes: number
           pay_override: number | null
+          shift_id: string | null
           note: string | null
           work_date: string
         }
@@ -220,6 +236,7 @@ export type Database = {
           id?: string
           lunch_minutes?: number
           pay_override?: number | null
+          shift_id?: string | null
           note?: string | null
           work_date: string
         }
@@ -233,6 +250,7 @@ export type Database = {
           id?: string
           lunch_minutes?: number
           pay_override?: number | null
+          shift_id?: string | null
           note?: string | null
           work_date?: string
         }

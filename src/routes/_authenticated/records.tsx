@@ -8,10 +8,12 @@ import type { RecordFilter } from "@/lib/db/store";
 import type { TablesInsert } from "@/integrations/supabase/types";
 import { AppShell, btnGhost, btnPrimary, inputCls } from "@/components/AppShell";
 import { RecordsLedger, type EntryMode } from "@/components/RecordsLedger";
+import { RecordShiftSelect } from "@/components/RecordPay";
 import { EmployeePicker, SearchInput } from "@/components/EmployeeSearch";
 import { describeEmployeeFilter, isFiltering, matchesEmployee, NO_FILTER, searchEmployees, type EmployeeFilter } from "@/lib/employee-search";
-import { addDays, computeHours, fullName, isoDate, useEmployees, weekday, type Employee, type TimeRecord } from "@/lib/payroll";
-import { Pencil, Trash2, X } from "lucide-react";
+import { addDays, computeHours, fullName, isoDate, useEmployees, useShifts, weekday, type Employee, type TimeRecord } from "@/lib/payroll";
+import { shiftFor } from "@/lib/pay";
+import { Check, Pencil, Plus, Trash2, X } from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated/records")({
   head: () => ({ meta: [{ title: "Time records — Meridian Payroll" }] }),
@@ -29,12 +31,23 @@ function RecordsPage() {
   const [to, setTo] = useState("");
 
   const [mode, setMode] = useState<"clock" | "hours">("clock");
-  const [f, setF] = useState({ work_date: isoDate(new Date()), clock_in: "09:00", clock_out: "17:00", lunch_minutes: "30", hours: "8", pay: "" });
+  const { data: shifts = [] } = useShifts();
+  const [f, setF] = useState({ work_date: isoDate(new Date()), clock_in: "09:00", clock_out: "17:00", lunch_minutes: "30", hours: "8", pay: "", shift_id: "" });
   const [picked, setPicked] = useState<string[]>([]);
   const [pickQ, setPickQ] = useState<EmployeeFilter>(NO_FILTER);
   const [listQ, setListQ] = useState<EmployeeFilter>(NO_FILTER);
-  const shownEmployees = useMemo(() => searchEmployees(employees, pickQ), [employees, pickQ]);
+  // Resigned employees can't be given new hours, so they aren't offered here (their old records still list below).
+  const working = useMemo(() => employees.filter((e) => e.active), [employees]);
+  const resigned = employees.length - working.length;
+  const shownEmployees = useMemo(() => searchEmployees(working, pickQ), [working, pickQ]);
   const toggle = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+  // Drop picks of anyone who resigned or was deleted meanwhile.
+  useEffect(() => {
+    setPicked((p) => { const ok = p.filter((id) => working.some((e) => e.id === id)); return ok.length === p.length ? p : ok; });
+  }, [working]);
+  // After "Select all", the few people left out are easier to see than everyone who's in.
+  const left = working.filter((e) => !picked.includes(e.id));
+  const showLeftOut = picked.length > 0 && left.length > 0 && left.length <= picked.length && left.length <= 20;
 
   const preview = mode === "clock" ? computeHours(f.clock_in, f.clock_out, Number(f.lunch_minutes) || 0) : Number(f.hours) || 0;
 
@@ -48,10 +61,12 @@ function RecordsPage() {
     const pay = f.pay.trim() === "" ? null : Number(f.pay.replace(/[$,\s]/g, ""));
     if (pay !== null && (!Number.isFinite(pay) || pay < 0 || pay > 100000)) { toast.error("Day pay must be an amount from $0 to $100,000, or empty"); return; }
     const manual = pay === null ? {} : { pay_override: Math.round(pay * 100) / 100 };
+    // Only store a shift when it differs from the person's usual one.
+    const shiftOf = (id: string) => (f.shift_id && f.shift_id !== shiftFor(employees.find((e) => e.id === id)?.shift_id, shifts).id ? { shift_id: f.shift_id } : {});
     const rows: TablesInsert<"time_records">[] = picked.map((employee_id) =>
       mode === "clock"
-        ? { employee_id, work_date: f.work_date, entry_mode: "clock", clock_in: f.clock_in, clock_out: f.clock_out, lunch_minutes: lunch, ...manual }
-        : { employee_id, work_date: f.work_date, entry_mode: "hours", hours, ...manual });
+        ? { employee_id, work_date: f.work_date, entry_mode: "clock", clock_in: f.clock_in, clock_out: f.clock_out, lunch_minutes: lunch, ...manual, ...shiftOf(employee_id) }
+        : { employee_id, work_date: f.work_date, entry_mode: "hours", hours, ...manual, ...shiftOf(employee_id) });
     const { error } = await db().insert("time_records", rows);
     if (error) { toast.error(error.message); return; }
     toast.success(rows.length === 1 ? "Record added" : `${rows.length} records added`);
@@ -126,31 +141,47 @@ function RecordsPage() {
         </div>
         <div>
           <div className="mb-2 flex items-center justify-between">
-            <span className="label-mono">Employees · {picked.length} selected</span>
+            <span className="label-mono">Employees · {picked.length} of {working.length} selected</span>
             <div className="flex gap-3 text-xs text-muted-foreground">
               <button type="button" className="hover:text-foreground"
-                onClick={() => setPicked((p) => [...new Set([...p, ...shownEmployees.filter((e) => e.active).map((e) => e.id)])])}>
-                {isFiltering(pickQ) ? `Select all ${shownEmployees.filter((e) => e.active).length} shown` : "Select all"}
+                onClick={() => setPicked((p) => [...new Set([...p, ...shownEmployees.map((e) => e.id)])])}>
+                {isFiltering(pickQ) ? `Select all ${shownEmployees.length} shown` : "Select all"}
               </button>
               <button type="button" className="hover:text-foreground" onClick={() => setPicked([])}>Clear</button>
             </div>
           </div>
-          <SearchInput value={pickQ} onChange={setPickQ} employees={employees} className="mb-2" />
+          <SearchInput value={pickQ} onChange={setPickQ} employees={working} className="mb-2" />
           <div className="flex max-h-40 flex-wrap gap-2 overflow-y-auto">
-            {employees.length === 0 && <span className="text-sm text-muted-foreground">No employees yet.</span>}
-            {employees.length > 0 && shownEmployees.length === 0 && <span className="text-sm text-muted-foreground">No employee matches {describeEmployeeFilter(pickQ)}.</span>}
+            {working.length === 0 && <span className="text-sm text-muted-foreground">{resigned ? "Everyone has resigned." : "No employees yet."}</span>}
+            {working.length > 0 && shownEmployees.length === 0 && <span className="text-sm text-muted-foreground">No employee matches {describeEmployeeFilter(pickQ)}.</span>}
             {shownEmployees.map((e) => {
               const on = picked.includes(e.id);
               return (
-                <button type="button" key={e.id} onClick={() => toggle(e.id)}
+                <button type="button" key={e.id} onClick={() => toggle(e.id)} aria-pressed={on} title={on ? "Click to leave out" : "Click to include"}
                   className={`rounded-lg px-3 py-1.5 text-sm ring-1 ring-border ${on ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground hover:text-foreground"}`}>
+                  {on && <Check className="-ml-0.5 mr-1 inline h-3.5 w-3.5" />}
                   {fullName(e)} <span className="font-mono text-[11px] opacity-70">{e.employee_code}</span>
                 </button>
               );
             })}
           </div>
+          {showLeftOut && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+              <span>Everyone selected except</span>
+              {left.map((e) => (
+                <button type="button" key={e.id} onClick={() => toggle(e.id)} title="Add back"
+                  className="rounded-md bg-secondary px-2 py-0.5 ring-1 ring-border hover:text-foreground">
+                  {fullName(e)} <Plus className="inline h-3 w-3" />
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="mt-1 text-xs text-muted-foreground">
+            Click a name to include or leave them out. To add for everyone but a few people, press Select all, then click the ones to leave out.
+            {resigned > 0 && ` ${resigned} resigned employee${resigned === 1 ? " is" : "s are"} hidden.`}
+          </div>
         </div>
-        <div className="grid items-end gap-3 md:grid-cols-7">
+        <div className="grid items-end gap-3 md:grid-cols-8">
           <label><span className="label-mono">Date{f.work_date && ` · ${weekday(f.work_date)}`}</span><input type="date" className={`${inputCls} mt-1`} value={f.work_date} onChange={(e) => setF({ ...f, work_date: e.target.value })} required /></label>
           {mode === "clock" ? (
             <>
@@ -161,6 +192,10 @@ function RecordsPage() {
           ) : (
             <label className="md:col-span-3"><span className="label-mono">Hours worked</span><input type="number" step="0.25" min={0} max={24} className={`${inputCls} mt-1`} value={f.hours} onChange={(e) => setF({ ...f, hours: e.target.value })} /></label>
           )}
+          <label title="For covering a different shift than usual, e.g. a night worker on a day shift. Overtime pays the same either way.">
+            <span className="label-mono">Shift</span>
+            <RecordShiftSelect value={f.shift_id} onChange={(id) => setF({ ...f, shift_id: id })} shifts={shifts} ownLabel="Each person's usual" className={`${inputCls} mt-1`} />
+          </label>
           <label title="Leave empty to pay from hours. Enter an amount to pay exactly that for the day.">
             <span className="label-mono">Day pay (optional)</span>
             <input className={`${inputCls} mt-1`} inputMode="decimal" placeholder="auto" value={f.pay} onChange={(e) => setF({ ...f, pay: e.target.value })} />
@@ -231,7 +266,8 @@ function BulkRecordEdit({ mode, employees, label, load, onClose, onDone }: {
   load: () => Promise<Pick<TimeRecord, "id" | "work_date" | "entry_mode">[]>; onClose: () => void; onDone: () => void;
 }) {
   const [on, setOn] = useState<Record<string, boolean>>({});
-  const [v, setV] = useState({ employee_id: "", date: "", shift: "1", clock_in: "09:00", clock_out: "17:00", lunch_minutes: "30", hours: "8", note: "", pay: "" });
+  const { data: shifts = [] } = useShifts();
+  const [v, setV] = useState({ employee_id: "", date: "", shift: "1", clock_in: "09:00", clock_out: "17:00", lunch_minutes: "30", hours: "8", note: "", pay: "", shift_id: "" });
   const [dateMode, setDateMode] = useState<DateMode>("set");
   const [busy, setBusy] = useState(false);
   // "Edit all" lives in the table footer, often far below this panel: bring the panel into view when it opens or changes target.
@@ -259,6 +295,7 @@ function BulkRecordEdit({ mode, employees, label, load, onClose, onDone }: {
     if (on["clock_out"]) changes.push(`clock out → ${v.clock_out}`);
     if (on["lunch_minutes"]) changes.push(`lunch → ${v.lunch_minutes} min`);
   } else if (on["hours"]) changes.push(`hours → ${v.hours}`);
+  if (on["shift_id"]) changes.push(v.shift_id ? `shift → ${shifts.find((x) => x.id === v.shift_id)?.name ?? "?"}` : "shift → each person's usual");
   if (on["note"]) changes.push(v.note.trim() ? `note → “${v.note.trim()}”` : "clear note");
   const payNum = Number(v.pay.replace(/[$,\s]/g, ""));
   if (on["pay"]) changes.push(v.pay.trim() ? `day pay → ${Number.isFinite(payNum) ? `$${payNum.toFixed(2)}` : "?"} (manual)` : "calculate day pay from hours");
@@ -283,6 +320,7 @@ function BulkRecordEdit({ mode, employees, label, load, onClose, onDone }: {
           if (on["clock_out"]) patch["clock_out"] = v.clock_out;
           if (on["lunch_minutes"]) patch["lunch_minutes"] = lunch;
         } else if (on["hours"]) patch["hours"] = hours;
+        if (on["shift_id"]) patch["shift_id"] = v.shift_id || null;
         if (on["note"]) patch["note"] = v.note.trim().slice(0, 300) || null;
         if (on["pay"]) patch["pay_override"] = v.pay.trim() ? Math.round(payNum * 100) / 100 : null;
         return { id: r.id, patch };
@@ -310,7 +348,7 @@ function BulkRecordEdit({ mode, employees, label, load, onClose, onDone }: {
         <button onClick={onClose} className={btnGhost} aria-label="Close"><X className="h-4 w-4" /></button>
       </div>
       <div className="grid gap-2 md:grid-cols-2">
-        {row("employee_id", "Employee", <EmployeePicker employees={employees} value={v.employee_id} onChange={(id) => set("employee_id", id)} placeholder="Move to employee…" />)}
+        {row("employee_id", "Employee", <EmployeePicker employees={employees} hideResigned value={v.employee_id} onChange={(id) => set("employee_id", id)} placeholder="Move to employee…" />)}
         {row("date", "Date", (
           <div className="flex gap-2">
             <select className={`${inputCls} w-auto`} value={dateMode} onChange={(e) => { setDateMode(e.target.value as DateMode); setOn((o) => ({ ...o, date: true })); }} aria-label="How to change the date">
@@ -329,6 +367,7 @@ function BulkRecordEdit({ mode, employees, label, load, onClose, onDone }: {
             {row("lunch_minutes", "Lunch (min)", <input type="number" min={0} max={600} className={inputCls} value={v.lunch_minutes} onChange={(e) => set("lunch_minutes", e.target.value)} aria-label="New lunch minutes" />)}
           </>
         ) : row("hours", "Hours", <input type="number" step="0.25" min={0} max={24} className={inputCls} value={v.hours} onChange={(e) => set("hours", e.target.value)} aria-label="New hours" />)}
+        {shifts.length > 0 && row("shift_id", "Shift", <RecordShiftSelect value={v.shift_id} onChange={(id) => set("shift_id", id)} shifts={shifts} ownLabel="Each person's usual" className={inputCls} />)}
         {row("note", "Note", <input className={inputCls} value={v.note} placeholder="Leave empty to clear" onChange={(e) => set("note", e.target.value)} aria-label="New note" />)}
         {row("pay", "Manual day pay", <input className={inputCls} inputMode="decimal" value={v.pay} placeholder="Empty = calculate from hours" onChange={(e) => set("pay", e.target.value)} aria-label="New manual pay" />)}
       </div>

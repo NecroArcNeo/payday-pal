@@ -26,6 +26,7 @@ const builtInCols: { key: string; label: string; get: (e: Employee) => string }[
   { key: "phone", label: "Phone", get: (e) => e.phone ?? "" },
   { key: "gender", label: "Gender", get: (e) => e.gender ?? "" },
   { key: "nationality", label: "Nationality", get: (e) => e.nationality ?? "" },
+  { key: "residential_status", label: "Residential status", get: (e) => e.residential_status ?? "" },
   { key: "hire_date", label: "Hire date", get: (e) => e.hire_date ?? "" },
 ];
 
@@ -68,7 +69,7 @@ function PayrollPage() {
     .map((e) => {
       const rate = Number(e.hourly_rate);
       const shift = shiftFor(e.shift_id, shifts);
-      const p = employeePay(byEmp.get(e.id) ?? [], { rate, shiftMultiplier: shift.multiplier, rules, payType: e.pay_type, from, to });
+      const p = employeePay(byEmp.get(e.id) ?? [], { rate, shiftMultiplier: shift.multiplier, rules, payType: e.pay_type, shifts, from, to });
       const extras: Record<string, number> = {};
       for (const a of adjustments) if (a.employee_id === e.id) extras[a.category] = (extras[a.category] ?? 0) + Number(a.amount);
       const extraTotal = Object.values(extras).reduce((s, n) => s + n, 0);
@@ -128,7 +129,7 @@ function PayrollPage() {
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-3">
           <span className="text-xs text-muted-foreground">
             Overtime ({mult}× rate): {weekendOt ? `every Saturday and Sunday hour, plus weekday hours over ${threshold}` : `hours over ${threshold}`} in a Mon–Sun week.
-            {" "}Shift multipliers scale the hourly rate. Salaried employees get {threshold} h × rate for each week they work, with no overtime. Days with manual pay are paid exactly the amount entered.
+            {" "}Shift multipliers scale the rate for regular hours only; overtime is always {mult}× the base rate, never stacked with the shift. Salaried employees get {threshold} h × rate for each week they work, with no overtime. Days with manual pay are paid exactly the amount entered.
             {isFiltering(q) && ` Showing ${shown.length} of ${list.length}; totals above include everyone.`}
           </span>
           <SearchInput value={q} onChange={setQ} employees={list.map((r) => r.e)} className="w-full max-w-xl" />
@@ -344,7 +345,7 @@ function ShiftsPanel({ shifts, employees, onChange }: { shifts: Shift[]; employe
       <div className="border-b border-border px-5 py-4">
         <div className="font-display font-extrabold tracking-tight">Shifts</div>
         <p className="text-xs text-muted-foreground">
-          Each employee is on one shift. The multiplier scales their hourly rate (1 = normal, 1.1 = 10% more); overtime is paid on top.
+          Each employee is on one shift. The multiplier scales their rate for regular hours (1 = normal, 1.1 = 10% more). Overtime hours are paid at the overtime rate instead, not stacked with the shift. A single day can be put on another shift on the Time records page.
           New employees start on the first shift.
         </p>
       </div>

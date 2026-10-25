@@ -30,7 +30,7 @@ To run a production build: `npm run build`, then `node .output/server/index.mjs`
    VITE_SUPABASE_PUBLISHABLE_KEY=<publishable-key>
    ```
 
-2. Apply `drizzle/migrations/0003_local_first_sync.sql` then `0004_shifts_manual_pay.sql`, then `0005_pay_type.sql`, then `0006_gender_nationality.sql` to the Supabase database, either with `DATABASE_URL=<postgres connection string> npx drizzle-kit migrate` or by pasting each file into the Supabase SQL editor and running it once, in order. It assigns existing cloud data to the admin account and saves a copy of it in `cloud_backups` first. If anything fails, nothing changes.
+2. Apply `drizzle/migrations/0003_local_first_sync.sql` then `0004_shifts_manual_pay.sql`, then `0005_pay_type.sql`, then `0006_gender_nationality.sql`, then `0007_employee_defaults.sql`, then `0008_id_documents_category_sections.sql`, then `0009_record_shift.sql` to the Supabase database, either with `DATABASE_URL=<postgres connection string> npx drizzle-kit migrate` or by pasting each file into the Supabase SQL editor and running it once, in order. It assigns existing cloud data to the admin account and saves a copy of it in `cloud_backups` first. If anything fails, nothing changes.
 3. For "Continue with Google", enable the Google provider in the Supabase dashboard (Authentication → Providers) with a Google Cloud OAuth client, and add your app's URL (e.g. `http://localhost:8080/sync`) to the allowed redirect URLs.
 
 Database migrations live in `drizzle/migrations`; the on-device schema is in `src/lib/db/schema.ts`.

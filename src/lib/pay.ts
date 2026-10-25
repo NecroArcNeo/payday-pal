@@ -5,15 +5,19 @@
 // * Monday–Friday hours become overtime once the week's weekday hours pass the
 //   threshold (40 by default). Weeks run Monday–Sunday; hours are counted in
 //   date order, so the hours past the threshold are the later ones.
-// * The employee's shift multiplier scales their hourly rate; overtime is then
-//   paid at rate × shift × overtime multiplier.
+// * Each day is worked on a shift: the one set on the record, else the
+//   employee's own. The shift multiplier scales the rate for regular hours
+//   only. Overtime is paid at rate × overtime multiplier, never stacked with
+//   the shift (a ×1.3 night worker's overtime pays ×1.5, not ×1.95).
 // * Salaried employees are paid a full week — threshold hours (40) × rate ×
 //   shift — for every week they have time records, however many hours that is,
-//   and never overtime. The week's pay is shared across its days by hours.
+//   and never overtime. The week's pay is shared across its days by hours,
+//   each day's share at that day's shift.
 // * A day with manual pay is paid exactly that amount. Its hours still count
 //   toward the week, so they can push later days into overtime; for salaried
 //   employees it replaces that day's share of the week.
 
+export type PayShift = { id: string; multiplier: number | string; name: string };
 export type PayRules = { threshold: number; otMultiplier: number; weekendOvertime: boolean };
 export type PayType = "hourly" | "salary";
 export const PAY_TYPES: { value: PayType; label: string }[] = [{ value: "hourly", label: "Hourly" }, { value: "salary", label: "Salary" }];
@@ -25,9 +29,12 @@ export type PayRecord = {
   clock_in?: string | null;
   created_at?: string | null;
   pay_override?: number | string | null;
+  /** The shift this day was worked on, when it differs from the employee's. */
+  shift_id?: string | null;
 };
 
-export type PayOptions = { rate: number; shiftMultiplier: number; rules: PayRules; payType?: string | null | undefined };
+/** `shiftMultiplier` is the employee's own shift; `shifts` lets a record's own shift_id override it. */
+export type PayOptions = { rate: number; shiftMultiplier: number; rules: PayRules; payType?: string | null | undefined; shifts?: PayShift[] | undefined };
 
 /** One record's share of pay. `regPay`/`otPay` are 0 on a manual day; `pay` is what the day pays. */
 export type PayLine = {
@@ -88,7 +95,10 @@ const isManual = (r: PayRecord) => r.pay_override !== null && r.pay_override !==
 
 /** Each record's hours and pay. Pass all of one employee's records for the weeks involved. */
 export function recordPay(records: PayRecord[], opts: PayOptions): Map<string, PayLine> {
-  const base = opts.rate * opts.shiftMultiplier;
+  const multiplierOf = (r: PayRecord) => {
+    const own = r.shift_id ? opts.shifts?.find((x) => x.id === r.shift_id) : undefined;
+    return own ? Number(own.multiplier) : opts.shiftMultiplier;
+  };
   const out = new Map<string, PayLine>();
   const sorted = [...records].sort(chronological);
   const hoursOf = (r: PayRecord) => Math.max(0, Number(r.hours) || 0);
@@ -99,11 +109,11 @@ export function recordPay(records: PayRecord[], opts: PayOptions): Map<string, P
     for (const recs of weeks.values()) {
       const paid = recs.filter((r) => !isManual(r));
       const hours = paid.reduce((s, r) => s + hoursOf(r), 0);
-      const salary = base * opts.rules.threshold;
+      const salary = opts.rate * opts.rules.threshold;
       for (const r of recs) {
         const manual = isManual(r);
         const share = manual ? 0 : hours > 0 ? hoursOf(r) / hours : 1 / paid.length;
-        const regPay = salary * share;
+        const regPay = salary * share * multiplierOf(r);
         out.set(r.id, { id: r.id, regular: hoursOf(r), overtime: 0, weekend: isWeekend(r.work_date), manual, salary: true, regPay, otPay: 0, pay: manual ? Number(r.pay_override) : regPay });
       }
     }
@@ -114,8 +124,8 @@ export function recordPay(records: PayRecord[], opts: PayOptions): Map<string, P
   for (const r of sorted) {
     const s = split.get(r.id)!;
     const manual = isManual(r);
-    const regPay = manual ? 0 : s.regular * base;
-    const otPay = manual ? 0 : s.overtime * base * opts.rules.otMultiplier;
+    const regPay = manual ? 0 : s.regular * opts.rate * multiplierOf(r);
+    const otPay = manual ? 0 : s.overtime * opts.rate * opts.rules.otMultiplier;
     out.set(r.id, { id: r.id, ...s, manual, salary: false, regPay, otPay, pay: manual ? Number(r.pay_override) : regPay + otPay });
   }
   return out;
@@ -147,7 +157,6 @@ export function employeePay(records: PayRecord[], opts: PayOptions & { from: str
 }
 
 type PayEmployee = { id: string; hourly_rate: number | string; shift_id?: string | null; pay_type?: string | null };
-type PayShift = { id: string; multiplier: number | string; name: string };
 
 /** Pay for every record, across employees. Pass whole Mon–Sun weeks of records so overtime and salary are right. */
 export function payByRecord(records: (PayRecord & { employee_id: string })[], employees: PayEmployee[], shifts: PayShift[], rules: PayRules): Map<string, PayLine> {
@@ -157,7 +166,7 @@ export function payByRecord(records: (PayRecord & { employee_id: string })[], em
   for (const e of employees) {
     const recs = byEmp.get(e.id);
     if (!recs) continue;
-    const lines = recordPay(recs, { rate: Number(e.hourly_rate), shiftMultiplier: shiftFor(e.shift_id, shifts).multiplier, rules, payType: e.pay_type });
+    const lines = recordPay(recs, { rate: Number(e.hourly_rate), shiftMultiplier: shiftFor(e.shift_id, shifts).multiplier, rules, payType: e.pay_type, shifts });
     for (const [id, l] of lines) out.set(id, l);
   }
   return out;
@@ -167,4 +176,10 @@ export function payByRecord(records: (PayRecord & { employee_id: string })[], em
 export function shiftFor<S extends { id: string; multiplier: number | string; name: string }>(shiftId: string | null | undefined, shifts: S[]) {
   const s = shifts.find((x) => x.id === shiftId) ?? shifts[0];
   return { id: s?.id ?? null, name: s?.name ?? "Day", multiplier: s ? Number(s.multiplier) : 1 };
+}
+
+/** The shift a day was worked on: the record's own when set (and still existing), else the employee's. */
+export function shiftForRecord<S extends PayShift>(recordShiftId: string | null | undefined, employeeShiftId: string | null | undefined, shifts: S[]) {
+  const own = recordShiftId ? shifts.find((x) => x.id === recordShiftId) : undefined;
+  return { ...shiftFor(own ? own.id : employeeShiftId, shifts), changed: !!own && own.id !== shiftFor(employeeShiftId, shifts).id };
 }

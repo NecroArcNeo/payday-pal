@@ -13,7 +13,7 @@ function haystack(e: Employee): string {
     h = [
       e.first_name, e.last_name, `${e.first_name} ${e.last_name}`, `${e.last_name}, ${e.first_name}`,
       e.employee_code, e.email, e.department, e.job_title, e.phone, e.phone?.replace(/\D/g, ""),
-      e.city, e.state, e.country, e.gender, e.nationality, e.postal_code, e.active ? "active" : "inactive", ...custom,
+      e.city, e.state, e.country, e.gender, e.nationality, e.residential_status, e.postal_code, e.active ? "active" : "resigned inactive", ...custom,
     ].filter(Boolean).join(" \u0001 ").toLowerCase();
     haystacks.set(e, h);
   }

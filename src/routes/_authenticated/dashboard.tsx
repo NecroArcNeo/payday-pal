@@ -26,7 +26,7 @@ function Dashboard() {
   for (const e of employees) {
     const recs = all.filter((r) => r.employee_id === e.id);
     if (!recs.length) continue;
-    const p = employeePay(recs, { rate: Number(e.hourly_rate), shiftMultiplier: shiftFor(e.shift_id, shifts).multiplier, rules, payType: e.pay_type, from: week.from, to: week.to });
+    const p = employeePay(recs, { rate: Number(e.hourly_rate), shiftMultiplier: shiftFor(e.shift_id, shifts).multiplier, rules, payType: e.pay_type, shifts, from: week.from, to: week.to });
     byEmp.set(e.id, { name: fullName(e), hours: p.regular + p.overtime, pay: p.total });
   }
   const gross = [...byEmp.values()].reduce((s, x) => s + x.pay, 0);

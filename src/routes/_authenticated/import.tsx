@@ -7,7 +7,10 @@ import { db, storeFor, useDataMode } from "@/lib/db/mode";
 import { backupBefore } from "@/lib/db/safety";
 import { AppShell, btnGhost, btnPrimary, inputCls } from "@/components/AppShell";
 import { EmployeePicker } from "@/components/EmployeeSearch";
-import { fullName, useEmployees, useFieldDefs, useShifts, type Employee, type FieldDef } from "@/lib/payroll";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Check, Plus, X } from "lucide-react";
+import { NO_DEFAULTS } from "@/lib/employee-fields";
+import { fullName, useEmployeeDefaults, useEmployees, useFieldDefs, useShifts, type Employee, type FieldDef } from "@/lib/payroll";
 import {
   columnLetter, fieldsFor, guessColumns, guessSetup, lastFilledRow, MAX_ROWS, norm, parsePeople, parseRecords, readWorkbook, recordKey, rowNumber,
   type DateOrder, type PersonRow, type RecordRow, type Role, type Sheet, type SheetSetup, type Target,
@@ -82,6 +85,7 @@ function ImportPage() {
   const mode = useDataMode();
   const { data: employees = [] } = useEmployees();
   const { data: defs = [] } = useFieldDefs();
+  const { data: defaults = NO_DEFAULTS } = useEmployeeDefaults();
   const { data: shifts = [] } = useShifts();
   const [file, setFile] = useState("");
   const [sheets, setSheets] = useState<Sheet[]>([]);
@@ -98,6 +102,7 @@ function ImportPage() {
       const list = readWorkbook(await f.arrayBuffer(), f.name);
       if (!list.some((s) => s.grid.length)) { toast.error("This file has no data"); return; }
       setFile(f.name);
+      skippedAs.current.clear();
       setSheets(list);
       setSetups(list.map((s) => { const g = guessSetup(s, defs); return recall(s, g, defs) ?? g; }));
       setActive(Math.max(0, list.findIndex((s) => s.grid.length)));
@@ -106,7 +111,24 @@ function ImportPage() {
     }
   };
 
-  const update = (i: number, patch: Partial<SheetSetup>) => setSetups((all) => all.map((s, j) => (j === i ? { ...s, ...patch } : s)));
+  const update = (i: number, patch: Partial<SheetSetup>) => {
+    // Remember what a skipped sheet was, so bringing it back restores it as it was.
+    if (patch.role === "ignore" && setups[i] && setups[i]!.role !== "ignore") skippedAs.current.set(i, setups[i]!.role);
+    setSetups((all) => all.map((s, j) => (j === i ? { ...s, ...patch } : s)));
+  };
+  const skippedAs = useRef(new Map<number, Role>());
+  const shownSheets = sheets.map((_, i) => i).filter((i) => setups[i]?.role !== "ignore");
+  const skipSheet = (i: number) => {
+    update(i, { role: "ignore" });
+    if (i === active || !shownSheets.includes(active)) setActive(shownSheets.find((j) => j > i) ?? [...shownSheets].reverse().find((j) => j < i) ?? i);
+  };
+  const restoreSheet = (i: number) => {
+    const s = sheets[i]!, setup = setups[i]!;
+    let role = skippedAs.current.get(i);
+    if (!role) { const g = guessSetup(s, defs).role; role = g === "ignore" ? "people" : g; }
+    update(i, { role, columns: role === skippedAs.current.get(i) ? setup.columns : guessColumns(s, setup.headerRow, role, defs) });
+    setActive(i);
+  };
 
   // ---- preview: parse exactly what Import would save
   const newCategories = useMemo(() => {
@@ -118,12 +140,12 @@ function ImportPage() {
   const preview = useMemo(() => {
     const taken = new Set(employees.map((e) => e.employee_code.toLowerCase()));
     const resolve = (t: Target) => (t.startsWith("custom:") ? t.slice(7) : newCategories.has(t) ? t : undefined);
-    const people = sheets.map((s, i) => (setups[i]?.role === "people" ? parsePeople(s, setups[i]!, employees, taken, resolve, shifts) : null));
+    const people = sheets.map((s, i) => (setups[i]?.role === "people" ? parsePeople(s, setups[i]!, employees, taken, resolve, shifts, defaults) : null));
     const newPeople = people.flatMap((r) => r?.ok ?? []);
     const pool = [...employees, ...newPeople.filter((p) => !employees.some((e) => e.employee_code.toLowerCase() === p.employee_code.toLowerCase()))];
     const records = sheets.map((s, i) => (setups[i]?.role === "records" ? parseRecords(s, setups[i]!, pool) : null));
     return { people, newPeople, records };
-  }, [sheets, setups, employees, newCategories, shifts]);
+  }, [sheets, setups, employees, newCategories, shifts, defaults]);
 
   const allRecords = useMemo(() => preview.records.flatMap((r) => r?.ok ?? []), [preview]);
   const range = allRecords.length
@@ -162,7 +184,7 @@ function ImportPage() {
       // 3. People, then re-read employees so new people's hours can link to them.
       const taken = new Set(employees.map((e) => e.employee_code.toLowerCase()));
       const resolve = (t: Target) => (t.startsWith("custom:") ? t.slice(7) : created.get(t));
-      const people: PersonRow[] = sheets.flatMap((s, i) => (setups[i]!.role === "people" ? parsePeople(s, setups[i]!, employees, taken, resolve, shifts).ok : []));
+      const people: PersonRow[] = sheets.flatMap((s, i) => (setups[i]!.role === "people" ? parsePeople(s, setups[i]!, employees, taken, resolve, shifts, defaults).ok : []));
       let fresh: Employee[] = employees;
       if (people.length) {
         const { error } = await db().upsertEmployeesByCode(people as never);
@@ -196,8 +218,10 @@ function ImportPage() {
     }
   };
 
-  const sheet = sheets[active];
-  const setup = setups[active];
+  // Skipped sheets have no tab; if the open one was just skipped, show the first remaining one.
+  const current = shownSheets.includes(active) ? active : shownSheets[0];
+  const sheet = current === undefined ? undefined : sheets[current];
+  const setup = current === undefined ? undefined : setups[current];
 
   return (
     <AppShell eyebrow="Import" title="Import from CSV or Excel">
@@ -221,28 +245,60 @@ function ImportPage() {
         </div>
       </div>
 
-      {sheet && setup && (
+      {sheets.length > 0 && (
         <>
-          <div className="flex flex-wrap gap-2">
-            {sheets.map((s, i) => {
-              const role = setups[i]!.role;
-              const n = role === "people" ? preview.people[i]?.ok.length ?? 0 : role === "records" ? preview.records[i]?.ok.length ?? 0 : 0;
+          <div className="flex flex-wrap items-stretch gap-2">
+            {shownSheets.map((i) => {
+              const s = sheets[i]!, role = setups[i]!.role;
+              const n = role === "people" ? preview.people[i]?.ok.length ?? 0 : preview.records[i]?.ok.length ?? 0;
               return (
-                <button key={s.name} onClick={() => setActive(i)}
-                  className={`rounded-xl px-3 py-2 text-left text-sm ring-1 ${i === active ? "bg-accent ring-primary/30" : "bg-secondary ring-border"}`}>
-                  <div className="font-medium">{s.name}</div>
-                  <div className="text-[11px] text-muted-foreground">{role === "ignore" ? "Skipped" : `${role === "people" ? "People" : "Hours"} · ${n} rows`}</div>
-                </button>
+                <div key={s.name} className={`relative rounded-xl ring-1 ${i === current ? "bg-accent ring-primary/30" : "bg-secondary ring-border"}`}>
+                  <button onClick={() => setActive(i)} className="py-2 pl-3 pr-8 text-left text-sm">
+                    <div className="font-medium">{s.name}</div>
+                    <div className="text-[11px] text-muted-foreground">{role === "people" ? "People" : "Hours"} · {n} rows</div>
+                  </button>
+                  <button onClick={() => skipSheet(i)} aria-label={`Skip sheet ${s.name}`} title="Skip this sheet (bring it back with +)"
+                    className="absolute right-1.5 top-1.5 rounded-md p-0.5 text-muted-foreground hover:bg-background hover:text-destructive">
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               );
             })}
+            {sheets.length > 1 && (
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button className="rounded-xl border border-dashed border-border px-3 text-sm text-muted-foreground hover:text-foreground" aria-label="Sheets in this file" title="Bring back a skipped sheet">
+                    <Plus className="inline h-4 w-4" />{shownSheets.length < sheets.length && <span className="ml-1 text-xs">{sheets.length - shownSheets.length} skipped</span>}
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent align="start" className="w-64 p-1">
+                  <div className="px-2 py-1.5 text-xs text-muted-foreground">Sheets in {file}</div>
+                  {sheets.map((s, i) => {
+                    const skipped = setups[i]!.role === "ignore";
+                    return (
+                      <button key={s.name} onClick={() => (skipped ? restoreSheet(i) : setActive(i))}
+                        className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-secondary">
+                        <span className={`truncate ${skipped ? "text-muted-foreground" : ""}`}>{s.name}</span>
+                        <span className="shrink-0 text-[11px] text-muted-foreground">
+                          {skipped ? <><Plus className="mr-0.5 inline h-3 w-3" />{s.grid.length ? "add back" : "empty"}</> : <Check className="inline h-3.5 w-3.5" />}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </PopoverContent>
+              </Popover>
+            )}
           </div>
 
-          <SheetEditor
-            key={active} sheet={sheet} setup={setup} defs={defs} employees={employees}
-            onChange={(p) => update(active, p)}
-            result={setup.role === "people" ? { count: preview.people[active]?.ok.length ?? 0, errs: preview.people[active]?.errs.length ?? 0, blank: 0 }
-              : setup.role === "records" ? { count: preview.records[active]?.ok.length ?? 0, errs: preview.records[active]?.errs.length ?? 0, blank: preview.records[active]?.blankDays ?? 0 } : null}
-          />
+          {(!sheet || !setup || current === undefined) && (
+            <div className="glass-panel p-6 text-sm text-muted-foreground">Every sheet is skipped. Press + to bring one back.</div>
+          )}
+          {sheet && setup && current !== undefined && <SheetEditor
+            key={current} sheet={sheet} setup={setup} defs={defs} employees={employees}
+            onChange={(p) => update(current, p)}
+            result={setup.role === "people" ? { count: preview.people[current]?.ok.length ?? 0, errs: preview.people[current]?.errs.length ?? 0, blank: 0 }
+              : setup.role === "records" ? { count: preview.records[current]?.ok.length ?? 0, errs: preview.records[current]?.errs.length ?? 0, blank: preview.records[current]?.blankDays ?? 0 } : null}
+          />}
 
           <div className="glass-panel space-y-3 p-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -291,6 +347,33 @@ function findDuplicates(records: RecordRow[], existing: { employee_id: string; w
 }
 
 // ---------------------------------------------------------------- one sheet
+
+/**
+ * A row number box that can be cleared and retyped freely. What's typed is
+ * applied on Enter or when leaving the box; an empty or out-of-range number
+ * shows an error and goes back to the last good value.
+ */
+function RowNumberInput({ value, min, max, what, onCommit, className, disabled }: {
+  value: number | null; min: number; max: number; what: string; onCommit: (n: number) => void; className?: string; disabled?: boolean;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const n = Number(draft);
+  const problem = draft === null ? null
+    : draft.trim() === "" ? `${what} needs a number`
+    : !Number.isInteger(n) || n < min || n > max ? `${what} must be a whole number from ${min} to ${max}`
+    : null;
+  const finish = () => {
+    if (draft === null) return;
+    if (problem) toast.error(problem); else if (n !== value) onCommit(n);
+    setDraft(null);
+  };
+  return (
+    <input type="number" inputMode="numeric" className={`${inputCls} ${className ?? ""} ${problem ? "ring-2 ring-destructive" : ""}`} disabled={disabled}
+      value={draft ?? (value ?? "")} min={min} max={max} title={problem ?? `${min}–${max}`} aria-invalid={!!problem}
+      onChange={(e) => setDraft(e.target.value)} onBlur={finish}
+      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); finish(); } else if (e.key === "Escape") setDraft(null); }} />
+  );
+}
 
 function SheetEditor({ sheet, setup, defs, employees, onChange, result }: {
   sheet: Sheet; setup: SheetSetup; defs: FieldDef[]; employees: Employee[];
@@ -343,9 +426,9 @@ function SheetEditor({ sheet, setup, defs, employees, onChange, result }: {
             <label>
               <div className="label-mono mb-1">Header row</div>
               <div className="flex items-center gap-2">
-                <input type="number" className={`${inputCls} w-20`} disabled={setup.headerRow === null}
-                  value={setup.headerRow === null ? "" : toRowNo(setup.headerRow)} min={toRowNo(0)} max={toRowNo(rows - 1)}
-                  onChange={(e) => e.target.value && setHeader(fromRowNo(Number(e.target.value)))} />
+                <RowNumberInput className="w-20" disabled={setup.headerRow === null} what="The header row"
+                  value={setup.headerRow === null ? null : toRowNo(setup.headerRow)} min={toRowNo(0)} max={toRowNo(rows - 1)}
+                  onCommit={(n) => setHeader(fromRowNo(n))} />
                 <label className="flex items-center gap-1 text-xs text-muted-foreground">
                   <input type="checkbox" checked={setup.headerRow === null} onChange={(e) => setHeader(e.target.checked ? null : Math.max(setup.firstRow - 1, 0))} /> none
                 </label>
@@ -354,11 +437,11 @@ function SheetEditor({ sheet, setup, defs, employees, onChange, result }: {
             <div>
               <div className="label-mono mb-1">Import rows</div>
               <div className="flex items-center gap-2 text-sm">
-                <input type="number" className={`${inputCls} w-24`} value={toRowNo(setup.firstRow)} min={toRowNo(0)} max={toRowNo(rows - 1)}
-                  onChange={(e) => { const i = fromRowNo(Number(e.target.value)); onChange({ firstRow: i, lastRow: Math.max(setup.lastRow, i) }); }} />
+                <RowNumberInput className="w-24" value={toRowNo(setup.firstRow)} min={toRowNo(0)} max={toRowNo(rows - 1)} what="The first row"
+                  onCommit={(n) => { const i = fromRowNo(n); onChange({ firstRow: i, lastRow: Math.max(setup.lastRow, i) }); }} />
                 to
-                <input type="number" className={`${inputCls} w-24`} value={toRowNo(setup.lastRow)} min={toRowNo(0)} max={toRowNo(rows - 1)}
-                  onChange={(e) => { const i = fromRowNo(Number(e.target.value)); onChange({ lastRow: i, firstRow: Math.min(setup.firstRow, i) }); }} />
+                <RowNumberInput className="w-24" value={toRowNo(setup.lastRow)} min={toRowNo(0)} max={toRowNo(rows - 1)} what="The last row"
+                  onCommit={(n) => { const i = fromRowNo(n); onChange({ lastRow: i, firstRow: Math.min(setup.firstRow, i) }); }} />
               </div>
             </div>
             <label>
@@ -372,7 +455,7 @@ function SheetEditor({ sheet, setup, defs, employees, onChange, result }: {
             {setup.role === "records" && (
               <label>
                 <div className="label-mono mb-1">{hasEmployeeColumn ? "Rows with no employee belong to" : "Whose hours are these?"}</div>
-                <EmployeePicker employees={employees} value={setup.sheetEmployeeId} onChange={(id) => onChange({ sheetEmployeeId: id })}
+                <EmployeePicker employees={employees} hideResigned value={setup.sheetEmployeeId} onChange={(id) => onChange({ sheetEmployeeId: id })}
                   emptyLabel={hasEmployeeColumn ? "— nobody (skip them) —" : "— pick an employee —"} className="w-64"
                   invalid={!hasEmployeeColumn && !setup.sheetEmployeeId} />
               </label>

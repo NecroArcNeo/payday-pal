@@ -20,6 +20,7 @@ import { Route as AuthenticatedRecordsRouteImport } from './routes/_authenticate
 import { Route as AuthenticatedSyncRouteImport } from './routes/_authenticated/sync'
 import { Route as AuthenticatedTimesheetRouteImport } from './routes/_authenticated/timesheet'
 import { Route as AuthenticatedEmployeesIdRouteImport } from './routes/_authenticated/employees_.$id'
+import { Route as AuthenticatedEmployeesTemplateRouteImport } from './routes/_authenticated/employees_.template'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -76,6 +77,12 @@ const AuthenticatedEmployeesIdRoute =
     path: '/employees/$id',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedEmployeesTemplateRoute =
+  AuthenticatedEmployeesTemplateRouteImport.update({
+    id: '/employees_/template',
+    path: '/employees/template',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -88,6 +95,7 @@ export interface FileRoutesByFullPath {
   '/sync': typeof AuthenticatedSyncRoute
   '/timesheet': typeof AuthenticatedTimesheetRoute
   '/employees/$id': typeof AuthenticatedEmployeesIdRoute
+  '/employees/template': typeof AuthenticatedEmployeesTemplateRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -100,6 +108,7 @@ export interface FileRoutesByTo {
   '/sync': typeof AuthenticatedSyncRoute
   '/timesheet': typeof AuthenticatedTimesheetRoute
   '/employees/$id': typeof AuthenticatedEmployeesIdRoute
+  '/employees/template': typeof AuthenticatedEmployeesTemplateRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -114,6 +123,7 @@ export interface FileRoutesById {
   '/_authenticated/sync': typeof AuthenticatedSyncRoute
   '/_authenticated/timesheet': typeof AuthenticatedTimesheetRoute
   '/_authenticated/employees_/$id': typeof AuthenticatedEmployeesIdRoute
+  '/_authenticated/employees_/template': typeof AuthenticatedEmployeesTemplateRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -128,6 +138,7 @@ export interface FileRouteTypes {
     | '/sync'
     | '/timesheet'
     | '/employees/$id'
+    | '/employees/template'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -140,6 +151,7 @@ export interface FileRouteTypes {
     | '/sync'
     | '/timesheet'
     | '/employees/$id'
+    | '/employees/template'
   id:
     | '__root__'
     | '/'
@@ -153,6 +165,7 @@ export interface FileRouteTypes {
     | '/_authenticated/sync'
     | '/_authenticated/timesheet'
     | '/_authenticated/employees_/$id'
+    | '/_authenticated/employees_/template'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -240,6 +253,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedEmployeesIdRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/employees_/template': {
+      id: '/_authenticated/employees_/template'
+      path: '/employees/template'
+      fullPath: '/employees/template'
+      preLoaderRoute: typeof AuthenticatedEmployeesTemplateRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
   }
 }
 
@@ -252,6 +272,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedSyncRoute: typeof AuthenticatedSyncRoute
   AuthenticatedTimesheetRoute: typeof AuthenticatedTimesheetRoute
   AuthenticatedEmployeesIdRoute: typeof AuthenticatedEmployeesIdRoute
+  AuthenticatedEmployeesTemplateRoute: typeof AuthenticatedEmployeesTemplateRoute
 }
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
@@ -263,6 +284,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedSyncRoute: AuthenticatedSyncRoute,
   AuthenticatedTimesheetRoute: AuthenticatedTimesheetRoute,
   AuthenticatedEmployeesIdRoute: AuthenticatedEmployeesIdRoute,
+  AuthenticatedEmployeesTemplateRoute: AuthenticatedEmployeesTemplateRoute,
 }
 
 const AuthenticatedRouteRouteWithChildren =

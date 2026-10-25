@@ -132,6 +132,24 @@ describe("shifts and manual pay columns", () => {
     expect(r.errs).toEqual(['Sheet1 row 4: no "Graveyard" shift — add it under Payroll → Customize, or fix the name']);
   });
 
+  it("starts new people from the default profile, under the file's values, and leaves existing people alone", () => {
+    const [sheet] = csv("Employee ID,Full name,Department\nE100,Nadia Okafor,\nE900,New Person,\nE901,Other Person,Sales\n");
+    const shifts = [{ id: "day", name: "Day" }, { id: "night", name: "Night" }];
+    const defaults = { department: "Ops", hourly_rate: 18, pay_type: "salary", shift_id: "night", custom_fields: { shirt: "M" } };
+    const r = parsePeople(sheet!, guessSetup(sheet!, []), people, new Set(["e100", "e200"]), () => undefined, shifts, defaults);
+    expect(r.ok[0]).not.toHaveProperty("pay_type");
+    expect(r.ok[0]!.custom_fields).toEqual({});
+    expect(r.ok[1]).toMatchObject({ employee_code: "E900", department: "Ops", hourly_rate: 18, pay_type: "salary", shift_id: "night", custom_fields: { shirt: "M" } });
+    expect(r.ok[2]).toMatchObject({ employee_code: "E901", department: "Sales" });
+  });
+
+  it("reads passport, social security and residential status columns", () => {
+    const [sheet] = csv("Employee ID,Full name,Passport No,SSN,Residency\nE900,New Person,P123,123-45-6789,Work visa\n");
+    const setup = guessSetup(sheet!, []);
+    expect(setup.columns).toEqual(["code", "name", "passport", "ssn", "residency"]);
+    expect(parsePeople(sheet!, setup, people, new Set(), () => undefined).ok[0]).toMatchObject({ passport_no: "P123", ssn: "123-45-6789", residential_status: "Work visa" });
+  });
+
   it("reads a manual day pay column on timesheets", () => {
     const [sheet] = csv("Employee ID,Date,Hours,Day pay\nE100,2026-10-05,8,$250.00\nE100,2026-10-06,8,\n");
     const setup = guessSetup(sheet!, []);

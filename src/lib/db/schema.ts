@@ -2,7 +2,7 @@
 // drizzle/migrations minus auth/RLS/owner columns, so a snapshot moves between
 // the two without translation. Bump SCHEMA_VERSION (here and in the cloud
 // sync functions) whenever a table's columns change.
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 7;
 
 /** Tables in foreign-key order: parents first. Deletes run in reverse. */
 export const TABLES = ["employee_field_defs", "shifts", "employees", "time_records", "pay_adjustments", "payroll_settings"] as const;
@@ -131,5 +131,18 @@ export const LOCAL_MIGRATIONS: string[] = [
   `,
   /* 4 — gender and nationality on profiles (free text) */ `
   alter table employees add column gender text, add column nationality text;
+  `,
+  /* 5 — default profile for new employees */ `
+  -- Values every new employee starts with: employee columns plus custom_fields, keyed like the employees row.
+  alter table payroll_settings add column employee_defaults jsonb not null default '{}'::jsonb;
+  `,
+  /* 6 — ID documents on profiles, and sections for custom categories */ `
+  alter table employees add column passport_no text, add column ssn text, add column residential_status text;
+  -- Which profile section a category shows under: a built-in section's title, or a name the user made up. Null = "Other details".
+  alter table employee_field_defs add column section text;
+  `,
+  /* 7 — a day can be worked on a different shift than the employee's own */ `
+  -- Null = the employee's own shift. Deleting a shift puts its days back on the employee's shift.
+  alter table time_records add column shift_id uuid references shifts(id) on delete set null;
   `,
 ];

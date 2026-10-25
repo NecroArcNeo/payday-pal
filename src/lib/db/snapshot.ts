@@ -95,6 +95,12 @@ function upgrade(s: Partial<Snapshot>): Partial<Snapshot> {
   if (s.schema_version === 2) s = { ...s, schema_version: 3 };
   // 4 only added employees.gender and nationality, which restore empty.
   if (s.schema_version === 3) s = { ...s, schema_version: 4 };
+  // 5 only added payroll_settings.employee_defaults, which restores empty.
+  if (s.schema_version === 4) s = { ...s, schema_version: 5 };
+  // 6 only added employee ID-document columns and employee_field_defs.section, which restore empty.
+  if (s.schema_version === 5) s = { ...s, schema_version: 6 };
+  // 7 only added time_records.shift_id, which restores empty (the employee's own shift).
+  if (s.schema_version === 6) s = { ...s, schema_version: 7 };
   return s;
 }
 

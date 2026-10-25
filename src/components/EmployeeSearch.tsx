@@ -55,11 +55,12 @@ export function SearchInput({ value, onChange, employees, placeholder = SEARCH_H
 
 const SHOWN = 100;
 
-/** Pick one employee by typing any part of their details. */
-export function EmployeePicker({ employees, value, onChange, placeholder = "Pick an employee", emptyLabel, className = "", invalid = false }: {
+/** Pick one employee by typing any part of their details. `hideResigned` leaves out resigned people (unless already picked). */
+export function EmployeePicker({ employees: all, value, onChange, placeholder = "Pick an employee", emptyLabel, className = "", invalid = false, hideResigned = false }: {
   employees: Employee[]; value: string; onChange: (id: string) => void;
-  placeholder?: string; emptyLabel?: string; className?: string; invalid?: boolean;
+  placeholder?: string; emptyLabel?: string; className?: string; invalid?: boolean; hideResigned?: boolean;
 }) {
+  const employees = useMemo(() => (hideResigned ? all.filter((e) => e.active || e.id === value) : all), [all, hideResigned, value]);
   const [open, setOpen] = useState(false);
   const [f, setF] = useState<EmployeeFilter>(NO_FILTER);
   const q = f.text;
@@ -94,7 +95,7 @@ export function EmployeePicker({ employees, value, onChange, placeholder = "Pick
               <CommandItem key={e.id} value={e.id} onSelect={() => pick(e.id)}>
                 <Check className={`mr-2 h-4 w-4 shrink-0 ${e.id === value ? "" : "opacity-0"}`} />
                 <div className="min-w-0">
-                  <div className="truncate">{fullName(e)} <span className="font-mono text-[11px] text-muted-foreground">{e.employee_code}</span>{!e.active && <span className="ml-1 text-[11px] text-muted-foreground">(inactive)</span>}</div>
+                  <div className="truncate">{fullName(e)} <span className="font-mono text-[11px] text-muted-foreground">{e.employee_code}</span>{!e.active && <span className="ml-1 text-[11px] text-muted-foreground">(resigned)</span>}</div>
                   {(e.job_title || e.department) && <div className="truncate text-[11px] text-muted-foreground">{[e.job_title, e.department].filter(Boolean).join(" · ")}</div>}
                 </div>
               </CommandItem>

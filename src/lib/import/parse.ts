@@ -1,5 +1,6 @@
 import * as XLSX from "xlsx";
 import type { Employee, FieldDef } from "@/lib/payroll";
+import { withDefaults, type EmployeeDefaults } from "@/lib/employee-fields";
 
 // File import: the user maps sheet columns to app fields and picks a row range;
 // these functions read the workbook, guess a starting mapping, and turn the
@@ -57,6 +58,9 @@ export const PEOPLE_FIELDS: Field[] = [
   { key: "country", label: "Country", aliases: ["country"] },
   { key: "gender", label: "Gender", aliases: ["gender", "sex"] },
   { key: "nationality", label: "Nationality", aliases: ["nationality", "citizenship", "citizen"] },
+  { key: "passport", label: "Passport no.", aliases: ["passport", "passportno", "passportnumber", "passportid"] },
+  { key: "ssn", label: "Social security no.", aliases: ["ssn", "socialsecurity", "socialsecurityno", "socialsecuritynumber", "sin", "nino", "nationalinsurance"] },
+  { key: "residency", label: "Residential status", aliases: ["residentialstatus", "residencystatus", "residency", "residentstatus", "visastatus", "immigrationstatus"] },
   { key: "dob", label: "Date of birth", aliases: ["dateofbirth", "dob", "birthdate", "birthday"] },
   { key: "hire", label: "Hire date", aliases: ["hiredate", "startdate", "datehired", "joined", "joindate"] },
   { key: "ecName", label: "Emergency contact", aliases: ["emergencycontact", "emergencycontactname", "emergencyname"] },
@@ -316,8 +320,9 @@ function splitName(full: string) {
  */
 export function parsePeople(
   sheet: Sheet, setup: SheetSetup, existing: Employee[], taken: Set<string>, categoryId: (target: Target) => string | undefined,
-  shifts: { id: string; name: string }[] = [],
+  shifts: { id: string; name: string }[] = [], defaults: EmployeeDefaults = {},
 ) {
+  const defaultShift = shifts.find((x) => x.id === defaults["shift_id"])?.id ?? shifts[0]?.id;
   const shiftByName = new Map(shifts.map((x) => [norm(x.name), x.id]));
   const ok: PersonRow[] = [];
   const errs: Problem[] = [];
@@ -355,17 +360,19 @@ export function parsePeople(
     const row: PersonRow = {
       employee_code: code, first_name: first, last_name: last,
       email: email || match?.email || null,
-      hourly_rate: rate ?? Number(match?.hourly_rate ?? 0),
+      hourly_rate: rate ?? Number(match?.hourly_rate ?? defaults["hourly_rate"] ?? 0),
       department: opt("dept", 80), phone: opt("phone", 40), job_title: opt("title", 80),
       address_line1: opt("addr1"), address_line2: opt("addr2"), city: opt("city", 80), state: opt("state", 80),
-      postal_code: opt("zip", 20), country: opt("country", 80), gender: opt("gender", 80), nationality: opt("nationality", 80), date_of_birth: date("dob"), hire_date: date("hire"),
+      postal_code: opt("zip", 20), country: opt("country", 80), gender: opt("gender", 80), nationality: opt("nationality", 80),
+      passport_no: opt("passport", 40), ssn: opt("ssn", 40), residential_status: opt("residency", 80), date_of_birth: date("dob"), hire_date: date("hire"),
       emergency_contact_name: opt("ecName", 120), emergency_contact_phone: opt("ecPhone", 40), notes: opt("notes", 2000),
       custom_fields: custom,
-      // New people without a shift column start on the default (first) shift; existing people keep theirs.
-      shift_id: shiftId ?? (match ? undefined : shifts[0]?.id),
+      // New people without a shift column start on the default profile's shift (else the first); existing people keep theirs.
+      shift_id: shiftId ?? (match ? undefined : defaultShift),
     };
     for (const k of Object.keys(row) as (keyof PersonRow)[]) if (row[k] === undefined) delete row[k];
-    ok.push(row);
+    // New people start from the default profile; the file's values win.
+    ok.push(match ? row : withDefaults(row, defaults));
   }
   return { ok, errs };
 }

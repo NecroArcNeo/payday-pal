@@ -4,6 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import type { Tables } from "@/integrations/supabase/types";
 import { cloudConfigured, storeFor, useDataMode } from "@/lib/db/mode";
 import { payByRecord, weekEnd, weekStart, type PayLine } from "@/lib/pay";
+import type { EmployeeDefaults } from "@/lib/employee-fields";
 
 export type Employee = Tables<"employees">;
 export type TimeRecord = Tables<"time_records">;
@@ -85,6 +86,15 @@ export function useAdjustments(from?: string, to?: string) {
 }
 
 export const defaultSettings = { ot_threshold: 40, ot_multiplier: 1.5, weekend_overtime: true, visible_columns: ["employee_code", "days"] };
+
+/** The default profile new employees start with (see `withDefaults`). */
+export function useEmployeeDefaults() {
+  const mode = useDataMode();
+  return useQuery({
+    queryKey: ["payroll-settings", "employee-defaults", mode],
+    queryFn: async () => ((await storeFor(mode).getSettings())?.employee_defaults ?? {}) as EmployeeDefaults,
+  });
+}
 
 export function usePayrollSettings() {
   const mode = useDataMode();

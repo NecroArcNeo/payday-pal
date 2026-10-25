@@ -4,8 +4,9 @@ import { Check, Pencil, Trash2, X } from "lucide-react";
 import { db } from "@/lib/db/mode";
 import { btnGhost, inputCls } from "@/components/AppShell";
 import { EmployeePicker } from "@/components/EmployeeSearch";
-import { RECORD_PAY_COLUMNS, RecordPayCells, RecordPayHeaders } from "@/components/RecordPay";
-import { computeHours, fullName, money, useRecordPay, weekday, type Employee, type RecordWithEmp } from "@/lib/payroll";
+import { RECORD_PAY_COLUMNS, RecordPayCells, RecordPayHeaders, RecordShiftCell, RecordShiftSelect } from "@/components/RecordPay";
+import { computeHours, fullName, money, useRecordPay, useShifts, weekday, type Employee, type RecordWithEmp, type Shift } from "@/lib/payroll";
+import { shiftFor } from "@/lib/pay";
 
 export type EntryMode = "clock" | "hours";
 
@@ -17,8 +18,10 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
 }) {
   const [editing, setEditing] = useState<string | null>(null);
   const allPicked = rows.length > 0 && rows.every((r) => selected.has(r.id));
-  const cols = (mode === "clock" ? 10 : 7) + RECORD_PAY_COLUMNS;
+  const cols = (mode === "clock" ? 11 : 8) + RECORD_PAY_COLUMNS;
   const pay = useRecordPay(rows);
+  const { data: shifts = [] } = useShifts();
+  const empById = new Map(employees.map((e) => [e.id, e]));
 
   return (
     <div className="glass-panel overflow-hidden">
@@ -40,6 +43,7 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
               <th className="w-10 pl-5"><input type="checkbox" aria-label="Select all loaded" checked={allPicked} onChange={onToggleAll} disabled={!rows.length} /></th>
               <th className="px-3 py-3 text-left font-medium">Employee</th>
               <th className="px-3 py-3 text-left font-medium">Date</th>
+              <th className="px-3 py-3 text-left font-medium">Shift</th>
               {mode === "clock" && (
                 <>
                   <th className="px-3 py-3 text-left font-medium">Clock in</th>
@@ -61,12 +65,13 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
               </td></tr>
             )}
             {rows.map((r) => editing === r.id ? (
-              <EditRow key={r.id} record={r} employees={employees} onCancel={() => setEditing(null)} onSaved={() => { setEditing(null); onChanged(); }} />
+              <EditRow key={r.id} record={r} employees={employees} shifts={shifts} onCancel={() => setEditing(null)} onSaved={() => { setEditing(null); onChanged(); }} />
             ) : (
               <tr key={r.id} className={`border-b border-border last:border-0 hover:bg-secondary ${selected.has(r.id) ? "bg-accent/40" : ""}`}>
                 <td className="pl-5"><input type="checkbox" aria-label="Select record" checked={selected.has(r.id)} onChange={() => onToggle(r.id)} /></td>
                 <td className="px-3 py-3 font-body">{r.employees ? fullName(r.employees) : "—"}</td>
                 <td className="whitespace-nowrap px-3 py-3"><span className="inline-block w-9 font-body text-muted-foreground">{weekday(r.work_date)}</span>{r.work_date}</td>
+                <RecordShiftCell shiftId={r.shift_id} employeeShiftId={empById.get(r.employee_id)?.shift_id} shifts={shifts} />
                 {mode === "clock" && (
                   <>
                     <td className="px-3 py-3">{r.clock_in?.slice(0, 5)}</td>
@@ -98,13 +103,15 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
 }
 
 /** One record being edited in place. The database recalculates hours for clock entries on save. */
-function EditRow({ record, employees, onCancel, onSaved }: { record: RecordWithEmp; employees: Employee[]; onCancel: () => void; onSaved: () => void }) {
+function EditRow({ record, employees, shifts, onCancel, onSaved }: { record: RecordWithEmp; employees: Employee[]; shifts: Shift[]; onCancel: () => void; onSaved: () => void }) {
   const [f, setF] = useState({
     employee_id: record.employee_id, work_date: record.work_date, entry_mode: record.entry_mode as EntryMode,
     clock_in: record.clock_in?.slice(0, 5) ?? "09:00", clock_out: record.clock_out?.slice(0, 5) ?? "17:00",
     lunch_minutes: String(record.lunch_minutes ?? 0), hours: String(record.hours ?? 0), note: record.note ?? "",
     pay: record.pay_override === null || record.pay_override === undefined ? "" : String(record.pay_override),
+    shift_id: record.shift_id ?? "",
   });
+  const usual = shiftFor(employees.find((e) => e.id === f.employee_id)?.shift_id, shifts);
   const [busy, setBusy] = useState(false);
   const set = (k: keyof typeof f, v: string) => setF({ ...f, [k]: v });
   const hours = f.entry_mode === "clock" ? computeHours(f.clock_in, f.clock_out, Number(f.lunch_minutes) || 0) : Number(f.hours) || 0;
@@ -118,7 +125,7 @@ function EditRow({ record, employees, onCancel, onSaved }: { record: RecordWithE
     if (f.entry_mode === "hours" && (!Number.isFinite(h) || h < 0 || h > 24)) { toast.error("Hours must be 0–24"); return; }
     const pay = f.pay.trim() === "" ? null : Number(f.pay.replace(/[$,\s]/g, ""));
     if (pay !== null && (!Number.isFinite(pay) || pay < 0 || pay > 100000)) { toast.error("Manual pay must be an amount from $0 to $100,000, or empty to calculate it"); return; }
-    const base = { employee_id: f.employee_id, work_date: f.work_date, note: f.note.trim().slice(0, 300) || null, pay_override: pay === null ? null : Math.round(pay * 100) / 100 };
+    const base = { employee_id: f.employee_id, work_date: f.work_date, shift_id: f.shift_id && f.shift_id !== usual.id ? f.shift_id : null, note: f.note.trim().slice(0, 300) || null, pay_override: pay === null ? null : Math.round(pay * 100) / 100 };
     const patch = f.entry_mode === "clock"
       ? { ...base, entry_mode: "clock", clock_in: f.clock_in, clock_out: f.clock_out, lunch_minutes: lunch }
       : { ...base, entry_mode: "hours", hours: h, clock_in: null, clock_out: null, lunch_minutes: 0 };
@@ -135,13 +142,16 @@ function EditRow({ record, employees, onCancel, onSaved }: { record: RecordWithE
   return (
     <tr className="border-b border-border bg-accent/50" onKeyDown={(e) => { if (e.key === "Escape") onCancel(); if (e.key === "Enter" && (e.target as HTMLElement).tagName === "INPUT") save(); }}>
       <td className="pl-5 align-top pt-4"><Pencil className="h-3.5 w-3.5 text-primary" /></td>
-      <td className={cell}><EmployeePicker employees={employees} value={f.employee_id} onChange={(id) => set("employee_id", id)} className="min-w-[12rem] !py-1.5 text-[13px]" /></td>
+      <td className={cell}><EmployeePicker employees={employees} hideResigned value={f.employee_id} onChange={(id) => set("employee_id", id)} className="min-w-[12rem] !py-1.5 text-[13px]" /></td>
       <td className={cell}>
         <input type="date" className={input} value={f.work_date} onChange={(e) => set("work_date", e.target.value)} aria-label="Date" />
         <select className={`${input} mt-1`} value={f.entry_mode} onChange={(e) => set("entry_mode", e.target.value)} aria-label="Entry type">
           <option value="clock">Clock in / out</option>
           <option value="hours">Daily hours</option>
         </select>
+      </td>
+      <td className={cell}>
+        <RecordShiftSelect value={f.shift_id === usual.id ? "" : f.shift_id} onChange={(id) => set("shift_id", id)} shifts={shifts} ownLabel={`Usual (${usual.name})`} className={`${input} min-w-[8rem]`} />
       </td>
       {record.entry_mode === "clock" && (
         f.entry_mode === "clock" ? (
