@@ -7,6 +7,9 @@ import { EmployeePicker } from "@/components/EmployeeSearch";
 import { RECORD_PAY_COLUMNS, RecordPayCells, RecordPayHeaders, RecordShiftCell, RecordShiftSelect } from "@/components/RecordPay";
 import { computeHours, fullName, money, useRecordPay, useShifts, weekday, type Employee, type RecordWithEmp, type Shift } from "@/lib/payroll";
 import { shiftFor } from "@/lib/pay";
+import { BreakInput, BreakUnitToggle } from "@/components/BreakField";
+import { DataTable } from "./DataTable";
+import { breakLabel, breakRangeText, formatBreak, useBreakUnit, validBreak } from "@/lib/breaks";
 
 export type EntryMode = "clock" | "hours";
 
@@ -21,12 +24,15 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
   const cols = (mode === "clock" ? 11 : 8) + RECORD_PAY_COLUMNS;
   const pay = useRecordPay(rows);
   const { data: shifts = [] } = useShifts();
+  const [breakUnit] = useBreakUnit();
   const empById = new Map(employees.map((e) => [e.id, e]));
 
   return (
     <div className="glass-panel overflow-hidden">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
         <div className="font-display font-extrabold tracking-tight">{title}</div>
+        <div className="flex flex-wrap items-center gap-3">
+        {mode === "clock" && <span className="flex items-center gap-2 text-xs text-muted-foreground">Breaks in <BreakUnitToggle /></span>}
         <div className="flex rounded-xl bg-secondary p-1 text-xs font-medium ring-1 ring-border">
           {(["clock", "hours"] as const).map((m) => (
             <button key={m} onClick={() => { setEditing(null); onModeChange(m); }}
@@ -35,9 +41,10 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
             </button>
           ))}
         </div>
+        </div>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+        <DataTable id="records" className="w-full text-sm">
           <thead>
             <tr className="border-b border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
               <th className="w-10 pl-5"><input type="checkbox" aria-label="Select all loaded" checked={allPicked} onChange={onToggleAll} disabled={!rows.length} /></th>
@@ -48,7 +55,7 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
                 <>
                   <th className="px-3 py-3 text-left font-medium">Clock in</th>
                   <th className="px-3 py-3 text-left font-medium">Clock out</th>
-                  <th className="px-3 py-3 text-right font-medium">Lunch min</th>
+                  <th className="px-3 py-3 text-right font-medium">{breakLabel(breakUnit)}</th>
                 </>
               )}
               <th className="px-3 py-3 text-right font-medium">Hours</th>
@@ -76,7 +83,7 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
                   <>
                     <td className="px-3 py-3">{r.clock_in?.slice(0, 5)}</td>
                     <td className="px-3 py-3">{r.clock_out?.slice(0, 5)}</td>
-                    <td className="px-3 py-3 text-right">{r.lunch_minutes}</td>
+                    <td className="px-3 py-3 text-right">{formatBreak(r.lunch_minutes, breakUnit)}</td>
                   </>
                 )}
                 <td className="px-3 py-3 text-right">{Number(r.hours).toFixed(2)}</td>
@@ -92,7 +99,7 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
               </tr>
             ))}
           </tbody>
-        </table>
+        </DataTable>
       </div>
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-5 py-3 text-xs text-muted-foreground">
         <span>Showing {rows.length} of {total}</span>
@@ -113,6 +120,7 @@ function EditRow({ record, employees, shifts, onCancel, onSaved }: { record: Rec
   });
   const usual = shiftFor(employees.find((e) => e.id === f.employee_id)?.shift_id, shifts);
   const [busy, setBusy] = useState(false);
+  const [breakUnit] = useBreakUnit();
   const set = (k: keyof typeof f, v: string) => setF({ ...f, [k]: v });
   const hours = f.entry_mode === "clock" ? computeHours(f.clock_in, f.clock_out, Number(f.lunch_minutes) || 0) : Number(f.hours) || 0;
 
@@ -121,7 +129,7 @@ function EditRow({ record, employees, shifts, onCancel, onSaved }: { record: Rec
     if (!f.work_date) { toast.error("Pick a date"); return; }
     const lunch = Number(f.lunch_minutes), h = Number(f.hours);
     if (f.entry_mode === "clock" && (!f.clock_in || !f.clock_out)) { toast.error("Clock in and clock out are required"); return; }
-    if (f.entry_mode === "clock" && (!Number.isFinite(lunch) || lunch < 0 || lunch > 600)) { toast.error("Lunch minutes must be 0–600"); return; }
+    if (f.entry_mode === "clock" && !validBreak(lunch)) { toast.error(breakRangeText(breakUnit)); return; }
     if (f.entry_mode === "hours" && (!Number.isFinite(h) || h < 0 || h > 24)) { toast.error("Hours must be 0–24"); return; }
     const pay = f.pay.trim() === "" ? null : Number(f.pay.replace(/[$,\s]/g, ""));
     if (pay !== null && (!Number.isFinite(pay) || pay < 0 || pay > 100000)) { toast.error("Manual pay must be an amount from $0 to $100,000, or empty to calculate it"); return; }
@@ -158,7 +166,7 @@ function EditRow({ record, employees, shifts, onCancel, onSaved }: { record: Rec
           <>
             <td className={cell}><input type="time" className={input} value={f.clock_in} onChange={(e) => set("clock_in", e.target.value)} aria-label="Clock in" /></td>
             <td className={cell}><input type="time" className={input} value={f.clock_out} onChange={(e) => set("clock_out", e.target.value)} aria-label="Clock out" /></td>
-            <td className={cell}><input type="number" min={0} max={600} className={`${input} w-20 text-right`} value={f.lunch_minutes} onChange={(e) => set("lunch_minutes", e.target.value)} aria-label="Lunch minutes" /></td>
+            <td className={cell}><BreakInput minutes={f.lunch_minutes} onChange={(m) => set("lunch_minutes", m)} className={`${input} w-20 text-right`} /></td>
           </>
         ) : <td colSpan={3} className={`${cell} pt-4 font-body text-xs text-muted-foreground`}>Switching to daily hours: clock times will be removed.</td>
       )}
@@ -170,7 +178,7 @@ function EditRow({ record, employees, shifts, onCancel, onSaved }: { record: Rec
           <div className="mt-1 flex gap-1">
             <input type="time" className={input} value={f.clock_in} onChange={(e) => set("clock_in", e.target.value)} aria-label="Clock in" />
             <input type="time" className={input} value={f.clock_out} onChange={(e) => set("clock_out", e.target.value)} aria-label="Clock out" />
-            <input type="number" min={0} className={`${input} w-16`} value={f.lunch_minutes} onChange={(e) => set("lunch_minutes", e.target.value)} aria-label="Lunch minutes" title="Lunch minutes" />
+            <BreakInput minutes={f.lunch_minutes} onChange={(m) => set("lunch_minutes", m)} className={`${input} w-16`} />
           </div>
         )}
       </td>

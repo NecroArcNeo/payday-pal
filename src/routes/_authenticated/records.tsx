@@ -9,9 +9,11 @@ import type { TablesInsert } from "@/integrations/supabase/types";
 import { AppShell, btnGhost, btnPrimary, inputCls } from "@/components/AppShell";
 import { RecordsLedger, type EntryMode } from "@/components/RecordsLedger";
 import { RecordShiftSelect } from "@/components/RecordPay";
+import { BreakInput, BreakUnitToggle } from "@/components/BreakField";
+import { breakLabel, breakRangeText, formatBreak, useBreakUnit, validBreak } from "@/lib/breaks";
 import { EmployeePicker, SearchInput } from "@/components/EmployeeSearch";
 import { describeEmployeeFilter, isFiltering, matchesEmployee, NO_FILTER, searchEmployees, type EmployeeFilter } from "@/lib/employee-search";
-import { addDays, computeHours, fullName, isoDate, useEmployees, useShifts, weekday, type Employee, type TimeRecord } from "@/lib/payroll";
+import { addDays, computeHours, datesBetween, fullName, isoDate, useEmployees, useShifts, weekday, type Employee, type TimeRecord } from "@/lib/payroll";
 import { shiftFor } from "@/lib/pay";
 import { Check, Pencil, Plus, Trash2, X } from "lucide-react";
 
@@ -32,7 +34,11 @@ function RecordsPage() {
 
   const [mode, setMode] = useState<"clock" | "hours">("clock");
   const { data: shifts = [] } = useShifts();
-  const [f, setF] = useState({ work_date: isoDate(new Date()), clock_in: "09:00", clock_out: "17:00", lunch_minutes: "30", hours: "8", pay: "", shift_id: "" });
+  const [f, setF] = useState({ work_date: isoDate(new Date()), until: "", skip_weekends: false, clock_in: "09:00", clock_out: "17:00", lunch_minutes: "30", hours: "8", pay: "", shift_id: "" });
+  const [breakUnit] = useBreakUnit();
+  // An optional end date adds the same entry for every day in the range.
+  const rangeBad = !!f.until && f.until < f.work_date;
+  const days = useMemo(() => (f.work_date && !rangeBad ? datesBetween(f.work_date, f.until, f.skip_weekends) : []), [f.work_date, f.until, f.skip_weekends, rangeBad]);
   const [picked, setPicked] = useState<string[]>([]);
   const [pickQ, setPickQ] = useState<EmployeeFilter>(NO_FILTER);
   const [listQ, setListQ] = useState<EmployeeFilter>(NO_FILTER);
@@ -54,19 +60,23 @@ function RecordsPage() {
   const add = async (e: React.FormEvent) => {
     e.preventDefault();
     if (picked.length === 0) { toast.error("Pick at least one employee"); return; }
+    if (rangeBad) { toast.error("The end date is before the start date"); return; }
+    if (days.length === 0) { toast.error(f.skip_weekends ? "That range only has weekend days" : "Pick a date"); return; }
+    if (days.length > 366) { toast.error("Pick a range of at most a year"); return; }
     const lunch = Number(f.lunch_minutes);
     const hours = Number(f.hours);
-    if (mode === "clock" && (!Number.isFinite(lunch) || lunch < 0 || lunch > 600)) { toast.error("Lunch minutes must be 0–600"); return; }
+    if (mode === "clock" && !validBreak(lunch)) { toast.error(breakRangeText(breakUnit)); return; }
     if (mode === "hours" && (!Number.isFinite(hours) || hours < 0 || hours > 24)) { toast.error("Hours must be 0–24"); return; }
     const pay = f.pay.trim() === "" ? null : Number(f.pay.replace(/[$,\s]/g, ""));
     if (pay !== null && (!Number.isFinite(pay) || pay < 0 || pay > 100000)) { toast.error("Day pay must be an amount from $0 to $100,000, or empty"); return; }
     const manual = pay === null ? {} : { pay_override: Math.round(pay * 100) / 100 };
     // Only store a shift when it differs from the person's usual one.
     const shiftOf = (id: string) => (f.shift_id && f.shift_id !== shiftFor(employees.find((e) => e.id === id)?.shift_id, shifts).id ? { shift_id: f.shift_id } : {});
-    const rows: TablesInsert<"time_records">[] = picked.map((employee_id) =>
+    const rows: TablesInsert<"time_records">[] = days.flatMap((work_date) => picked.map((employee_id) =>
       mode === "clock"
-        ? { employee_id, work_date: f.work_date, entry_mode: "clock", clock_in: f.clock_in, clock_out: f.clock_out, lunch_minutes: lunch, ...manual, ...shiftOf(employee_id) }
-        : { employee_id, work_date: f.work_date, entry_mode: "hours", hours, ...manual, ...shiftOf(employee_id) });
+        ? { employee_id, work_date, entry_mode: "clock", clock_in: f.clock_in, clock_out: f.clock_out, lunch_minutes: lunch, ...manual, ...shiftOf(employee_id) }
+        : { employee_id, work_date, entry_mode: "hours", hours, ...manual, ...shiftOf(employee_id) }));
+    if (days.length > 1 && !confirm(`Add ${rows.length} records: ${picked.length} employee${picked.length === 1 ? "" : "s"} × ${days.length} days (${weekday(days[0]!)} ${days[0]} to ${weekday(days.at(-1)!)} ${days.at(-1)})?`)) return;
     const { error } = await db().insert("time_records", rows);
     if (error) { toast.error(error.message); return; }
     toast.success(rows.length === 1 ? "Record added" : `${rows.length} records added`);
@@ -181,13 +191,35 @@ function RecordsPage() {
             {resigned > 0 && ` ${resigned} resigned employee${resigned === 1 ? " is" : "s are"} hidden.`}
           </div>
         </div>
-        <div className="grid items-end gap-3 md:grid-cols-8">
-          <label><span className="label-mono">Date{f.work_date && ` · ${weekday(f.work_date)}`}</span><input type="date" className={`${inputCls} mt-1`} value={f.work_date} onChange={(e) => setF({ ...f, work_date: e.target.value })} required /></label>
+        <div className="flex flex-wrap items-end gap-3">
+          <label><span className="label-mono">{f.until ? "From" : "Date"}{f.work_date && ` · ${weekday(f.work_date)}`}</span><input type="date" className={`${inputCls} mt-1 w-auto`} value={f.work_date} onChange={(e) => setF({ ...f, work_date: e.target.value })} required /></label>
+          <label title="Leave empty for one day. Set it to add the same entry for every day up to and including this date.">
+            <span className="label-mono">To (optional){f.until && ` · ${weekday(f.until)}`}</span>
+            <div className="mt-1 flex items-center gap-1">
+              <input type="date" className={`${inputCls} w-auto ${rangeBad ? "ring-2 ring-destructive" : ""}`} value={f.until} min={f.work_date} onChange={(e) => setF({ ...f, until: e.target.value })} aria-label="Last date" />
+              {f.until && <button type="button" onClick={() => setF({ ...f, until: "" })} className="text-muted-foreground hover:text-foreground" aria-label="Just one day"><X className="h-4 w-4" /></button>}
+            </div>
+          </label>
+          {f.until && (
+            <label className="flex items-center gap-2 pb-2 text-sm">
+              <input type="checkbox" checked={f.skip_weekends} onChange={(e) => setF({ ...f, skip_weekends: e.target.checked })} /> Skip Saturdays and Sundays
+            </label>
+          )}
+          {f.until && (
+            <div className={`pb-2 text-xs ${rangeBad ? "text-destructive" : "text-muted-foreground"}`}>
+              {rangeBad ? "The end date is before the start date." : `${days.length} day${days.length === 1 ? "" : "s"} × ${picked.length} employee${picked.length === 1 ? "" : "s"} = ${days.length * picked.length} records`}
+            </div>
+          )}
+        </div>
+        <div className="grid items-end gap-3 md:grid-cols-6">
           {mode === "clock" ? (
             <>
               <label><span className="label-mono">Clock in</span><input type="time" className={`${inputCls} mt-1`} value={f.clock_in} onChange={(e) => setF({ ...f, clock_in: e.target.value })} required /></label>
               <label><span className="label-mono">Clock out</span><input type="time" className={`${inputCls} mt-1`} value={f.clock_out} onChange={(e) => setF({ ...f, clock_out: e.target.value })} required /></label>
-              <label><span className="label-mono">Lunch (min)</span><input type="number" min={0} className={`${inputCls} mt-1`} value={f.lunch_minutes} onChange={(e) => setF({ ...f, lunch_minutes: e.target.value })} /></label>
+              <label>
+                <span className="flex items-center justify-between gap-1"><span className="label-mono">{breakLabel(breakUnit)}</span><BreakUnitToggle /></span>
+                <BreakInput minutes={f.lunch_minutes} onChange={(m) => setF({ ...f, lunch_minutes: m })} className={`${inputCls} mt-1`} />
+              </label>
             </>
           ) : (
             <label className="md:col-span-3"><span className="label-mono">Hours worked</span><input type="number" step="0.25" min={0} max={24} className={`${inputCls} mt-1`} value={f.hours} onChange={(e) => setF({ ...f, hours: e.target.value })} /></label>
@@ -267,6 +299,7 @@ function BulkRecordEdit({ mode, employees, label, load, onClose, onDone }: {
 }) {
   const [on, setOn] = useState<Record<string, boolean>>({});
   const { data: shifts = [] } = useShifts();
+  const [breakUnit] = useBreakUnit();
   const [v, setV] = useState({ employee_id: "", date: "", shift: "1", clock_in: "09:00", clock_out: "17:00", lunch_minutes: "30", hours: "8", note: "", pay: "", shift_id: "" });
   const [dateMode, setDateMode] = useState<DateMode>("set");
   const [busy, setBusy] = useState(false);
@@ -293,7 +326,7 @@ function BulkRecordEdit({ mode, employees, label, load, onClose, onDone }: {
   if (mode === "clock") {
     if (on["clock_in"]) changes.push(`clock in → ${v.clock_in}`);
     if (on["clock_out"]) changes.push(`clock out → ${v.clock_out}`);
-    if (on["lunch_minutes"]) changes.push(`lunch → ${v.lunch_minutes} min`);
+    if (on["lunch_minutes"]) changes.push(`break → ${formatBreak(v.lunch_minutes, breakUnit)} ${breakUnit === "h" ? "h" : "min"}`);
   } else if (on["hours"]) changes.push(`hours → ${v.hours}`);
   if (on["shift_id"]) changes.push(v.shift_id ? `shift → ${shifts.find((x) => x.id === v.shift_id)?.name ?? "?"}` : "shift → each person's usual");
   if (on["note"]) changes.push(v.note.trim() ? `note → “${v.note.trim()}”` : "clear note");
@@ -305,7 +338,7 @@ function BulkRecordEdit({ mode, employees, label, load, onClose, onDone }: {
     if (on["date"] && dateMode === "set" && !v.date) { toast.error("Pick a date"); return; }
     if (on["date"] && dateMode === "shift" && (!Number.isFinite(shiftDays) || shiftDays === 0 || Math.abs(shiftDays) > 366)) { toast.error("Move dates by 1 to 366 days (a minus sign moves them earlier)"); return; }
     const lunch = Number(v.lunch_minutes), hours = Number(v.hours);
-    if (mode === "clock" && on["lunch_minutes"] && (!Number.isFinite(lunch) || lunch < 0 || lunch > 600)) { toast.error("Lunch minutes must be 0–600"); return; }
+    if (mode === "clock" && on["lunch_minutes"] && !validBreak(lunch)) { toast.error(breakRangeText(breakUnit)); return; }
     if (mode === "hours" && on["hours"] && (!Number.isFinite(hours) || hours < 0 || hours > 24)) { toast.error("Hours must be 0–24"); return; }
     if (on["pay"] && v.pay.trim() && (!Number.isFinite(payNum) || payNum < 0 || payNum > 100000)) { toast.error("Manual pay must be an amount from $0 to $100,000"); return; }
     setBusy(true);
@@ -364,7 +397,7 @@ function BulkRecordEdit({ mode, employees, label, load, onClose, onDone }: {
           <>
             {row("clock_in", "Clock in", <input type="time" className={inputCls} value={v.clock_in} onChange={(e) => set("clock_in", e.target.value)} aria-label="New clock in" />)}
             {row("clock_out", "Clock out", <input type="time" className={inputCls} value={v.clock_out} onChange={(e) => set("clock_out", e.target.value)} aria-label="New clock out" />)}
-            {row("lunch_minutes", "Lunch (min)", <input type="number" min={0} max={600} className={inputCls} value={v.lunch_minutes} onChange={(e) => set("lunch_minutes", e.target.value)} aria-label="New lunch minutes" />)}
+            {row("lunch_minutes", breakLabel(breakUnit), <BreakInput minutes={v.lunch_minutes} onChange={(m) => set("lunch_minutes", m)} className={inputCls} label="New break" />)}
           </>
         ) : row("hours", "Hours", <input type="number" step="0.25" min={0} max={24} className={inputCls} value={v.hours} onChange={(e) => set("hours", e.target.value)} aria-label="New hours" />)}
         {shifts.length > 0 && row("shift_id", "Shift", <RecordShiftSelect value={v.shift_id} onChange={(id) => set("shift_id", id)} shifts={shifts} ownLabel="Each person's usual" className={inputCls} />)}

@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { db } from "@/lib/db/mode";
 import { AppShell, StatCard, btnGhost, btnPrimary, inputCls } from "@/components/AppShell";
 import { EmployeePicker, SearchInput } from "@/components/EmployeeSearch";
+import { DataTable } from "@/components/DataTable";
 import { describeEmployeeFilter, isFiltering, matchesEmployee, NO_FILTER, type EmployeeFilter } from "@/lib/employee-search";
 import {
   currentWeek, fullName, money, useAdjustments, useAllRecords, useEmployees, useFieldDefs, usePayrollSettings, useShifts,
@@ -135,7 +136,7 @@ function PayrollPage() {
           <SearchInput value={q} onChange={setQ} employees={list.map((r) => r.e)} className="w-full max-w-xl" />
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <DataTable id="payroll" className="w-full text-sm">
             <thead>
               <tr className="border-b border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
                 <th className={`${th} pl-5 text-left`}>Employee</th>
@@ -172,7 +173,7 @@ function PayrollPage() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </DataTable>
         </div>
       </div>
 
@@ -279,7 +280,7 @@ function ExtrasPanel({ employees, adjustments, defaultDate, onChange }: {
         <button className={btnPrimary}>Add</button>
       </form>
       {adjustments.length > 0 && (
-        <table className="w-full text-sm">
+        <DataTable id="payroll-extra-pay" className="w-full text-sm">
           <tbody className="font-mono text-[13px]">
             {adjustments.map((a) => (
               <tr key={a.id} className="border-t border-border hover:bg-secondary">
@@ -292,7 +293,7 @@ function ExtrasPanel({ employees, adjustments, defaultDate, onChange }: {
               </tr>
             ))}
           </tbody>
-        </table>
+        </DataTable>
       )}
     </div>
   );

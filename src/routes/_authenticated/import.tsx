@@ -8,6 +8,7 @@ import { backupBefore } from "@/lib/db/safety";
 import { AppShell, btnGhost, btnPrimary, inputCls } from "@/components/AppShell";
 import { EmployeePicker } from "@/components/EmployeeSearch";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { DataTable } from "@/components/DataTable";
 import { Check, Plus, X } from "lucide-react";
 import { NO_DEFAULTS } from "@/lib/employee-fields";
 import { fullName, useEmployeeDefaults, useEmployees, useFieldDefs, useShifts, type Employee, type FieldDef } from "@/lib/payroll";
@@ -71,7 +72,7 @@ const template = () => {
     ["E100", "Nadia Okafor", "nadia@example.com", "555-0100", "Picker", "Warehouse", 28, "12 Elm St", "Austin", "TX", "78701", "2026-01-15"],
   ]), "New people");
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-    ["Employee ID", "Date", "Clock in", "Clock out", "Lunch minutes", "Hours"],
+    ["Employee ID", "Date", "Clock in", "Clock out", "Break minutes", "Hours"],
     ["E100", "2026-10-05", "09:00", "17:30", 30, ""],
     ["E100", "2026-10-06", "", "", "", 7.5],
   ]), "Hours");
@@ -488,12 +489,12 @@ function SheetEditor({ sheet, setup, defs, employees, onChange, result }: {
           </div>
 
           <div className="max-h-[32rem] overflow-auto rounded-xl ring-1 ring-border">
-            <table className="text-[12px]">
+            <DataTable id="import-preview" className="text-[12px]">
               <thead className="sticky top-0 z-10 bg-background">
                 <tr className="border-b border-border">
                   <th className="sticky left-0 z-20 bg-background px-2 py-1" />
                   {Array.from({ length: sheet.width }, (_, j) => (
-                    <th key={j} className="min-w-[9rem] px-1.5 py-1.5 text-left align-bottom font-normal">
+                    <th key={j} data-col={columnLetter(sheet, j)} className="min-w-[9rem] px-1.5 py-1.5 text-left align-bottom font-normal">
                       <div className="font-mono text-[10px] text-muted-foreground">{columnLetter(sheet, j)}{headerText(j) ? ` · ${headerText(j)}` : ""}</div>
                       <select value={setup.columns[j] ?? ""} onChange={(e) => setColumn(j, e.target.value)}
                         className={`mt-1 w-full rounded-lg px-1.5 py-1 text-[12px] ring-1 ${setup.columns[j] ? "bg-primary/10 font-medium text-primary ring-primary/30" : "bg-secondary text-muted-foreground ring-border"}`}>
@@ -531,7 +532,7 @@ function SheetEditor({ sheet, setup, defs, employees, onChange, result }: {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </DataTable>
           </div>
         </>
       )}

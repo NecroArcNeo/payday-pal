@@ -77,7 +77,7 @@ export const HOURS_FIELDS: Field[] = [
   { key: "date", label: "Date", aliases: ["date", "workdate", "day", "shiftdate", "dateworked"] },
   { key: "cin", label: "Clock in", aliases: ["clockin", "timein", "in", "start", "starttime", "punchin", "begin", "shiftstart", "arrival"] },
   { key: "cout", label: "Clock out", aliases: ["clockout", "timeout", "out", "end", "endtime", "punchout", "finish", "finishtime", "stop", "shiftend", "departure"] },
-  { key: "lunch", label: "Lunch / break", aliases: ["lunchminutes", "lunch", "break", "breakminutes", "lunchmins", "breaktime", "unpaidbreak"] },
+  { key: "lunch", label: "Break", aliases: ["lunchminutes", "lunch", "break", "breakminutes", "lunchmins", "breaktime", "unpaidbreak"] },
   { key: "hours", label: "Hours worked", aliases: ["hours", "totalhours", "hoursworked", "hrs", "total", "regularhours"] },
   { key: "pay", label: "Manual day pay", aliases: ["pay", "daypay", "dailypay", "manualpay", "payamount", "payoverride"] },
   { key: "note", label: "Note", aliases: ["notes", "note", "comments", "memo"] },

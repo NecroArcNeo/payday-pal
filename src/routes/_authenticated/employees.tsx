@@ -7,6 +7,7 @@ import { db } from "@/lib/db/mode";
 import { backupBefore } from "@/lib/db/safety";
 import { AppShell, btnGhost, btnPrimary, inputCls } from "@/components/AppShell";
 import { SearchInput } from "@/components/EmployeeSearch";
+import { DataTable } from "@/components/DataTable";
 import { fullName, money, useEmployeeDefaults, useEmployees, useFieldDefs, useShifts, type Employee, type FieldDef, type Shift } from "@/lib/payroll";
 import { NO_DEFAULTS, withDefaults } from "@/lib/employee-fields";
 import { PAY_TYPES, shiftFor } from "@/lib/pay";
@@ -166,7 +167,7 @@ function EmployeesPage() {
           </div>
         )}
 
-        <table className="w-full text-sm">
+        <DataTable id="employees" className="w-full text-sm">
           <thead>
             <tr className="border-b border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
               <th className="w-10 pl-5"><input type="checkbox" aria-label="Select all shown" checked={allShownPicked} onChange={toggleShown} disabled={!list.length} /></th>
@@ -208,7 +209,7 @@ function EmployeesPage() {
               </tr>
             ))}
           </tbody>
-        </table>
+        </DataTable>
         {isFiltering(q) && list.length > 0 && <div className="border-t border-border px-5 py-2 text-xs text-muted-foreground">Showing {list.length} of {employees.length}</div>}
       </div>
     </AppShell>

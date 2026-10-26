@@ -139,3 +139,14 @@
 @keyframes breathe { 0%,100% { transform: scale(1); } 50% { transform: scale(1.04); } }
 @utility anim-rise { animation: rise 620ms cubic-bezier(0.32,0.72,0,1) both; }
 @utility anim-breathe { animation: breathe 9s ease-in-out infinite; }
+
+/* Tables (<DataTable>): a divider between columns, and fixed widths once a column is resized. */
+@layer base {
+  .data-grid th:not(:last-child),
+  .data-grid td:not(:last-child) {
+    border-right: 1px solid color-mix(in oklab, var(--muted-foreground) 22%, transparent);
+  }
+  .data-grid.is-sized { table-layout: fixed; }
+  .data-grid.is-sized th,
+  .data-grid.is-sized td { overflow: hidden; text-overflow: ellipsis; }
+}

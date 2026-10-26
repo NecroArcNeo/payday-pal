@@ -1,10 +1,11 @@
 import { Link } from "@tanstack/react-router";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useSession } from "@/lib/payroll";
 import { setDataMode, useDataMode } from "@/lib/db/mode";
+import { usePref } from "@/lib/prefs";
 import { ThemeToggle } from "./ThemeToggle";
-import { Cloud, HardDrive, LogOut } from "lucide-react";
+import { Cloud, GripVertical, HardDrive, LogOut } from "lucide-react";
 
 const adminNav = [
   { to: "/dashboard", label: "Dashboard" },
@@ -15,11 +16,32 @@ const adminNav = [
   { to: "/payroll", label: "Payroll" },
   { to: "/sync", label: "Sync & backup" },
 ] as const;
+type NavTo = (typeof adminNav)[number]["to"];
+
+/** The nav in the order the user dragged it into (remembered on this device). Pages added later go at the end. */
+function useNavOrder() {
+  const [order, setOrder] = usePref<string[]>("meridian-nav-order", []);
+  const rank = (to: string) => { const i = order.indexOf(to); return i === -1 ? order.length + adminNav.findIndex((n) => n.to === to) : i; };
+  const items = [...adminNav].sort((a, b) => rank(a.to) - rank(b.to));
+  /** Puts `from` where `to` is now. */
+  const move = (from: NavTo, to: NavTo) => {
+    if (from === to) return;
+    const list: string[] = items.map((n) => n.to).filter((x) => x !== from);
+    const at = list.indexOf(to) + (items.findIndex((n) => n.to === from) < items.findIndex((n) => n.to === to) ? 1 : 0);
+    list.splice(at, 0, from);
+    setOrder(list);
+  };
+  const customized = items.some((n, i) => n.to !== adminNav[i]!.to);
+  return { items, move, customized, reset: () => setOrder([]) };
+}
 
 export function AppShell({ eyebrow, title, actions, children }: { eyebrow: string; title: string; actions?: ReactNode; children: ReactNode }) {
   const { data: session } = useSession();
   const mode = useDataMode();
   const email = session?.user?.email ?? "";
+  const nav = useNavOrder();
+  const [dragging, setDragging] = useState<NavTo | null>(null);
+  const [over, setOver] = useState<NavTo | null>(null);
 
   // Only disconnects the cloud account; this device's data stays as it is.
   const signOut = async () => {
@@ -41,17 +63,36 @@ export function AppShell({ eyebrow, title, actions, children }: { eyebrow: strin
               <div className="mt-1 font-mono text-[10px] tracking-widest text-muted-foreground">PAYROLL OS</div>
             </div>
           </div>
-          <nav className="space-y-1 p-3">
-            {adminNav.map((n, i) => (
+          <nav className="space-y-1 p-3" aria-label="Pages (drag to reorder, or Alt+↑/↓)">
+            {nav.items.map((n, i) => (
               <Link
                 key={n.to}
                 to={n.to}
-                className="flex items-center justify-between rounded-xl px-3 py-2 text-sm text-foreground/80 hover:bg-secondary"
+                draggable
+                onDragStart={(e) => { setDragging(n.to); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", n.label); }}
+                onDragOver={(e) => { if (!dragging) return; e.preventDefault(); e.dataTransfer.dropEffect = "move"; setOver(n.to); }}
+                onDrop={(e) => { e.preventDefault(); if (dragging) nav.move(dragging, n.to); setDragging(null); setOver(null); }}
+                onDragEnd={() => { setDragging(null); setOver(null); }}
+                onKeyDown={(e) => {
+                  if (!e.altKey || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
+                  e.preventDefault();
+                  const other = nav.items[i + (e.key === "ArrowUp" ? -1 : 1)];
+                  if (other) nav.move(n.to, other.to);
+                }}
+                title="Drag to reorder"
+                className={`group flex items-center justify-between rounded-xl px-3 py-2 text-sm text-foreground/80 hover:bg-secondary ${dragging === n.to ? "opacity-40" : ""} ${over === n.to && dragging && dragging !== n.to ? "ring-2 ring-primary/40" : ""}`}
                 activeProps={{ className: "bg-accent font-medium !text-accent-foreground ring-1 ring-primary/15" }}
               >
-                {n.label} <span className="font-mono text-[10px] text-muted-foreground">0{i + 1}</span>
+                <span className="flex items-center gap-1.5">
+                  <GripVertical className="-ml-1.5 h-3.5 w-3.5 cursor-grab text-muted-foreground/0 group-hover:text-muted-foreground" />
+                  {n.label}
+                </span>
+                <span className="font-mono text-[10px] text-muted-foreground">0{i + 1}</span>
               </Link>
             ))}
+            {nav.customized && (
+              <button onClick={nav.reset} className="w-full px-3 pt-1 text-left text-[11px] text-muted-foreground hover:text-foreground">Reset tab order</button>
+            )}
           </nav>
           <div className="mt-auto border-t border-border p-3">
             <div className="flex items-center gap-3 rounded-xl bg-secondary p-3 ring-1 ring-border">

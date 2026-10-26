@@ -53,6 +53,16 @@ export function addDays(date: string, days: number) {
   return d.toISOString().slice(0, 10);
 }
 
+/** Every date from `from` to `to` inclusive (just `from` when `to` is empty), optionally without Saturdays and Sundays. */
+export function datesBetween(from: string, to: string, skipWeekends = false) {
+  const out: string[] = [];
+  for (let d = from; d <= (to || from); d = addDays(d, 1)) {
+    const wd = new Date(`${d}T00:00:00Z`).getUTCDay();
+    if (!skipWeekends || (wd !== 0 && wd !== 6)) out.push(d);
+  }
+  return out;
+}
+
 export function currentWeek() {
   const now = new Date();
   const day = (now.getDay() + 6) % 7;

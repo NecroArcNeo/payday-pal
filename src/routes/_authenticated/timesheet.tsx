@@ -2,6 +2,9 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell, StatCard, btnGhost, inputCls } from "@/components/AppShell";
 import { EmployeePicker } from "@/components/EmployeeSearch";
 import { RECORD_PAY_COLUMNS, RecordPayCells, RecordPayHeaders, RecordShiftCell } from "@/components/RecordPay";
+import { BreakUnitToggle } from "@/components/BreakField";
+import { DataTable } from "@/components/DataTable";
+import { breakLabel, formatBreak, useBreakUnit, type BreakUnit } from "@/lib/breaks";
 import { profileSections } from "@/lib/employee-fields";
 import {
   addDays, currentWeek, fullName, isoDate, money, useAdjustments, useAllRecords, useEmployees, useFieldDefs, usePayrollSettings, useShifts, weekday,
@@ -113,6 +116,7 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
   rules: { threshold: number; otMultiplier: number; weekendOvertime: boolean };
 }) {
   const shift = shiftFor(emp.shift_id, shifts);
+  const [breakUnit] = useBreakUnit();
   const rate = Number(emp.hourly_rate);
   const salary = emp.pay_type === "salary";
   const pay = employeePay(records, { rate, shiftMultiplier: shift.multiplier, rules, payType: emp.pay_type, shifts, from, to });
@@ -210,7 +214,10 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
 
       <div className="glass-panel overflow-hidden">
         <div className="border-b border-border px-5 py-4">
-          <div className="font-display font-extrabold tracking-tight">Hours and pay</div>
+          <div className="flex items-center justify-between gap-3">
+            <div className="font-display font-extrabold tracking-tight">Hours and pay</div>
+            <span className="flex items-center gap-2 text-xs text-muted-foreground print:hidden">Breaks in <BreakUnitToggle /></span>
+          </div>
           <p className="text-xs text-muted-foreground">
             {salary
               ? `Salaried: ${rules.threshold} h × ${money(rate * shift.multiplier)} for each week worked, shared across its days by hours.`
@@ -219,14 +226,14 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
           </p>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <DataTable id="timesheet" className="w-full text-sm">
             <thead>
               <tr className="border-b border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
                 <th className={`${th} pl-5 text-left`}>Date</th>
                 <th className={`${th} text-left`}>Shift</th>
                 <th className={`${th} text-left`}>In</th>
                 <th className={`${th} text-left`}>Out</th>
-                <th className={`${th} text-right`}>Lunch min</th>
+                <th className={`${th} text-right`}>{breakLabel(breakUnit)}</th>
                 <th className={`${th} text-right`}>Hours</th>
                 <RecordPayHeaders className={`${th} text-right`} />
                 <th className={`${th} pr-5 text-left`}>Note</th>
@@ -239,7 +246,7 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
                 </td></tr>
               )}
               {weeks.map((w) => (
-                <WeekRows key={w.start} start={w.start} rows={w.rows} lineById={lineById} shifts={shifts} employeeShiftId={emp.shift_id} total={totalCells(subtotal(w.rows))} showSubtotal={weeks.length > 1} />
+                <WeekRows key={w.start} start={w.start} rows={w.rows} lineById={lineById} breakUnit={breakUnit} shifts={shifts} employeeShiftId={emp.shift_id} total={totalCells(subtotal(w.rows))} showSubtotal={weeks.length > 1} />
               ))}
             </tbody>
             {shown.length > 0 && (
@@ -250,14 +257,14 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
                 </tr>
               </tfoot>
             )}
-          </table>
+          </DataTable>
         </div>
       </div>
 
       {adjustments.length > 0 && (
         <div className="glass-panel overflow-hidden">
           <div className="border-b border-border px-5 py-4 font-display font-extrabold tracking-tight">Extra pay</div>
-          <table className="w-full text-sm">
+          <DataTable id="timesheet-extra-pay" className="w-full text-sm">
             <tbody className="font-mono text-[13px]">
               {[...adjustments].sort((a, b) => a.pay_date.localeCompare(b.pay_date)).map((a) => (
                 <tr key={a.id} className="border-b border-border last:border-0">
@@ -272,15 +279,15 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
                 <td className="px-5 py-2.5 text-right">{money(pay.total + extras)}</td>
               </tr>
             </tbody>
-          </table>
+          </DataTable>
         </div>
       )}
     </>
   );
 }
 
-function WeekRows({ start, rows, lineById, shifts, employeeShiftId, total, showSubtotal }: {
-  start: string; rows: TimeRecord[]; lineById: Map<string, PayLine>; shifts: Shift[]; employeeShiftId: string | null; total: React.ReactNode; showSubtotal: boolean;
+function WeekRows({ start, rows, lineById, breakUnit, shifts, employeeShiftId, total, showSubtotal }: {
+  start: string; rows: TimeRecord[]; lineById: Map<string, PayLine>; breakUnit: BreakUnit; shifts: Shift[]; employeeShiftId: string | null; total: React.ReactNode; showSubtotal: boolean;
 }) {
   return (
     <>
@@ -290,7 +297,7 @@ function WeekRows({ start, rows, lineById, shifts, employeeShiftId, total, showS
           <RecordShiftCell shiftId={r.shift_id} employeeShiftId={employeeShiftId} shifts={shifts} cell="px-3 py-2.5" />
           <td className="px-3 py-2.5">{r.entry_mode === "clock" ? r.clock_in?.slice(0, 5) : <span className="font-body text-xs text-muted-foreground">daily hours</span>}</td>
           <td className="px-3 py-2.5">{r.clock_out?.slice(0, 5)}</td>
-          <td className="px-3 py-2.5 text-right">{r.entry_mode === "clock" ? r.lunch_minutes : ""}</td>
+          <td className="px-3 py-2.5 text-right">{r.entry_mode === "clock" ? formatBreak(r.lunch_minutes, breakUnit) : ""}</td>
           <td className="px-3 py-2.5 text-right">{Number(r.hours).toFixed(2)}</td>
           <RecordPayCells line={lineById.get(r.id)} cell="px-3 py-2.5 text-right" />
           <td className="max-w-[14rem] truncate px-3 py-2.5 pr-5 font-body text-xs text-muted-foreground" title={r.note ?? ""}>{r.note}</td>

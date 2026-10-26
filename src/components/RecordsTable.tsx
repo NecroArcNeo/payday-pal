@@ -1,6 +1,9 @@
 import { useState } from "react";
 import { fullName, money, useEmployees, useRecordPay, useShifts, weekday, type RecordWithEmp } from "@/lib/payroll";
 import { RecordPayCells, RecordPayHeaders, RecordShiftCell } from "@/components/RecordPay";
+import { BreakUnitToggle } from "@/components/BreakField";
+import { DataTable } from "./DataTable";
+import { breakLabel, formatBreak, useBreakUnit } from "@/lib/breaks";
 import { Trash2 } from "lucide-react";
 
 export function RecordsTable({ records, title = "Time records", onDelete, showName = true }: { records: RecordWithEmp[]; title?: string; onDelete?: (id: string) => void; showName?: boolean }) {
@@ -8,6 +11,7 @@ export function RecordsTable({ records, title = "Time records", onDelete, showNa
   const rows = records.filter((r) => r.entry_mode === mode);
   const pay = useRecordPay(records);
   const { data: shifts = [] } = useShifts();
+  const [breakUnit] = useBreakUnit();
   const { data: employees = [] } = useEmployees();
   const empById = new Map(employees.map((e) => [e.id, e]));
 
@@ -15,6 +19,7 @@ export function RecordsTable({ records, title = "Time records", onDelete, showNa
     <div className="glass-panel overflow-hidden">
       <div className="flex items-center justify-between border-b border-border px-5 py-4">
         <div className="font-display font-extrabold tracking-tight">{title}</div>
+        {mode === "clock" && <span className="ml-auto mr-3 flex items-center gap-2 text-xs text-muted-foreground">Breaks in <BreakUnitToggle /></span>}
         <div className="flex rounded-xl bg-secondary p-1 text-xs font-medium ring-1 ring-border">
           {(["clock", "hours"] as const).map((m) => (
             <button
@@ -28,7 +33,7 @@ export function RecordsTable({ records, title = "Time records", onDelete, showNa
         </div>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+        <DataTable id="recent-records" className="w-full text-sm">
           <thead>
             <tr className="border-b border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
               {showName && <th className="px-5 py-3 text-left font-medium">Employee</th>}
@@ -38,7 +43,7 @@ export function RecordsTable({ records, title = "Time records", onDelete, showNa
                 <>
                   <th className="px-3 py-3 text-left font-medium">Clock in</th>
                   <th className="px-3 py-3 text-left font-medium">Clock out</th>
-                  <th className="px-3 py-3 text-right font-medium">Lunch min</th>
+                  <th className="px-3 py-3 text-right font-medium">{breakLabel(breakUnit)}</th>
                 </>
               )}
               <th className="px-3 py-3 text-right font-medium">Hours</th>
@@ -66,7 +71,7 @@ export function RecordsTable({ records, title = "Time records", onDelete, showNa
                     <>
                       <td className="px-3 py-3">{r.clock_in?.slice(0, 5)}</td>
                       <td className="px-3 py-3">{r.clock_out?.slice(0, 5)}</td>
-                      <td className="px-3 py-3 text-right">{r.lunch_minutes}</td>
+                      <td className="px-3 py-3 text-right">{formatBreak(r.lunch_minutes, breakUnit)}</td>
                     </>
                   )}
                   <td className="px-3 py-3 text-right">{Number(r.hours).toFixed(2)}</td>
@@ -83,7 +88,7 @@ export function RecordsTable({ records, title = "Time records", onDelete, showNa
               );
             })}
           </tbody>
-        </table>
+        </DataTable>
       </div>
     </div>
   );
