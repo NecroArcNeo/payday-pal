@@ -1,9 +1,12 @@
+import { desktop } from "../desktop";
 import { countRows, type Snapshot, type SnapshotCounts } from "./snapshot";
 
-// Automatic on-device backups, kept in their own IndexedDB database so a
-// broken payroll database can't take its backups down with it. They live on
-// the same device, though — downloaded backup files and the cloud are what
-// survive the browser's storage being cleared.
+// Automatic on-device backups, kept apart from the payroll database so a
+// broken database can't take its backups down with it. In the browser they're
+// a separate IndexedDB database, on the same device — downloaded backup files
+// and the cloud are what survive the browser's storage being cleared. In the
+// desktop app they're JSON files in Documents\Meridian Payroll\Backups
+// (electron/main.mjs), flushed to disk before they count as saved.
 
 const DB_NAME = "meridian-payroll-backups";
 const STORE = "backups";
@@ -56,7 +59,7 @@ function run<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<
 /** Saves a backup and confirms it reads back intact. Throws if it can't — callers must not proceed. */
 export async function saveBackup(reason: BackupReason, snapshot: Snapshot): Promise<BackupInfo> {
   const rec = { created_at: new Date().toISOString(), reason, counts: countRows(snapshot), snapshot };
-  const id = (await run("readwrite", (s) => s.add(rec))) as number;
+  const id = desktop ? await desktop.backups.add(rec) : ((await run("readwrite", (s) => s.add(rec))) as number);
   const back = await getBackup(id);
   if (!back || JSON.stringify(back.snapshot) !== JSON.stringify(snapshot)) throw new Error("Backup could not be verified after saving");
   await prune();
@@ -64,21 +67,24 @@ export async function saveBackup(reason: BackupReason, snapshot: Snapshot): Prom
 }
 
 export async function getBackup(id: number): Promise<BackupRecord | undefined> {
+  if (desktop) return desktop.backups.get<BackupRecord>(id);
   return run("readonly", (s) => s.get(id) as IDBRequest<BackupRecord | undefined>);
 }
 
 export async function listBackups(): Promise<BackupInfo[]> {
+  if (desktop) return (await desktop.backups.list<BackupInfo>()).reverse();
   const all = await run("readonly", (s) => s.getAll() as IDBRequest<BackupRecord[]>);
   return all.map(({ id, created_at, reason, counts }) => ({ id, created_at, reason, counts })).reverse();
 }
 
 /** Drops the oldest backups past MAX_BACKUPS. */
 async function prune() {
-  const keys = (await run("readonly", (s) => s.getAllKeys())) as number[];
+  const keys = desktop ? await desktop.backups.ids() : ((await run("readonly", (s) => s.getAllKeys())) as number[]);
   const extra = keys.length - MAX_BACKUPS;
   if (extra <= 0) return;
   const drop = keys.sort((a, b) => a - b).slice(0, extra);
-  await run("readwrite", (s) => { for (const k of drop) s.delete(k); });
+  if (desktop) await desktop.backups.remove(drop);
+  else await run("readwrite", (s) => { for (const k of drop) s.delete(k); });
 }
 
 export function downloadSnapshot(snapshot: Snapshot, name: string) {

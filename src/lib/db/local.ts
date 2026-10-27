@@ -1,4 +1,5 @@
 import type { PGlite, Transaction } from "@electric-sql/pglite";
+import { desktop, type DesktopBridge } from "../desktop";
 import { LOCAL_MIGRATIONS } from "./schema";
 import type { Sql, SqlDb } from "./snapshot";
 
@@ -11,15 +12,19 @@ export class OtherTabError extends Error {
   }
 }
 
-let dbPromise: Promise<PGlite> | undefined;
+/** What the app uses of the on-device database, in the browser and in the desktop app alike. */
+export type LocalDb = SqlDb & { exec(sql: string): Promise<unknown> };
+
+let dbPromise: Promise<LocalDb> | undefined;
 
 /**
- * The on-device database (Postgres compiled to WebAssembly, stored in IndexedDB).
- * Only one tab may hold it open: two writers on the same IndexedDB store can corrupt it.
+ * The on-device database: Postgres compiled to WebAssembly. In the browser it runs in this tab and is
+ * stored in IndexedDB, and only one tab may hold it open (two writers on the same IndexedDB store can
+ * corrupt it). In the desktop app it runs in the app's main process on a real data folder.
  */
-export function localDb(): Promise<PGlite> {
+export function localDb(): Promise<LocalDb> {
   if (typeof window === "undefined") return Promise.reject(new Error("The local database only runs in the browser"));
-  dbPromise ??= openLocalDb().catch((e) => {
+  dbPromise ??= (desktop ? openDesktopDb(desktop) : openLocalDb()).catch((e) => {
     dbPromise = undefined;
     throw e;
   });
@@ -42,6 +47,30 @@ async function openLocalDb(): Promise<PGlite> {
   saveAfterTransactions(db);
   await migrate(db);
   void requestPersistentStorage();
+  return db;
+}
+
+async function openDesktopDb(bridge: DesktopBridge): Promise<LocalDb> {
+  const sql = (txId?: number) => ({
+    query: <T>(text: string, params?: unknown[]) => bridge.db.query<T>(text, params, txId),
+    exec: (text: string) => bridge.db.exec(text, txId),
+  });
+  const db: LocalDb = {
+    ...sql(),
+    transaction: async (fn) => {
+      const id = await bridge.db.begin();
+      let result;
+      try {
+        result = await fn(sql(id));
+      } catch (e) {
+        await bridge.db.end(id, false).catch(() => {});
+        throw e;
+      }
+      await bridge.db.end(id, true);
+      return result;
+    },
+  };
+  await migrate(db);
   return db;
 }
 
@@ -87,8 +116,9 @@ function acquireTabLock(): Promise<void> {
   });
 }
 
-/** Asks the browser not to evict this site's storage under disk pressure. */
+/** Asks the browser not to evict this site's storage under disk pressure. (The desktop app's data is ordinary files.) */
 export async function requestPersistentStorage(): Promise<boolean | null> {
+  if (desktop) return true;
   if (!navigator.storage?.persist) return null;
   if (await navigator.storage.persisted()) return true;
   return navigator.storage.persist();

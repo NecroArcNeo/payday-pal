@@ -1,0 +1,37 @@
+# Windows installer for the desktop app: npm run dist:win (output in release/).
+appId: com.meridian.payroll
+productName: Meridian Payroll
+copyright: Copyright © 2026 NecroArcNeo
+directories:
+  output: release
+  buildResources: build
+files:
+  - electron/**
+  - dist/client/**
+  - build/icon.ico
+  # The pages are already bundled into dist/client; the main process only needs PGlite.
+  - "!node_modules/**"
+  - node_modules/@electric-sql/pglite/package.json
+  - node_modules/@electric-sql/pglite/dist/**
+  - "!node_modules/@electric-sql/pglite/dist/**/*.map"
+  - "!node_modules/@electric-sql/pglite/dist/**/*.d.ts"
+  - "!node_modules/@electric-sql/pglite/dist/**/*.d.cts"
+  - "!node_modules/@electric-sql/pglite/dist/*.tar.gz"
+# PGlite reads its WebAssembly and data files from disk; keep them as real files.
+asarUnpack:
+  - node_modules/@electric-sql/pglite/**
+win:
+  target: nsis
+  icon: build/icon.ico
+nsis:
+  # Installs for this Windows user only: no administrator prompt, no "allow changes" dialog.
+  oneClick: true
+  perMachine: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Meridian Payroll
+  # Uninstalling never deletes the payroll database or the backups.
+  deleteAppDataOnUninstall: false
+# Chromium's own interface text (context menus, spell-check): English only keeps ~45 MB out of the install.
+electronLanguages:
+  - en-US

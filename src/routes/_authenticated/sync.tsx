@@ -10,12 +10,13 @@ import { useLabels } from "@/lib/labels";
 import { ALWAYS_SYNCED, customKey, DEFAULT_PRIVATE, PRIVATE_COLUMNS } from "@/lib/db/privacy";
 import { cloudConfigured, setDataMode, useDataMode } from "@/lib/db/mode";
 import { localDb, requestPersistentStorage } from "@/lib/db/local";
+import { desktop } from "@/lib/desktop";
 import { backupFileName, downloadSnapshot, getBackup, listBackups, reasonLabel, saveBackup } from "@/lib/db/backups";
 import { countRows, describeCounts, exportSnapshot, isEmpty, validateSnapshot, type Snapshot } from "@/lib/db/snapshot";
 import {
   exportState, hasUnpushedChanges, localSyncState, markExported, pull, push, restoreSnapshot, setPrivateFields, supabaseCloud, type SyncDeps,
 } from "@/lib/db/sync";
-import { Cloud, Download, HardDrive, Lock, RotateCcw, Upload } from "lucide-react";
+import { Cloud, Download, FolderOpen, HardDrive, Lock, RotateCcw, Upload } from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated/sync")({
   head: () => ({ meta: [{ title: "Sync & backup — Meridian Payroll" }] }),
@@ -52,6 +53,8 @@ function SyncPage() {
     retry: false,
   });
   const backups = useQuery({ queryKey: ["backups"], queryFn: listBackups });
+  const folders = useQuery({ queryKey: ["desktop-folders"], enabled: !!desktop, queryFn: () => desktop!.info() });
+  const openFolder = (which: "data" | "backups") => desktop!.openFolder(which).catch((e: Error) => toast.error(e.message));
   const cloudBackups = useQuery({
     queryKey: ["cloud-backups", user?.id],
     enabled: !!user,
@@ -143,7 +146,7 @@ function SyncPage() {
     <AppShell eyebrow="Your data" title="Sync & backup">
       {exportDue && (
         <div className="glass-panel flex items-center justify-between gap-4 p-4 text-sm">
-          <span>Your data changed since your last backup file ({when(local.data?.exported.exportedAt)}). A file is the only copy that survives this browser's storage being cleared.</span>
+          <span>Your data changed since your last backup file ({when(local.data?.exported.exportedAt)}). {desktop ? "Keep a copy somewhere other than this computer, such as a USB stick, in case it fails or is lost." : "A file is the only copy that survives this browser's storage being cleared."}</span>
           <button onClick={exportFile} className={btnPrimary} disabled={!!busy}>Download backup</button>
         </div>
       )}
@@ -154,9 +157,16 @@ function SyncPage() {
           <p className="text-sm text-muted-foreground">
             {local.isError ? `Couldn't read this device's data: ${local.error.message}` : local.data ? describeCounts(local.data.counts) : "Loading…"}
           </p>
+          {desktop ? (
+            <p className="text-xs text-muted-foreground">
+              Stored on this computer in <code className="break-all">{folders.data?.dataDir ?? "…"}</code>.{" "}
+              <button className="underline underline-offset-2" onClick={() => openFolder("data")}>Open folder</button>
+            </p>
+          ) : (
           <p className="text-xs text-muted-foreground">
             Stored in this browser. {local.data?.persisted === true ? "The browser has agreed to keep it." : local.data?.persisted === false ? "The browser may clear it if the disk gets full." : ""}
           </p>
+          )}
           {local.data?.persisted === false && (
             <button className={btnGhost} onClick={() => run("persist", async () => {
               const ok = await requestPersistentStorage();
@@ -222,6 +232,12 @@ function SyncPage() {
         <div className="border-b border-border px-5 py-4">
           <div className="font-display font-extrabold tracking-tight">Backups on this device</div>
           <p className="text-xs text-muted-foreground">Saved automatically every day you make changes, and before every pull, push or restore. The newest 60 are kept.</p>
+          {desktop && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Saved as files in <code className="break-all">{folders.data?.backupDir ?? "…"}</code>.{" "}
+              <button className="inline-flex items-center gap-1 underline underline-offset-2" onClick={() => openFolder("backups")}><FolderOpen className="h-3 w-3" /> Open folder</button>
+            </p>
+          )}
         </div>
         <BackupList
           rows={(backups.data ?? []).map((b) => ({ key: b.id, at: b.created_at, label: reasonLabel[b.reason] ?? b.reason, detail: describeCounts(b.counts) }))}

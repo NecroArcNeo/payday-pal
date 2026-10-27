@@ -1,6 +1,10 @@
 {
   "name": "tanstack_start_ts",
   "private": true,
+  "version": "0.1.0",
+  "description": "Payroll for a small team: employees, hours and pay, stored on this computer.",
+  "author": "NecroArcNeo",
+  "main": "electron/main.mjs",
   "sideEffects": false,
   "type": "module",
   "scripts": {
@@ -12,7 +16,9 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "desktop": "vite build --mode desktop && electron .",
+    "dist:win": "vite build --mode desktop && electron-builder --win"
   },
   "overrides": {
     "rolldown": "1.2.1"
@@ -84,6 +90,8 @@
     "@vitejs/plugin-react": "^5.2.0",
     "drizzle-kit": "0.x",
     "drizzle-orm": "0.x",
+    "electron": "45.0.0",
+    "electron-builder": "26.18.0",
     "eslint": "^9.32.0",
     "eslint-config-prettier": "^10.1.1",
     "eslint-plugin-prettier": "^5.2.6",
