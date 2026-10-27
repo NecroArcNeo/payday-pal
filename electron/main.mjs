@@ -9,6 +9,7 @@
 
 import { app, BrowserWindow, ipcMain, Menu, net, protocol, shell } from "electron";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { PGlite, types } from "@electric-sql/pglite";
@@ -24,6 +25,12 @@ const HOME = process.env.MERIDIAN_HOME;
 app.setPath("userData", HOME ? path.join(HOME, "app") : path.join(app.getPath("appData"), "Meridian Payroll"));
 const DATA_DIR = path.join(app.getPath("userData"), "database");
 const BACKUP_DIR = HOME ? path.join(HOME, "Backups") : path.join(app.getPath("documents"), "Meridian Payroll", "Backups");
+// Says whether the database is open. Still "open" at startup means the last session never closed it:
+// a crash, a power cut or a forced quit.
+const SESSION_FILE = path.join(app.getPath("userData"), "session.json");
+const lastSession = (() => {
+  try { return JSON.parse(fs.readFileSync(SESSION_FILE, "utf8")); } catch { return null; }
+})();
 
 // One running copy: two processes writing one data folder would corrupt it.
 if (!app.requestSingleInstanceLock()) {
@@ -51,9 +58,27 @@ function database() {
       },
     });
     await db.waitReady;
+    writeDurably(SESSION_FILE, JSON.stringify({ open: true, startedAt: new Date().toISOString() }));
     return db;
-  })();
+  })().catch((e) => {
+    dbPromise = undefined; // try again next time (e.g. after the recovery screen moves a damaged folder aside)
+    throw e;
+  });
   return dbPromise;
+}
+
+/** Closes the database (if it opened) and moves its folder aside, never deleting it. Returns where it went. */
+async function setAsideDatabase() {
+  for (const tx of transactions.values()) tx.rollback(new Error("The database is being replaced"));
+  if (dbPromise) {
+    try { await (await dbPromise).close(); } catch { /* it never opened */ }
+    dbPromise = undefined;
+  }
+  if (!fs.existsSync(DATA_DIR)) return null;
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  const aside = path.join(path.dirname(DATA_DIR), `database-damaged-${stamp}`);
+  fs.renameSync(DATA_DIR, aside);
+  return aside;
 }
 
 /** Open transactions by id, each owned by the page (webContents) that began it. */
@@ -184,7 +209,9 @@ handle("backups:delete", (_e, ids) => {
   return null;
 });
 
-handle("desktop:info", () => ({ dataDir: DATA_DIR, backupDir: BACKUP_DIR }));
+handle("desktop:info", () => ({ dataDir: DATA_DIR, backupDir: BACKUP_DIR, computerName: os.hostname() }));
+handle("desktop:session", () => ({ uncleanSince: lastSession?.open ? lastSession.startedAt ?? null : null }));
+handle("db:set-aside", () => setAsideDatabase());
 handle("desktop:open-folder", async (_e, which) => {
   const dir = which === "backups" ? BACKUP_DIR : DATA_DIR;
   fs.mkdirSync(dir, { recursive: true });
@@ -280,5 +307,9 @@ app.on("will-quit", (e) => {
   if (closed || !dbPromise) return;
   e.preventDefault();
   for (const tx of transactions.values()) tx.rollback(new Error("The app is closing"));
-  dbPromise.then((db) => db.close()).catch(() => {}).finally(() => { closed = true; app.quit(); });
+  dbPromise
+    .then((db) => db.close())
+    .then(() => writeDurably(SESSION_FILE, JSON.stringify({ open: false, closedAt: new Date().toISOString() })))
+    .catch(() => {})
+    .finally(() => { closed = true; app.quit(); });
 });

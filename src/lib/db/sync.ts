@@ -3,7 +3,7 @@ import type { BackupReason } from "./backups";
 import { changeSeq, getMeta, setMeta } from "./local";
 import { getPrivateFields, keepPrivate, redactSnapshot, savePrivateFields } from "./privacy";
 import { SCHEMA_VERSION, TABLES } from "./schema";
-import { countRows, exportSnapshot, isEmpty, replaceWithSnapshot, validateSnapshot, type Snapshot, type SnapshotCounts, type Sql, type SqlDb } from "./snapshot";
+import { countRows, diffCounts, exportSnapshot, isEmpty, replaceWithSnapshot, validateSnapshot, type Snapshot, type SnapshotCounts, type Sql, type SqlDb } from "./snapshot";
 
 // Push copies this device's whole database to the signed-in account; pull
 // copies the account's database onto this device. Neither ever overwrites
@@ -15,14 +15,21 @@ export class SyncConflictError extends Error {
   constructor() { super("The cloud copy changed while syncing. Nothing was overwritten — review and try again."); }
 }
 
-export type CloudStatus = { version: number; has_data: boolean; updated_at: string | null; schema_version: number };
+export type CloudStatus = {
+  version: number; has_data: boolean; updated_at: string | null; schema_version: number;
+  /** Which computer pushed last, and the version that push made (cloud migration 0010; missing before it). */
+  pushed_by_device?: string | null; pushed_by_name?: string | null; pushed_at?: string | null; pushed_version?: number | null;
+};
 
-/** The three server functions in drizzle/migrations/0003_local_first_sync.sql. */
+/** A computer, as sync knows it: a random id made once per database, and a name the user can change. */
+export type Device = { id: string; name: string };
+
+/** The server functions in drizzle/migrations/0003_local_first_sync.sql (and 0010 for the pushing computer). */
 export interface CloudSync {
   status(): Promise<CloudStatus>;
   pull(): Promise<{ version: number; snapshot: Snapshot }>;
-  /** Replaces the cloud copy. Must throw SyncConflictError if the cloud version isn't `expectedVersion`. */
-  push(snapshot: Snapshot, expectedVersion: number): Promise<number>;
+  /** Replaces the cloud copy and records which computer did it. Must throw SyncConflictError if the cloud version isn't `expectedVersion`. */
+  push(snapshot: Snapshot, expectedVersion: number, device: Device): Promise<number>;
 }
 
 export type SyncDeps = {
@@ -30,15 +37,42 @@ export type SyncDeps = {
   cloud: CloudSync;
   userId: string;
   backup: (reason: BackupReason, snapshot: Snapshot) => Promise<unknown>;
+  /** This computer's name until the user gives it one. */
+  defaultDeviceName?: string;
 };
 
 export type PushResult =
   | { kind: "done"; counts: SnapshotCounts }
-  | { kind: "confirm"; cloudCounts: SnapshotCounts; cloudUpdatedAt: string | null; neverSynced: boolean };
+  | {
+    kind: "confirm"; cloudCounts: SnapshotCounts; cloudUpdatedAt: string | null; neverSynced: boolean;
+    /** Rows that differ between this computer and the cloud: what pushing would overwrite there. */
+    differ: SnapshotCounts;
+    /** Another computer that pushed since this one last synced. */
+    otherDevice: { name: string; at: string | null } | null;
+    /** The cloud copy was edited directly ("Edit cloud directly") since the last push. */
+    editedInCloud: boolean;
+  };
 export type PullResult =
   | { kind: "done"; counts: SnapshotCounts }
   | { kind: "empty" }
-  | { kind: "confirm"; localCounts: SnapshotCounts; cloudCounts: SnapshotCounts; neverSynced: boolean };
+  | { kind: "confirm"; localCounts: SnapshotCounts; cloudCounts: SnapshotCounts; neverSynced: boolean; differ: SnapshotCounts };
+
+const DEVICE = { id: "device_id", name: "device_name" } as const;
+
+/** This computer's sync identity. The id is made on first use and only ever leaves this database as "who pushed". */
+export async function deviceIdentity(sql: Sql, defaultName = "This computer"): Promise<Device> {
+  let id = await getMeta(sql, DEVICE.id);
+  if (!id) {
+    id = crypto.randomUUID();
+    await setMeta(sql, DEVICE.id, id);
+  }
+  return { id, name: (await getMeta(sql, DEVICE.name)) || defaultName };
+}
+
+/** Renames this computer for sync. Empty goes back to the default name. */
+export async function setDeviceName(sql: Sql, name: string) {
+  await setMeta(sql, DEVICE.name, name.trim().slice(0, 100) || null);
+}
 
 const META = { seq: "synced_seq", version: "synced_cloud_version", owner: "synced_owner", at: "synced_at" } as const;
 
@@ -76,10 +110,11 @@ function checkSchema(n: number) {
 
 const sameCounts = (a: SnapshotCounts, b: SnapshotCounts) => TABLES.every((t) => a[t] === b[t]);
 
-export async function push({ db, cloud, userId, backup }: SyncDeps, opts: { confirmed?: boolean } = {}): Promise<PushResult> {
+export async function push({ db, cloud, userId, backup, defaultDeviceName }: SyncDeps, opts: { confirmed?: boolean } = {}): Promise<PushResult> {
   const status = await cloud.status();
   checkSchema(status.schema_version);
   const st = await localSyncState(db);
+  const device = await deviceIdentity(db, defaultDeviceName);
   const neverSynced = st.syncedOwner !== userId;
   const cloudChanged = status.has_data && (neverSynced || status.version !== st.syncedVersion);
 
@@ -87,7 +122,17 @@ export async function push({ db, cloud, userId, backup }: SyncDeps, opts: { conf
   if (status.has_data) {
     const remote = await cloud.pull();
     if (cloudChanged && !opts.confirmed) {
-      return { kind: "confirm", cloudCounts: countRows(remote.snapshot), cloudUpdatedAt: status.updated_at, neverSynced };
+      const since = neverSynced ? -1 : (st.syncedVersion ?? -1);
+      const pushedSince = status.pushed_version != null && status.pushed_version > since;
+      const local = redactSnapshot(await exportSnapshot(db), await getPrivateFields(db));
+      return {
+        kind: "confirm", cloudCounts: countRows(remote.snapshot), cloudUpdatedAt: status.updated_at, neverSynced,
+        differ: diffCounts(local, remote.snapshot),
+        otherDevice: pushedSince && status.pushed_by_device && status.pushed_by_device !== device.id
+          ? { name: status.pushed_by_name || "Another computer", at: status.pushed_at ?? null }
+          : null,
+        editedInCloud: status.pushed_version != null && status.version > Math.max(status.pushed_version, since),
+      };
     }
     // Keep the exact cloud copy we're about to replace, and only replace that version.
     await backup("before-push-cloud-copy", validateSnapshot(remote.snapshot));
@@ -98,7 +143,7 @@ export async function push({ db, cloud, userId, backup }: SyncDeps, opts: { conf
     snapshot: redactSnapshot(await exportSnapshot(tx), await getPrivateFields(tx)),
     seq: await changeSeq(tx),
   }));
-  const version = await cloud.push(snapshot, expected);
+  const version = await cloud.push(snapshot, expected, device);
 
   // Read it back: the push only counts once the cloud holds exactly what we sent.
   const check = await cloud.pull();
@@ -118,7 +163,8 @@ export async function pull({ db, cloud, userId, backup }: SyncDeps, opts: { conf
   const st = await localSyncState(db);
   const neverSynced = st.syncedOwner !== userId;
   if (hasUnpushedChanges(st, userId, isEmpty(current)) && !opts.confirmed) {
-    return { kind: "confirm", localCounts: countRows(current), cloudCounts: countRows(incoming), neverSynced };
+    const differ = diffCounts(redactSnapshot(current, await getPrivateFields(db)), incoming);
+    return { kind: "confirm", localCounts: countRows(current), cloudCounts: countRows(incoming), neverSynced, differ };
   }
   if (!isEmpty(current)) await backup("before-pull", current);
 
@@ -202,8 +248,11 @@ export const supabaseCloud: CloudSync = {
     if (error) throw rpcError(error);
     return data as unknown as { version: number; snapshot: Snapshot };
   },
-  async push(snapshot, expectedVersion) {
-    const { data, error } = await supabase.rpc("push_snapshot", { p_snapshot: snapshot as never, p_expected_version: expectedVersion });
+  async push(snapshot, expectedVersion, device) {
+    const args = { p_snapshot: snapshot as never, p_expected_version: expectedVersion };
+    let { data, error } = await supabase.rpc("push_snapshot", { ...args, p_device_id: device.id, p_device_name: device.name } as never);
+    // A cloud database without migration 0010 only has the two-argument push.
+    if (error?.code === "PGRST202") ({ data, error } = await supabase.rpc("push_snapshot", args));
     if (error) throw rpcError(error);
     return Number(data);
   },

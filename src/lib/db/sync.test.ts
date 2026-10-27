@@ -5,10 +5,10 @@ import { PGlite, types } from "@electric-sql/pglite";
 import { beforeEach, describe, expect, it } from "vitest";
 import { migrate } from "./local";
 import { LOCAL_MIGRATIONS, SCHEMA_VERSION } from "./schema";
-import { countRows, exportSnapshot, replaceWithSnapshot, validateSnapshot, type Snapshot } from "./snapshot";
+import { countRows, describeDiff, diffCounts, exportSnapshot, replaceWithSnapshot, validateSnapshot, type Snapshot } from "./snapshot";
 import { createLocalStore } from "./store";
-import { maybeAutoBackup, pull, push, restoreSnapshot, setPrivateFields, SyncConflictError, type CloudSync, type SyncDeps } from "./sync";
-import { customKey, getPrivateFields, stripPrivate } from "./privacy";
+import { deviceIdentity, maybeAutoBackup, pull, push, restoreSnapshot, setDeviceName, setPrivateFields, SyncConflictError, type CloudSync, type SyncDeps } from "./sync";
+import { customKey, getPrivateFields, redactSnapshot, stripPrivate } from "./privacy";
 
 const parsers = { [types.NUMERIC]: (v: string) => Number(v), [types.DATE]: (v: string) => v, [types.TIMESTAMPTZ]: (v: string) => v };
 const migration = (name: string) => readFileSync(path.resolve(__dirname, "../../../drizzle/migrations", name), "utf8");
@@ -39,6 +39,7 @@ const applySyncMigration = async (cloud: PGlite) => {
   await cloud.exec(migration("0007_employee_defaults.sql"));
   await cloud.exec(migration("0008_id_documents_category_sections.sql"));
   await cloud.exec(migration("0009_record_shift.sql"));
+  await cloud.exec(migration("0010_push_device.sql"));
 };
 
 function cloudAs(db: PGlite, uid: string): CloudSync {
@@ -54,12 +55,14 @@ function cloudAs(db: PGlite, uid: string): CloudSync {
   return {
     status: async () => (await call("select public.sync_status() as r")) as never,
     pull: async () => (await call("select public.pull_snapshot() as r")) as never,
-    push: async (s, v) => Number(await call("select public.push_snapshot($1::jsonb, $2) as r", [JSON.stringify(s), v])),
+    push: async (s, v, d) => Number(await call("select public.push_snapshot($1::jsonb, $2, $3, $4) as r", [JSON.stringify(s), v, d.id, d.name])),
   };
 }
 
 const A = "00000000-0000-4000-8000-00000000000a";
 const B = "00000000-0000-4000-8000-00000000000b";
+/** A push made straight through the cloud API, not by one of the test computers. */
+const ELSEWHERE = { id: "elsewhere", name: "Elsewhere" };
 
 async function seed(db: PGlite, code: string) {
   const store = createLocalStore(async () => db);
@@ -477,8 +480,8 @@ describe("push and pull", () => {
     const api = cloudAs(cloud, A);
     await push(deps(laptop, api, A).d);
     const stale = (await api.status()).version;
-    await api.push(await exportSnapshot(laptop), stale);
-    await expect(api.push(await exportSnapshot(laptop), stale)).rejects.toBeInstanceOf(SyncConflictError);
+    await api.push(await exportSnapshot(laptop), stale, ELSEWHERE);
+    await expect(api.push(await exportSnapshot(laptop), stale, ELSEWHERE)).rejects.toBeInstanceOf(SyncConflictError);
   });
 
   it("rolls back a push that fails part-way, keeping the previous cloud copy", async () => {
@@ -489,7 +492,7 @@ describe("push and pull", () => {
     const before = (await api.pull()).snapshot.data;
     const bad = await exportSnapshot(laptop);
     bad.data.time_records.push({ ...bad.data.time_records[0]!, id: crypto.randomUUID(), employee_id: crypto.randomUUID() });
-    await expect(api.push(bad, (await api.status()).version)).rejects.toThrow();
+    await expect(api.push(bad, (await api.status()).version, ELSEWHERE)).rejects.toThrow();
     expect((await api.pull()).snapshot.data).toEqual(before);
   });
 
@@ -498,7 +501,7 @@ describe("push and pull", () => {
     await seed(laptop, "E1");
     await push(deps(laptop, cloudAs(cloud, A), A).d);
     expect((await push(deps(laptop, cloudAs(cloud, B), B).d, { confirmed: true })).kind).toBe("done");
-    await cloudAs(cloud, B).push({ ...(await exportSnapshot(await newLocal())) }, (await cloudAs(cloud, B).status()).version);
+    await cloudAs(cloud, B).push({ ...(await exportSnapshot(await newLocal())) }, (await cloudAs(cloud, B).status()).version, ELSEWHERE);
     expect(countRows((await cloudAs(cloud, A).pull()).snapshot).employees).toBe(1);
     expect(countRows((await cloudAs(cloud, B).pull()).snapshot).employees).toBe(0);
   });
@@ -510,6 +513,72 @@ describe("push and pull", () => {
     await cloud.query("select set_config('test.uid', $1, false)", [A]);
     await cloud.query("insert into public.employees (employee_code, first_name, last_name) values ('WEB', 'Edited', 'Online')");
     expect((await push(deps(laptop, cloudAs(cloud, A), A).d)).kind).toBe("confirm");
+  });
+});
+
+describe("which computer pushed", () => {
+  let cloud: PGlite;
+  beforeEach(async () => {
+    cloud = await newCloud();
+    await cloud.exec(`insert into auth.users values ('${A}', 'admin@example.com')`);
+    await applySyncMigration(cloud);
+  });
+  const named = (db: PGlite, name: string) => ({ ...deps(db, cloudAs(cloud, A), A).d, defaultDeviceName: name });
+
+  it("finds no differences between a computer and the copy it just pushed", async () => {
+    const laptop = await newLocal();
+    await seed(laptop, "E1");
+    await setPrivateFields(laptop, ["ssn", "address_line1"]);
+    await push(named(laptop, "Laptop"));
+    const here = redactSnapshot(await exportSnapshot(laptop), await getPrivateFields(laptop));
+    const there = (await cloudAs(cloud, A).pull()).snapshot;
+    expect(describeDiff(diffCounts(here, there))).toBeNull();
+  });
+
+  it("names the other computer and counts what a push would overwrite", async () => {
+    const laptop = await newLocal();
+    await seed(laptop, "E1");
+    await push(named(laptop, "Laptop"));
+    const office = await newLocal();
+    await pull(named(office, "Office PC"));
+
+    // The office adds an employee and pushes; the laptop, not knowing, changes a record and pushes too.
+    await seed(office, "E2");
+    expect((await push(named(office, "Office PC"))).kind).toBe("done");
+    expect((await cloudAs(cloud, A).status()).pushed_by_name).toBe("Office PC");
+    const laptopStore = createLocalStore(async () => laptop);
+    await laptopStore.update("time_records", (await laptopStore.listRecords())[0]!.id, { note: "changed on the laptop" });
+
+    const r = await push(named(laptop, "Laptop"));
+    if (r.kind !== "confirm") throw new Error("expected a confirmation");
+    expect(r.otherDevice?.name).toBe("Office PC");
+    expect(r.editedInCloud).toBe(false);
+    // E2 and its two records exist only in the cloud; the laptop's edited record differs.
+    expect(r.differ).toMatchObject({ employees: 1, time_records: 3 });
+    expect(describeDiff(r.differ)).toBe("1 employee and 3 time records");
+  });
+
+  it("tells a direct cloud edit apart from another computer's push", async () => {
+    const laptop = await newLocal();
+    await seed(laptop, "E1");
+    await push(named(laptop, "Laptop"));
+    await cloud.query("select set_config('test.uid', $1, false)", [A]);
+    await cloud.query("update public.employees set hourly_rate = 99 where owner_id = $1", [A]);
+    await seed(laptop, "E9");
+    const r = await push(named(laptop, "Laptop"));
+    if (r.kind !== "confirm") throw new Error("expected a confirmation");
+    expect(r.otherDevice).toBeNull();
+    expect(r.editedInCloud).toBe(true);
+  });
+
+  it("keeps a computer's name and id on this computer, and a blank name goes back to the default", async () => {
+    const db = await newLocal();
+    const first = await deviceIdentity(db, "DESKTOP-1");
+    expect(first.name).toBe("DESKTOP-1");
+    await setDeviceName(db, "  Front office  ");
+    expect(await deviceIdentity(db, "DESKTOP-1")).toEqual({ id: first.id, name: "Front office" });
+    await setDeviceName(db, " ");
+    expect((await deviceIdentity(db, "DESKTOP-1")).name).toBe("DESKTOP-1");
   });
 });
 

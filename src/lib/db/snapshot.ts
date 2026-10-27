@@ -39,6 +39,45 @@ export function describeCounts(c: SnapshotCounts) {
   return `${c.employees} employees, ${c.time_records} time records, ${c.pay_adjustments} extra-pay entries`;
 }
 
+const TIMESTAMP = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(Z|[+-]\d\d:?\d\d)$/;
+/**
+ * Sorted keys, so two copies of a row compare equal whichever order their columns came in, and timestamps
+ * as UTC, since each database writes them in its own time zone.
+ */
+const canonical = (v: unknown) =>
+  JSON.stringify(v, (_k, x: unknown) => {
+    if (typeof x === "string" && TIMESTAMP.test(x)) return new Date(x).toISOString();
+    if (x && typeof x === "object" && !Array.isArray(x)) return Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+    return x;
+  });
+
+/** Per table, how many rows (matched by id) are on only one side or differ between the two snapshots. */
+export function diffCounts(a: Snapshot, b: Snapshot): SnapshotCounts {
+  const out = {} as SnapshotCounts;
+  for (const t of TABLES) {
+    const left = new Map((a.data[t] ?? []).map((r) => [String(r["id"]), canonical(r)]));
+    let n = 0;
+    for (const r of b.data[t] ?? []) {
+      const id = String(r["id"]);
+      if (left.get(id) !== canonical(r)) n++;
+      left.delete(id);
+    }
+    out[t] = n + left.size;
+  }
+  return out;
+}
+
+const DIFF_NAMES: Record<TableName, [string, string]> = {
+  employee_field_defs: ["category", "categories"], shifts: ["shift", "shifts"], employees: ["employee", "employees"],
+  time_records: ["time record", "time records"], pay_adjustments: ["extra-pay entry", "extra-pay entries"], payroll_settings: ["", ""],
+};
+/** "2 employees, 40 time records and the payroll settings", or null when nothing differs. */
+export function describeDiff(c: SnapshotCounts): string | null {
+  const parts = TABLES.filter((t) => c[t] > 0).map((t) => (t === "payroll_settings" ? "the payroll settings" : `${c[t]} ${DIFF_NAMES[t][c[t] === 1 ? 0 : 1]}`));
+  if (!parts.length) return null;
+  return parts.length === 1 ? parts[0]! : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
+}
+
 /**
  * Reads every table. jsonb_agg gives ISO timestamps, matching what the cloud returns.
  * `schemaVersion` is for a database that hasn't been updated yet (backed up before its update): the

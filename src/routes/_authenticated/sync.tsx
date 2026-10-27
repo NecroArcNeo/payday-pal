@@ -12,9 +12,10 @@ import { cloudConfigured, setDataMode, useDataMode } from "@/lib/db/mode";
 import { localDb, requestPersistentStorage } from "@/lib/db/local";
 import { desktop } from "@/lib/desktop";
 import { backupFileName, downloadSnapshot, getBackup, listBackups, reasonLabel, saveBackup } from "@/lib/db/backups";
-import { countRows, describeCounts, exportSnapshot, isEmpty, validateSnapshot, type Snapshot } from "@/lib/db/snapshot";
+import { countRows, describeCounts, describeDiff, exportSnapshot, isEmpty, validateSnapshot, type Snapshot } from "@/lib/db/snapshot";
 import {
-  exportState, hasUnpushedChanges, localSyncState, markExported, pull, push, restoreSnapshot, setPrivateFields, supabaseCloud, type SyncDeps,
+  deviceIdentity, exportState, hasUnpushedChanges, localSyncState, markExported, pull, push, restoreSnapshot, setDeviceName, setPrivateFields,
+  supabaseCloud, type SyncDeps,
 } from "@/lib/db/sync";
 import { Cloud, Download, FolderOpen, HardDrive, Lock, RotateCcw, Upload } from "lucide-react";
 
@@ -86,16 +87,35 @@ function SyncPage() {
     }
   };
 
-  const deps = async (): Promise<SyncDeps> => ({ db: await localDb(), cloud: supabaseCloud, userId: user!.id, backup: saveBackup });
+  const defaultDeviceName = async () => (desktop ? (await desktop.info()).computerName : "Web browser");
+  const device = useQuery({ queryKey: ["device"], queryFn: async () => deviceIdentity(await localDb(), await defaultDeviceName()) });
+  const rename = (name: string) => run("rename", async () => {
+    if (name.trim() === device.data?.name) return;
+    await setDeviceName(await localDb(), name);
+  });
+
+  const deps = async (): Promise<SyncDeps> => ({
+    db: await localDb(), cloud: supabaseCloud, userId: user!.id, backup: saveBackup, defaultDeviceName: await defaultDeviceName(),
+  });
 
   const doPush = () => run("push", async () => {
     const d = await deps();
     let r = await push(d);
     if (r.kind === "confirm") {
-      const why = r.neverSynced
-        ? `Your cloud account already has data (${describeCounts(r.cloudCounts)}) that didn't come from this device.`
-        : `The cloud copy was changed since this device last synced (${when(r.cloudUpdatedAt)}): ${describeCounts(r.cloudCounts)}.`;
-      if (!confirm(`${why}\n\nPushing replaces it with this device's data (${describeCounts(local.data!.counts)}). A copy of the current cloud data is saved to Backups first.\n\nPush anyway?`)) return;
+      const changes = [
+        r.otherDevice && `${r.otherDevice.name} pushed its data to the cloud (${when(r.otherDevice.at)})`,
+        r.editedInCloud && "the cloud copy was edited directly",
+      ].filter(Boolean).join(", and ");
+      const why = changes
+        ? `Since this computer last synced, ${changes}.`
+        : r.neverSynced
+          ? "Your cloud account already has data that didn't come from this computer."
+          : `The cloud copy was changed since this computer last synced (${when(r.cloudUpdatedAt)}).`;
+      const diff = describeDiff(r.differ);
+      const loss = diff
+        ? `Compared with this computer, ${diff} differ. Pushing replaces the cloud copy with this computer's data, so those changes would be gone from the cloud (a copy is saved to Backups first).\n\nTo keep them instead, cancel and pull: this computer's data is backed up before a pull.`
+        : "The data is the same on both sides, so pushing loses nothing.";
+      if (!confirm(`${why}\n\n${loss}\n\nPush and overwrite the cloud copy?`)) return;
       r = await push(d, { confirmed: true });
     }
     if (r.kind === "done") toast.success(`Pushed to cloud: ${describeCounts(r.counts)}`);
@@ -106,8 +126,12 @@ function SyncPage() {
     let r = await pull(d);
     if (r.kind === "empty") { toast.info("The cloud has no data yet. Push from a device first."); return; }
     if (r.kind === "confirm") {
-      const why = r.neverSynced ? "This device has data that has never been pushed to this account" : "This device has changes that aren't in the cloud yet";
-      if (!confirm(`${why} (${describeCounts(r.localCounts)}).\n\nPulling replaces it with the cloud copy (${describeCounts(r.cloudCounts)}). This device's data is saved to Backups first, so you can restore it.\n\nPull anyway?`)) return;
+      const why = r.neverSynced ? "This computer has data that has never been pushed to this account" : "This computer has changes that aren't in the cloud yet";
+      const diff = describeDiff(r.differ);
+      const loss = diff
+        ? `Compared with the cloud, ${diff} differ. Pulling replaces this computer's data with the cloud copy (${describeCounts(r.cloudCounts)}), so those changes would be gone from here. This computer's data is saved to Backups first, so you can restore it.`
+        : "The data is the same on both sides, so pulling loses nothing.";
+      if (!confirm(`${why}.\n\n${loss}\n\nPull anyway?`)) return;
       r = await pull(d, { confirmed: true });
     }
     if (r.kind === "done") toast.success(`Pulled from cloud: ${describeCounts(r.counts)}`);
@@ -172,6 +196,19 @@ function SyncPage() {
             Stored in this browser. {local.data?.persisted === true ? "The browser has agreed to keep it." : local.data?.persisted === false ? "The browser may clear it if the disk gets full." : ""}
           </p>
           )}
+          {cloudConfigured && (
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span className="shrink-0">Name when syncing</span>
+              <input
+                key={device.data?.name}
+                defaultValue={device.data?.name ?? ""}
+                maxLength={100}
+                className="h-7 w-full max-w-56 rounded-lg bg-secondary px-2 text-sm text-foreground ring-1 ring-border"
+                onBlur={(e) => void rename(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+              />
+            </label>
+          )}
           {local.data?.persisted === false && (
             <button className={btnGhost} onClick={() => run("persist", async () => {
               const ok = await requestPersistentStorage();
@@ -199,6 +236,7 @@ function SyncPage() {
               <p className="text-sm">{user.email}</p>
               <p className="text-xs text-muted-foreground">
                 {cloud.isError ? `Couldn't reach the cloud: ${cloud.error.message}` : cloud.data ? (cloud.data.has_data ? `Cloud copy last changed ${when(cloud.data.updated_at)}` : "No data in the cloud yet") : "Checking…"}
+                {cloud.data?.pushed_by_name && ` (last pushed from ${cloud.data.pushed_by_device === device.data?.id ? "this computer" : cloud.data.pushed_by_name}, ${when(cloud.data.pushed_at)})`}
                 {" · "}This device last synced {local.data?.state.syncedOwner === user.id ? when(local.data.state.syncedAt) : "never"}
               </p>
               {unpushed && <p className="text-xs font-medium text-primary">This device has changes that aren't in the cloud.</p>}

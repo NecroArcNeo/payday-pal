@@ -72,6 +72,15 @@ async function openDesktopDb(bridge: DesktopBridge): Promise<LocalDb> {
     },
   };
   await migrate(db, backupBeforeUpdate);
+  // After a crash or power cut, read every table before trusting the database; damage shows up here
+  // (and sends the user to the recovery screen) rather than halfway through some later page.
+  if ((await bridge.session()).uncleanSince) {
+    try {
+      await exportSnapshot(db);
+    } catch (e) {
+      throw new Error(`The app didn't close normally last time, and the data can't be read completely: ${(e as Error).message}`);
+    }
+  }
   return db;
 }
 

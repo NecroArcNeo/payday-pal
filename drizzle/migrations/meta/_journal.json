@@ -71,6 +71,13 @@
       "when": 1793385600000,
       "tag": "0009_record_shift",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1793472000000,
+      "tag": "0010_push_device",
+      "breakpoints": true
     }
   ]
 }

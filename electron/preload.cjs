@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld("meridianDesktop", {
     exec: (sql, txId) => call("db:exec", sql, txId ?? null),
     begin: () => call("db:begin"),
     end: (txId, commit) => call("db:end", txId, commit),
+    setAside: () => call("db:set-aside"),
   },
   backups: {
     add: (record) => call("backups:add", record),
@@ -23,6 +24,7 @@ contextBridge.exposeInMainWorld("meridianDesktop", {
     remove: (ids) => call("backups:delete", ids),
   },
   info: () => call("desktop:info"),
+  session: () => call("desktop:session"),
   openFolder: (which) => call("desktop:open-folder", which),
   onClosing: (beforeClose) => {
     ipcRenderer.removeAllListeners("app:closing");

@@ -3,7 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { toast } from "sonner";
 import { localDb, OtherTabError } from "@/lib/db/local";
-import { saveBackup } from "@/lib/db/backups";
+import { listBackups, saveBackup } from "@/lib/db/backups";
+import { RecoveryScreen } from "@/components/RecoveryScreen";
 import { maybeAutoBackup } from "@/lib/db/sync";
 import { setDataMode, useDataMode } from "@/lib/db/mode";
 import { useSession } from "@/lib/payroll";
@@ -35,11 +36,23 @@ function autoBackup(everyMs?: number) {
   return backingUp;
 }
 
+/** The data opened fine after a crash or power cut; say so, in case the last few changes didn't make it. */
+async function warnIfUnclean() {
+  const since = desktop ? (await desktop.session()).uncleanSince : null;
+  if (!since) return;
+  const newest = (await listBackups().catch(() => []))[0];
+  toast.warning(
+    `The app didn't close normally last time (for example a crash or power cut). Your data opened and checks out. If your latest changes are missing, restore a backup on Sync & backup${newest ? `; the newest is from ${new Date(newest.created_at).toLocaleString()}` : ""}.`,
+    { duration: 20_000 },
+  );
+}
+
 function DataGate() {
   const ready = useQuery({
     queryKey: ["local-db-ready"],
     queryFn: async () => {
       await localDb();
+      void warnIfUnclean();
       await autoBackup();
       // The desktop app asks before its window closes, so the last changes get backed up too.
       desktop?.onClosing(() => autoBackup(0));
@@ -69,13 +82,12 @@ function DataGate() {
     return <div className="flex min-h-screen items-center justify-center bg-background text-sm text-muted-foreground">Opening your payroll data…</div>;
   }
   if (ready.isError) {
-    const otherTab = ready.error instanceof OtherTabError;
+    if (!(ready.error instanceof OtherTabError)) return <RecoveryScreen error={ready.error} />;
     return (
       <div className="flex min-h-screen items-center justify-center bg-background px-6">
         <div className="glass-panel max-w-md p-7 text-center">
-          <div className="font-display text-xl font-extrabold tracking-tight">{otherTab ? "Already open in another tab" : "Couldn't open your payroll data"}</div>
+          <div className="font-display text-xl font-extrabold tracking-tight">Already open in another tab</div>
           <p className="mt-2 text-sm text-muted-foreground">{ready.error.message}</p>
-          {!otherTab && <p className="mt-2 text-xs text-muted-foreground">Your data has not been changed or deleted.</p>}
           <button onClick={() => location.reload()} className="mt-5 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground">Reload</button>
         </div>
       </div>
