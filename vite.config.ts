@@ -5,7 +5,7 @@ import tailwindcss from "@tailwindcss/vite";
 import tsConfigPaths from "vite-tsconfig-paths";
 import { nitro } from "nitro/vite";
 
-export default defineConfig(({ command }) => ({
+export default defineConfig(({ command, mode }) => ({
   server: { host: "::", port: 8080 },
   resolve: {
     alias: { "@": `${process.cwd()}/src` },
@@ -19,13 +19,15 @@ export default defineConfig(({ command }) => ({
     tanstackStart({
       // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
       server: { entry: "server" },
+      // `--mode desktop`: a static single-page build (one HTML shell plus assets) for the desktop app.
+      ...(mode === "desktop" ? { spa: { enabled: true } } : {}),
       importProtection: {
         behavior: "error",
         client: { files: ["**/server/**"], specifiers: ["server-only"] },
       },
     }),
     // Build a standalone Node server (.output/server/index.mjs) for running locally.
-    ...(command === "build" ? [nitro({ preset: "node-server" })] : []),
+    ...(command === "build" && mode !== "desktop" ? [nitro({ preset: "node-server" })] : []),
     viteReact(),
   ],
 }));
