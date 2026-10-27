@@ -3,11 +3,15 @@ import { getPref, setPref } from "@/lib/prefs";
 
 // A <table> whose cell borders can be dragged: a cell's right edge resizes its
 // column, its bottom edge resizes its row. Double-click an edge to reset it.
+//
 // Cells don't wrap, and every column is as wide as its widest entry (or the
-// width the user dragged it to, if wider), measured again whenever the rows
-// change. Only dragged widths are saved, so a row being edited, or a long
-// entry that's since been removed, never leaves a column wide. Space left over
-// in the panel goes to the last column.
+// width the user dragged it to, if wider). Widths are measured cell by cell
+// and remembered, and only cells the page actually adds or changes are
+// measured again (a MutationObserver reports them), so editing one row reads
+// one row, typing into an input reads nothing, and a removed cell is simply
+// forgotten, letting its column shrink. The whole table is measured only on
+// mount, when the columns change, and once web fonts have loaded.
+// Only dragged widths are saved; space left over in the panel goes to the last column.
 // Dragged widths are remembered on this device per table (keyed by a header's
 // data-col, its label's alias key, or its text); row heights last until the rows change.
 
@@ -37,30 +41,108 @@ function columnOf(cell: HTMLTableCellElement) {
   return col - 1;
 }
 
+/**
+ * The width a cell's content needs: from the leftmost to the rightmost piece of text or leaf element
+ * (input, icon…), plus padding. Text that overflows a fixed-width cell still reports its full extent,
+ * and block wrappers are skipped, so this is the content's width, not the cell's current one.
+ */
+function contentWidth(cell: HTMLTableCellElement) {
+  let left = Infinity, right = -Infinity;
+  const take = (r: DOMRect) => { if (r.width > 0) { left = Math.min(left, r.left); right = Math.max(right, r.right); } };
+  const range = document.createRange();
+  const walk = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+    if (n.nodeType === Node.TEXT_NODE) {
+      if (!n.textContent?.trim()) continue;
+      range.selectNodeContents(n);
+      for (const r of range.getClientRects()) take(r);
+    } else if ((n as Element).childElementCount === 0 && !(n as Element).textContent?.trim() || n instanceof HTMLInputElement || n instanceof HTMLSelectElement || n instanceof HTMLButtonElement) {
+      take((n as Element).getBoundingClientRect());
+    }
+  }
+  if (left === Infinity) return 0;
+  const s = getComputedStyle(cell);
+  return Math.ceil(right - left + parseFloat(s.paddingLeft) + parseFloat(s.paddingRight) + parseFloat(s.borderRightWidth));
+}
+
 export function DataTable({ id, className = "", children }: { id: string; className?: string; children: ReactNode }) {
   const ref = useRef<HTMLTableElement>(null);
   // v2: widths saved before autofit stopped saving its own growth are dropped.
   const prefKey = `meridian-col-widths:v2:${id}`;
-  const lastSig = useRef("");
-
-  // After every render: lay the columns out again if they, their saved widths or the rows changed.
-  useLayoutEffect(() => {
-    const table = ref.current;
-    if (!table) return;
-    const ths = headerCells(table);
-    const saved = getPref<Widths>(prefKey, {});
-    const sig = `${ths.map(keyOf).join("|")}\u0000${JSON.stringify(saved)}\u0000${table.textContent ?? ""}`;
-    if (sig === lastSig.current) return;
-    lastSig.current = sig;
-    layout(table, ths, saved);
-  });
 
   useLayoutEffect(() => {
     const table = ref.current;
     if (!table) return;
+    /** Each measured cell's content width. Cells leave when the page removes them. */
+    const sizes = new Map<HTMLTableCellElement, { col: number; w: number }>();
+    let cols = "";
     let drag: null | { kind: "col"; th: HTMLTableCellElement; x: number; w: number } | { kind: "row"; tr: HTMLTableRowElement; y: number; h: number } = null;
     let moved = false;
-    const relayout = () => layout(table, headerCells(table), getPref<Widths>(prefKey, {}));
+
+    const measure = (cell: HTMLTableCellElement) => {
+      if (cell.colSpan !== 1 || !cell.isConnected) { sizes.delete(cell); return; }
+      sizes.set(cell, { col: columnOf(cell), w: contentWidth(cell) });
+    };
+    const measureAll = () => {
+      sizes.clear();
+      for (const cell of table.querySelectorAll<HTMLTableCellElement>("th, td")) if (cell.closest("table") === table) measure(cell);
+    };
+    /** Sets each column to its widest remembered cell (or its dragged width), from memory: no reading the page. */
+    const apply = () => {
+      const ths = headerCells(table);
+      if (!ths.length) { table.classList.remove("is-sized"); table.style.width = ""; return; }
+      const saved = getPref<Widths>(prefKey, {});
+      const widths = ths.map((th, i) => Math.max(MIN_W, saved[keyOf(th, i)] ?? 0));
+      for (const { col, w } of sizes.values()) if (col < widths.length && w > widths[col]!) widths[col] = w;
+      const box = table.parentElement;
+      const room = box ? box.clientWidth - parseFloat(getComputedStyle(box).paddingLeft) - parseFloat(getComputedStyle(box).paddingRight) : 0;
+      const spare = room - widths.reduce((s, w) => s + w, 0);
+      if (spare > 0) widths[widths.length - 1]! += spare;
+      ths.forEach((th, i) => { const w = `${widths[i]}px`; if (th.style.width !== w) th.style.width = w; });
+      table.classList.add("is-sized");
+      fitTable(table);
+    };
+    /** A full pass, when the set of columns changed (or on mount). */
+    const fullIfColumnsChanged = () => {
+      const now = headerCells(table).map(keyOf).join("|");
+      if (now === cols) return false;
+      cols = now;
+      measureAll();
+      return true;
+    };
+
+    // Only what changed: cells added, cells whose text or children changed, rows added.
+    const changed = new MutationObserver((records) => {
+      if (drag) return;
+      if (!fullIfColumnsChanged()) {
+        const cells = new Set<HTMLTableCellElement>();
+        for (const r of records) {
+          for (const n of r.removedNodes) {
+            if (n instanceof HTMLTableCellElement) sizes.delete(n);
+            else if (n instanceof HTMLElement) for (const c of n.querySelectorAll<HTMLTableCellElement>("th, td")) sizes.delete(c);
+          }
+          for (const n of r.addedNodes) {
+            if (n instanceof HTMLTableRowElement) { for (const c of n.cells) cells.add(c); continue; }
+            if (n instanceof HTMLElement && n.querySelector("tr")) { for (const c of n.querySelectorAll<HTMLTableCellElement>("th, td")) cells.add(c); continue; }
+          }
+          const target = r.target instanceof Element ? r.target : r.target.parentElement;
+          const cell = target?.closest<HTMLTableCellElement>("th, td");
+          if (cell && cell.closest("table") === table) cells.add(cell);
+        }
+        for (const c of cells) measure(c);
+        // Rows removed by React leave their cells' rows detached; forget those too.
+        for (const c of sizes.keys()) if (!c.isConnected) sizes.delete(c);
+      }
+      apply();
+    });
+
+    measureAll();
+    cols = headerCells(table).map(keyOf).join("|");
+    apply();
+    changed.observe(table, { childList: true, subtree: true, characterData: true });
+    // Text is measured in whatever font has loaded; measure again once the real fonts are in.
+    let alive = true;
+    void document.fonts?.ready.then(() => { if (alive) { measureAll(); apply(); } });
 
     const edgeAt = (e: PointerEvent | MouseEvent) => {
       const cell = (e.target as HTMLElement).closest("th,td") as HTMLTableCellElement | null;
@@ -105,12 +187,12 @@ export function DataTable({ id, className = "", children }: { id: string; classN
     const onUp = (e: PointerEvent) => {
       if (!drag) return;
       if (drag.kind === "col" && moved) {
-        // Save just this column; laying out again keeps it at least as wide as its widest entry.
+        // Save just this column; apply() keeps it at least as wide as its widest entry.
         const i = headerCells(table).indexOf(drag.th);
         setPref(prefKey, { ...getPref<Widths>(prefKey, {}), [keyOf(drag.th, i)]: Math.round(parseFloat(drag.th.style.width)) });
-        relayout();
       }
       drag = null;
+      apply();
       if (table.hasPointerCapture(e.pointerId)) table.releasePointerCapture(e.pointerId);
     };
     // A drag ends with a click on whatever is under the pointer; don't let it act.
@@ -123,10 +205,10 @@ export function DataTable({ id, className = "", children }: { id: string; classN
       const saved = { ...getPref<Widths>(prefKey, {}) };
       delete saved[keyOf(hit.th, headerCells(table).indexOf(hit.th))];
       setPref(prefKey, saved);
-      relayout();
+      apply();
     };
-    // The leftover space given to the last column depends on the panel's width.
-    const resize = new ResizeObserver(() => { if (!drag) relayout(); });
+    // The leftover space given to the last column depends on the panel's width (no measuring needed).
+    const resize = new ResizeObserver(() => { if (!drag) apply(); });
     if (table.parentElement) resize.observe(table.parentElement);
 
     table.addEventListener("pointermove", onHover);
@@ -137,6 +219,8 @@ export function DataTable({ id, className = "", children }: { id: string; classN
     table.addEventListener("click", onClick, true);
     table.addEventListener("dblclick", onDouble);
     return () => {
+      alive = false;
+      changed.disconnect();
       resize.disconnect();
       table.removeEventListener("pointermove", onHover);
       table.removeEventListener("pointerdown", onDown);
@@ -149,25 +233,6 @@ export function DataTable({ id, className = "", children }: { id: string; classN
   }, [prefKey]);
 
   return <table ref={ref} className={`data-grid ${className}`}>{children}</table>;
-}
-
-/**
- * Measures each column at its content width (a max-content table, nothing wrapping), widens the ones dragged
- * wider, gives the panel's leftover space to the last column, and fixes those widths.
- */
-function layout(table: HTMLTableElement, ths: HTMLTableCellElement[], saved: Widths) {
-  table.classList.remove("is-sized");
-  for (const th of ths) th.style.width = "";
-  if (!ths.length) { table.style.width = ""; return; }
-  table.style.width = "max-content";
-  const widths = ths.map((th, i) => Math.ceil(Math.max(th.getBoundingClientRect().width, saved[keyOf(th, i)] ?? 0)));
-  const box = table.parentElement;
-  const room = box ? box.clientWidth - parseFloat(getComputedStyle(box).paddingLeft) - parseFloat(getComputedStyle(box).paddingRight) : 0;
-  const spare = room - widths.reduce((s, w) => s + w, 0);
-  if (spare > 0) widths[widths.length - 1]! += spare;
-  ths.forEach((th, i) => { th.style.width = `${widths[i]}px`; });
-  table.classList.add("is-sized");
-  fitTable(table);
 }
 
 /** Fixed layout needs the table as wide as its columns. */

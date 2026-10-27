@@ -1,4 +1,4 @@
-import type { PGlite } from "@electric-sql/pglite";
+import type { PGlite, Transaction } from "@electric-sql/pglite";
 import { LOCAL_MIGRATIONS } from "./schema";
 import type { Sql, SqlDb } from "./snapshot";
 
@@ -39,9 +39,25 @@ async function openLocalDb(): Promise<PGlite> {
     },
   });
   await db.waitReady;
+  saveAfterTransactions(db);
   await migrate(db);
   void requestPersistentStorage();
   return db;
+}
+
+/**
+ * PGlite copies the database to IndexedDB after each statement, except inside a transaction, and (as of
+ * 0.5.8) it still counts COMMIT as inside, so a transaction's changes only reached IndexedDB when some later
+ * query happened to run; closing the tab before that lost them. Save explicitly once every transaction
+ * commits, so a write is on disk before the app reports it saved.
+ */
+function saveAfterTransactions(db: PGlite) {
+  const transaction = db.transaction.bind(db);
+  db.transaction = (async <T>(fn: (tx: Transaction) => Promise<T>) => {
+    const result = await transaction(fn);
+    await db.syncToFs();
+    return result;
+  }) as PGlite["transaction"];
 }
 
 /** Runs pending LOCAL_MIGRATIONS. Each one commits atomically with its version number. */
