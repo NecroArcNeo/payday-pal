@@ -1,6 +1,7 @@
 import * as XLSX from "xlsx";
 import type { Employee, FieldDef } from "@/lib/payroll";
 import { withDefaults, type EmployeeDefaults } from "@/lib/employee-fields";
+import { fieldType, toType } from "@/lib/field-types";
 
 // File import: the user maps sheet columns to app fields and picks a row range;
 // these functions read the workbook, guess a starting mapping, and turn the
@@ -230,6 +231,14 @@ export function parseDate(cell: Cell | undefined, order: DateOrder): string | nu
   return isNaN(d.getTime()) ? null : validYmd(d.getFullYear(), d.getMonth() + 1, d.getDate());
 }
 
+/** A custom category's value from a cell, converted to its type where possible (else the text as it is). */
+export function categoryValue(type: string | null | undefined, cell: Cell, order: DateOrder): string {
+  const t = fieldType(type);
+  if (t === "date") return parseDate(cell, order) ?? cell.text.trim();
+  if (t === "time") return parseTime(cell) ?? cell.text.trim();
+  return toType(t, cell.text);
+}
+
 export function parseTime(cell: Cell | undefined): string | null {
   if (!cell) return null;
   if (cell.serial !== undefined) {
@@ -321,6 +330,8 @@ function splitName(full: string) {
 export function parsePeople(
   sheet: Sheet, setup: SheetSetup, existing: Employee[], taken: Set<string>, categoryId: (target: Target) => string | undefined,
   shifts: { id: string; name: string }[] = [], defaults: EmployeeDefaults = {},
+  /** A category's field_type, so values are stored in its form (Excel dates as dates, "Y" as yes…). */
+  typeOf: (categoryId: string) => string | null | undefined = () => undefined,
 ) {
   const defaultShift = shifts.find((x) => x.id === defaults["shift_id"])?.id ?? shifts[0]?.id;
   const shiftByName = new Map(shifts.map((x) => [norm(x.name), x.id]));
@@ -350,7 +361,7 @@ export function parsePeople(
     for (const [t, c] of r.cells) {
       if (!t.startsWith("custom:") && !t.startsWith("new:")) continue;
       const id = categoryId(t);
-      if (id) custom[id] = c.text.slice(0, 1000);
+      if (id) custom[id] = categoryValue(typeOf(id), c, setup.dateOrder).slice(0, 1000);
     }
     const shiftText = text(r, "shift", 40);
     const shiftId = shiftText ? shiftByName.get(norm(shiftText)) ?? shiftByName.get(norm(shiftText.replace(/\s*shift$/i, ""))) : undefined;

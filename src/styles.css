@@ -140,8 +140,10 @@
 @utility anim-rise { animation: rise 620ms cubic-bezier(0.32,0.72,0,1) both; }
 @utility anim-breathe { animation: breathe 9s ease-in-out infinite; }
 
-/* Tables (<DataTable>): a divider between columns, and fixed widths once a column is resized. */
+/* Tables (<DataTable>): a divider between columns, entries on one line (so columns fit them), and fixed widths once a column is resized. */
 @layer base {
+  .data-grid th,
+  .data-grid td { white-space: nowrap; }
   .data-grid th:not(:last-child),
   .data-grid td:not(:last-child) {
     border-right: 1px solid color-mix(in oklab, var(--muted-foreground) 22%, transparent);

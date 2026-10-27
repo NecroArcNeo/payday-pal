@@ -9,13 +9,17 @@ import type { TablesInsert } from "@/integrations/supabase/types";
 import { AppShell, btnGhost, btnPrimary, inputCls } from "@/components/AppShell";
 import { RecordsLedger, type EntryMode } from "@/components/RecordsLedger";
 import { RecordShiftSelect } from "@/components/RecordPay";
-import { BreakInput, BreakUnitToggle } from "@/components/BreakField";
-import { breakLabel, breakRangeText, formatBreak, useBreakUnit, validBreak } from "@/lib/breaks";
+import { BreakHeader, BreakInput, BreakUnitToggle } from "@/components/BreakField";
+import { EditableLabel } from "@/components/EditableLabel";
+import { breakRangeText, formatBreak, useBreakUnit, validBreak } from "@/lib/breaks";
 import { EmployeePicker, SearchInput } from "@/components/EmployeeSearch";
 import { describeEmployeeFilter, isFiltering, matchesEmployee, NO_FILTER, searchEmployees, type EmployeeFilter } from "@/lib/employee-search";
 import { addDays, computeHours, datesBetween, fullName, isoDate, useEmployees, useShifts, weekday, type Employee, type TimeRecord } from "@/lib/payroll";
 import { shiftFor } from "@/lib/pay";
 import { Check, Pencil, Plus, Trash2, X } from "lucide-react";
+
+/** Bulk-edit row keys to the label alias keys used everywhere else (src/lib/labels.ts). */
+const RECORD_LABEL_KEYS: Record<string, string> = { employee_id: "employee", shift_id: "shift", pay: "manual_pay" };
 
 export const Route = createFileRoute("/_authenticated/records")({
   head: () => ({ meta: [{ title: "Time records — Meridian Payroll" }] }),
@@ -214,22 +218,22 @@ function RecordsPage() {
         <div className="grid items-end gap-3 md:grid-cols-6">
           {mode === "clock" ? (
             <>
-              <label><span className="label-mono">Clock in</span><input type="time" className={`${inputCls} mt-1`} value={f.clock_in} onChange={(e) => setF({ ...f, clock_in: e.target.value })} required /></label>
-              <label><span className="label-mono">Clock out</span><input type="time" className={`${inputCls} mt-1`} value={f.clock_out} onChange={(e) => setF({ ...f, clock_out: e.target.value })} required /></label>
+              <label><span className="label-mono"><EditableLabel k="clock_in" name="Clock in" /></span><input type="time" className={`${inputCls} mt-1`} value={f.clock_in} onChange={(e) => setF({ ...f, clock_in: e.target.value })} required /></label>
+              <label><span className="label-mono"><EditableLabel k="clock_out" name="Clock out" /></span><input type="time" className={`${inputCls} mt-1`} value={f.clock_out} onChange={(e) => setF({ ...f, clock_out: e.target.value })} required /></label>
               <label>
-                <span className="flex items-center justify-between gap-1"><span className="label-mono">{breakLabel(breakUnit)}</span><BreakUnitToggle /></span>
+                <span className="flex items-center justify-between gap-1"><span className="label-mono"><BreakHeader unit={breakUnit} /></span><BreakUnitToggle /></span>
                 <BreakInput minutes={f.lunch_minutes} onChange={(m) => setF({ ...f, lunch_minutes: m })} className={`${inputCls} mt-1`} />
               </label>
             </>
           ) : (
-            <label className="md:col-span-3"><span className="label-mono">Hours worked</span><input type="number" step="0.25" min={0} max={24} className={`${inputCls} mt-1`} value={f.hours} onChange={(e) => setF({ ...f, hours: e.target.value })} /></label>
+            <label className="md:col-span-3"><span className="label-mono"><EditableLabel k="hours" name="Hours worked" /></span><input type="number" step="0.25" min={0} max={24} className={`${inputCls} mt-1`} value={f.hours} onChange={(e) => setF({ ...f, hours: e.target.value })} /></label>
           )}
           <label title="For covering a different shift than usual, e.g. a night worker on a day shift. Overtime pays the same either way.">
-            <span className="label-mono">Shift</span>
+            <span className="label-mono"><EditableLabel k="shift" name="Shift" /></span>
             <RecordShiftSelect value={f.shift_id} onChange={(id) => setF({ ...f, shift_id: id })} shifts={shifts} ownLabel="Each person's usual" className={`${inputCls} mt-1`} />
           </label>
           <label title="Leave empty to pay from hours. Enter an amount to pay exactly that for the day.">
-            <span className="label-mono">Day pay (optional)</span>
+            <span className="label-mono"><EditableLabel k="manual_pay" name="Day pay" /> (optional)</span>
             <input className={`${inputCls} mt-1`} inputMode="decimal" placeholder="auto" value={f.pay} onChange={(e) => setF({ ...f, pay: e.target.value })} />
           </label>
           <div>
@@ -313,7 +317,7 @@ function BulkRecordEdit({ mode, employees, label, load, onClose, onDone }: {
   const row = (k: string, text: string, control: React.ReactNode) => (
     <label className={`flex items-center gap-3 rounded-xl p-2 ring-1 ${on[k] ? "bg-accent/50 ring-primary/25" : "ring-border"}`}>
       <input type="checkbox" checked={!!on[k]} onChange={(e) => setOn({ ...on, [k]: e.target.checked })} aria-label={`Change ${text}`} />
-      <span className="w-28 shrink-0 text-sm">{text}</span>
+      <span className="w-28 shrink-0 text-sm">{k === "lunch_minutes" ? <BreakHeader unit={breakUnit} /> : <EditableLabel k={RECORD_LABEL_KEYS[k] ?? k} name={text} />}</span>
       <div className="min-w-0 flex-1">{control}</div>
     </label>
   );
@@ -397,7 +401,7 @@ function BulkRecordEdit({ mode, employees, label, load, onClose, onDone }: {
           <>
             {row("clock_in", "Clock in", <input type="time" className={inputCls} value={v.clock_in} onChange={(e) => set("clock_in", e.target.value)} aria-label="New clock in" />)}
             {row("clock_out", "Clock out", <input type="time" className={inputCls} value={v.clock_out} onChange={(e) => set("clock_out", e.target.value)} aria-label="New clock out" />)}
-            {row("lunch_minutes", breakLabel(breakUnit), <BreakInput minutes={v.lunch_minutes} onChange={(m) => set("lunch_minutes", m)} className={inputCls} label="New break" />)}
+            {row("lunch_minutes", "Break", <BreakInput minutes={v.lunch_minutes} onChange={(m) => set("lunch_minutes", m)} className={inputCls} label="New break" />)}
           </>
         ) : row("hours", "Hours", <input type="number" step="0.25" min={0} max={24} className={inputCls} value={v.hours} onChange={(e) => set("hours", e.target.value)} aria-label="New hours" />)}
         {shifts.length > 0 && row("shift_id", "Shift", <RecordShiftSelect value={v.shift_id} onChange={(id) => set("shift_id", id)} shifts={shifts} ownLabel="Each person's usual" className={inputCls} />)}

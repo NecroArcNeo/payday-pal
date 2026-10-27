@@ -7,9 +7,10 @@ import { EmployeePicker } from "@/components/EmployeeSearch";
 import { RECORD_PAY_COLUMNS, RecordPayCells, RecordPayHeaders, RecordShiftCell, RecordShiftSelect } from "@/components/RecordPay";
 import { computeHours, fullName, money, useRecordPay, useShifts, weekday, type Employee, type RecordWithEmp, type Shift } from "@/lib/payroll";
 import { shiftFor } from "@/lib/pay";
-import { BreakInput, BreakUnitToggle } from "@/components/BreakField";
+import { BreakHeader, BreakInput, BreakUnitToggle } from "@/components/BreakField";
 import { DataTable } from "./DataTable";
-import { breakLabel, breakRangeText, formatBreak, useBreakUnit, validBreak } from "@/lib/breaks";
+import { breakRangeText, formatBreak, useBreakUnit, validBreak } from "@/lib/breaks";
+import { EditableLabel } from "@/components/EditableLabel";
 
 export type EntryMode = "clock" | "hours";
 
@@ -48,20 +49,20 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
           <thead>
             <tr className="border-b border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
               <th className="w-10 pl-5"><input type="checkbox" aria-label="Select all loaded" checked={allPicked} onChange={onToggleAll} disabled={!rows.length} /></th>
-              <th className="px-3 py-3 text-left font-medium">Employee</th>
-              <th className="px-3 py-3 text-left font-medium">Date</th>
-              <th className="px-3 py-3 text-left font-medium">Shift</th>
+              <th className="px-3 py-3 text-left font-medium"><EditableLabel k="employee" name="Employee" /></th>
+              <th className="px-3 py-3 text-left font-medium"><EditableLabel k="date" name="Date" /></th>
+              <th className="px-3 py-3 text-left font-medium"><EditableLabel k="shift" name="Shift" /></th>
               {mode === "clock" && (
                 <>
-                  <th className="px-3 py-3 text-left font-medium">Clock in</th>
-                  <th className="px-3 py-3 text-left font-medium">Clock out</th>
-                  <th className="px-3 py-3 text-right font-medium">{breakLabel(breakUnit)}</th>
+                  <th className="px-3 py-3 text-left font-medium"><EditableLabel k="clock_in" name="Clock in" /></th>
+                  <th className="px-3 py-3 text-left font-medium"><EditableLabel k="clock_out" name="Clock out" /></th>
+                  <th className="px-3 py-3 text-right font-medium"><BreakHeader unit={breakUnit} /></th>
                 </>
               )}
-              <th className="px-3 py-3 text-right font-medium">Hours</th>
-              <th className="px-3 py-3 text-right font-medium">Rate</th>
+              <th className="px-3 py-3 text-right font-medium"><EditableLabel k="hours" name="Hours" /></th>
+              <th className="px-3 py-3 text-right font-medium"><EditableLabel k="hourly_rate" name="Rate" /></th>
               <RecordPayHeaders />
-              <th className="px-3 py-3 text-left font-medium">Note</th>
+              <th className="px-3 py-3 text-left font-medium"><EditableLabel k="note" name="Note" /></th>
               <th className="w-20" />
             </tr>
           </thead>
@@ -89,9 +90,9 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
                 <td className="px-3 py-3 text-right">{Number(r.hours).toFixed(2)}</td>
                 <td className="px-3 py-3 text-right">{money(Number(r.employees?.hourly_rate ?? 0))}</td>
                 <RecordPayCells line={pay?.get(r.id)} />
-                <td className="max-w-[14rem] truncate px-3 py-3 font-body text-xs text-muted-foreground" title={r.note ?? ""}>{r.note}</td>
-                <td className="pr-4">
-                  <div className="flex justify-end gap-3 text-muted-foreground">
+                <td className="px-3 py-3 font-body text-xs text-muted-foreground">{r.note}</td>
+                <td className="pl-3 pr-6">
+                  <div className="flex justify-end gap-3.5 text-muted-foreground">
                     <button onClick={() => setEditing(r.id)} aria-label="Edit record"><Pencil className="h-4 w-4 hover:text-foreground" /></button>
                     <button onClick={() => onDelete(r.id)} aria-label="Delete record"><Trash2 className="h-4 w-4 hover:text-destructive" /></button>
                   </div>
@@ -146,50 +147,51 @@ function EditRow({ record, employees, shifts, onCancel, onSaved }: { record: Rec
   };
 
   const cell = "px-1.5 py-2 align-top";
+  // Each control gets its own width: in an autofit table a full-width input would ask for the browser's default size.
   const input = `${inputCls} !px-2 !py-1.5 text-[13px]`;
   return (
     <tr className="border-b border-border bg-accent/50" onKeyDown={(e) => { if (e.key === "Escape") onCancel(); if (e.key === "Enter" && (e.target as HTMLElement).tagName === "INPUT") save(); }}>
       <td className="pl-5 align-top pt-4"><Pencil className="h-3.5 w-3.5 text-primary" /></td>
       <td className={cell}><EmployeePicker employees={employees} hideResigned value={f.employee_id} onChange={(id) => set("employee_id", id)} className="min-w-[12rem] !py-1.5 text-[13px]" /></td>
       <td className={cell}>
-        <input type="date" className={input} value={f.work_date} onChange={(e) => set("work_date", e.target.value)} aria-label="Date" />
-        <select className={`${input} mt-1`} value={f.entry_mode} onChange={(e) => set("entry_mode", e.target.value)} aria-label="Entry type">
+        <input type="date" className={`${input} block !w-[9rem]`} value={f.work_date} onChange={(e) => set("work_date", e.target.value)} aria-label="Date" />
+        <select className={`${input} mt-1 block !w-[9rem]`} value={f.entry_mode} onChange={(e) => set("entry_mode", e.target.value)} aria-label="Entry type">
           <option value="clock">Clock in / out</option>
           <option value="hours">Daily hours</option>
         </select>
       </td>
       <td className={cell}>
-        <RecordShiftSelect value={f.shift_id === usual.id ? "" : f.shift_id} onChange={(id) => set("shift_id", id)} shifts={shifts} ownLabel={`Usual (${usual.name})`} className={`${input} min-w-[8rem]`} />
+        <RecordShiftSelect value={f.shift_id === usual.id ? "" : f.shift_id} onChange={(id) => set("shift_id", id)} shifts={shifts} ownLabel={`Usual (${usual.name})`} className={`${input} !w-[8rem]`} />
       </td>
       {record.entry_mode === "clock" && (
         f.entry_mode === "clock" ? (
           <>
-            <td className={cell}><input type="time" className={input} value={f.clock_in} onChange={(e) => set("clock_in", e.target.value)} aria-label="Clock in" /></td>
-            <td className={cell}><input type="time" className={input} value={f.clock_out} onChange={(e) => set("clock_out", e.target.value)} aria-label="Clock out" /></td>
-            <td className={cell}><BreakInput minutes={f.lunch_minutes} onChange={(m) => set("lunch_minutes", m)} className={`${input} w-20 text-right`} /></td>
+            <td className={cell}><input type="time" className={`${input} !w-[7rem]`} value={f.clock_in} onChange={(e) => set("clock_in", e.target.value)} aria-label="Clock in" /></td>
+            <td className={cell}><input type="time" className={`${input} !w-[7rem]`} value={f.clock_out} onChange={(e) => set("clock_out", e.target.value)} aria-label="Clock out" /></td>
+            <td className={cell}><BreakInput minutes={f.lunch_minutes} onChange={(m) => set("lunch_minutes", m)} className={`${input} !w-20 text-right`} /></td>
           </>
         ) : <td colSpan={3} className={`${cell} pt-4 font-body text-xs text-muted-foreground`}>Switching to daily hours: clock times will be removed.</td>
       )}
       <td className={`${cell} text-right`}>
         {f.entry_mode === "hours"
-          ? <input type="number" step="0.25" min={0} max={24} className={`${input} w-20 text-right`} value={f.hours} onChange={(e) => set("hours", e.target.value)} aria-label="Hours" />
+          ? <input type="number" step="0.25" min={0} max={24} className={`${input} !w-20 text-right`} value={f.hours} onChange={(e) => set("hours", e.target.value)} aria-label="Hours" />
           : <div className="pt-2">{hours.toFixed(2)}</div>}
         {record.entry_mode === "hours" && f.entry_mode === "clock" && (
           <div className="mt-1 flex gap-1">
-            <input type="time" className={input} value={f.clock_in} onChange={(e) => set("clock_in", e.target.value)} aria-label="Clock in" />
-            <input type="time" className={input} value={f.clock_out} onChange={(e) => set("clock_out", e.target.value)} aria-label="Clock out" />
-            <BreakInput minutes={f.lunch_minutes} onChange={(m) => set("lunch_minutes", m)} className={`${input} w-16`} />
+            <input type="time" className={`${input} !w-[7rem]`} value={f.clock_in} onChange={(e) => set("clock_in", e.target.value)} aria-label="Clock in" />
+            <input type="time" className={`${input} !w-[7rem]`} value={f.clock_out} onChange={(e) => set("clock_out", e.target.value)} aria-label="Clock out" />
+            <BreakInput minutes={f.lunch_minutes} onChange={(m) => set("lunch_minutes", m)} className={`${input} !w-16`} />
           </div>
         )}
       </td>
       <td className={`${cell} pt-4 text-right text-muted-foreground`}>—</td>
       <td colSpan={RECORD_PAY_COLUMNS - 1} className={`${cell} pt-4 text-right font-body text-xs text-muted-foreground`}>Pay is recalculated on save. Manual pay →</td>
       <td className={`${cell} text-right`}>
-        <input className={`${input} w-24 text-right`} inputMode="decimal" value={f.pay} placeholder="auto" onChange={(e) => set("pay", e.target.value)} aria-label="Manual pay" title="Pay for this day. Leave empty to calculate it from hours." />
+        <input className={`${input} !w-24 text-right`} inputMode="decimal" value={f.pay} placeholder="auto" onChange={(e) => set("pay", e.target.value)} aria-label="Manual pay" title="Pay for this day. Leave empty to calculate it from hours." />
       </td>
-      <td className={cell}><input className={`${input} min-w-[8rem] font-body`} value={f.note} placeholder="Note" onChange={(e) => set("note", e.target.value)} aria-label="Note" /></td>
-      <td className={`${cell} pr-4`}>
-        <div className="flex justify-end gap-1 pt-1">
+      <td className={cell}><input className={`${input} !w-40 font-body`} value={f.note} placeholder="Note" onChange={(e) => set("note", e.target.value)} aria-label="Note" /></td>
+      <td className={`${cell} !pr-6`}>
+        <div className="flex justify-end gap-1.5 pt-1">
           <button onClick={save} disabled={busy} className={`${btnGhost} !px-2 !py-1 !text-primary`} aria-label="Save record"><Check className="h-4 w-4" /></button>
           <button onClick={onCancel} className={`${btnGhost} !px-2 !py-1`} aria-label="Cancel editing"><X className="h-4 w-4" /></button>
         </div>

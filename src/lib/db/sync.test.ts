@@ -7,7 +7,8 @@ import { migrate } from "./local";
 import { LOCAL_MIGRATIONS } from "./schema";
 import { countRows, exportSnapshot, replaceWithSnapshot, validateSnapshot, type Snapshot } from "./snapshot";
 import { createLocalStore } from "./store";
-import { maybeAutoBackup, pull, push, restoreSnapshot, SyncConflictError, type CloudSync, type SyncDeps } from "./sync";
+import { maybeAutoBackup, pull, push, restoreSnapshot, setPrivateFields, SyncConflictError, type CloudSync, type SyncDeps } from "./sync";
+import { customKey, getPrivateFields, stripPrivate } from "./privacy";
 
 const parsers = { [types.NUMERIC]: (v: string) => Number(v), [types.DATE]: (v: string) => v, [types.TIMESTAMPTZ]: (v: string) => v };
 const migration = (name: string) => readFileSync(path.resolve(__dirname, "../../../drizzle/migrations", name), "utf8");
@@ -509,6 +510,81 @@ describe("push and pull", () => {
     await cloud.query("select set_config('test.uid', $1, false)", [A]);
     await cloud.query("insert into public.employees (employee_code, first_name, last_name) values ('WEB', 'Edited', 'Online')");
     expect((await push(deps(laptop, cloudAs(cloud, A), A).d)).kind).toBe("confirm");
+  });
+});
+
+describe("private fields", () => {
+  let cloud: PGlite;
+  beforeEach(async () => {
+    cloud = await newCloud();
+    await applySyncMigration(cloud);
+  });
+
+  async function privateLaptop() {
+    const laptop = await newLocal();
+    const { store, emp } = await seed(laptop, "E1");
+    await store.update("employees", emp.id, {
+      ssn: "123-45-6789", email: "ada@example.com", department: "Ops", custom_fields: { secret: "S", shirt: "M" },
+    });
+    await store.saveEmployeeDefaults({ nationality: "UK", department: "Ops", custom_fields: { secret: "default S" } });
+    return { laptop, store, emp };
+  }
+  const cloudEmployee = async () => (await cloudAs(cloud, A).pull()).snapshot.data.employees[0]!;
+
+  it("keeps ID numbers on the device by default", async () => {
+    const { laptop } = await privateLaptop();
+    expect(await getPrivateFields(laptop)).toEqual(["passport_no", "ssn"]);
+    await push(deps(laptop, cloudAs(cloud, A), A).d);
+    expect(await cloudEmployee()).toMatchObject({ ssn: null, email: "ada@example.com", custom_fields: { secret: "S", shirt: "M" } });
+  });
+
+  it("never pushes chosen fields, and a pull keeps this device's values for them", async () => {
+    const { laptop, store, emp } = await privateLaptop();
+    await setPrivateFields(laptop, ["ssn", "email", "nationality", customKey("secret")]);
+    await push(deps(laptop, cloudAs(cloud, A), A).d);
+    const remote = await cloudAs(cloud, A).pull();
+    expect(remote.snapshot.data.employees[0]).toMatchObject({ ssn: null, email: null, department: "Ops", custom_fields: { shirt: "M" } });
+    expect(remote.snapshot.data.payroll_settings[0]!["employee_defaults"]).toEqual({ department: "Ops", custom_fields: {} });
+
+    // Someone edits the cloud copy; pulling brings that in without losing the private values.
+    await cloud.query("select set_config('test.uid', $1, false)", [A]);
+    await cloud.query("update public.employees set department = 'Sales'");
+    expect((await pull(deps(laptop, cloudAs(cloud, A), A).d)).kind).toBe("done");
+    expect((await store.listEmployees()).find((e) => e.id === emp.id)).toMatchObject({
+      department: "Sales", ssn: "123-45-6789", email: "ada@example.com", custom_fields: { secret: "S", shirt: "M" },
+    });
+    expect((await store.getSettings())!.employee_defaults).toEqual({ nationality: "UK", department: "Ops", custom_fields: { secret: "default S" } });
+
+    // Another device only ever sees the blanks.
+    const desktop = await newLocal();
+    await pull(deps(desktop, cloudAs(cloud, A), A).d);
+    expect((await createLocalStore(async () => desktop).listEmployees())[0]).toMatchObject({ ssn: null, email: null, custom_fields: { shirt: "M" } });
+  });
+
+  it("marks the device as needing a push when a field becomes private, so the cloud copy gets cleaned", async () => {
+    const { laptop } = await privateLaptop();
+    await push(deps(laptop, cloudAs(cloud, A), A).d);
+    expect((await cloudEmployee())["email"]).toBe("ada@example.com");
+    await setPrivateFields(laptop, ["email"]);
+    expect((await pull(deps(laptop, cloudAs(cloud, A), A).d)).kind).toBe("confirm");
+    await push(deps(laptop, cloudAs(cloud, A), A).d);
+    expect((await cloudEmployee())["email"]).toBeNull();
+  });
+
+  it("keeps private values when restoring a cloud backup", async () => {
+    const { laptop, store } = await privateLaptop();
+    await push(deps(laptop, cloudAs(cloud, A), A).d);
+    const saved: string[] = [];
+    await restoreSnapshot(laptop, (await cloudAs(cloud, A).pull()).snapshot, async (r) => { saved.push(r); }, { keepPrivateFields: true });
+    expect(saved).toEqual(["before-restore"]);
+    expect((await store.listEmployees())[0]!.ssn).toBe("123-45-6789");
+  });
+
+  it("strips private values from rows and patches", () => {
+    const keys = ["ssn", "phone", customKey("secret")];
+    expect(stripPrivate({ ssn: "1", city: "X", custom_fields: { secret: "s", other: "o" } }, keys)).toEqual({ ssn: null, city: "X", custom_fields: { other: "o" } });
+    expect(stripPrivate({ phone: "5", department: "D" }, keys, "delete")).toEqual({ department: "D" });
+    expect(stripPrivate({ department: "D" }, [])).toEqual({ department: "D" });
   });
 });
 

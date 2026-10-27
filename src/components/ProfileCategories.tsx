@@ -2,10 +2,16 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { db } from "@/lib/db/mode";
+import { backupBefore } from "@/lib/db/safety";
 import { btnPrimary, inputCls } from "@/components/AppShell";
-import { useFieldDefs } from "@/lib/payroll";
+import { EmailLink } from "@/components/EmailLink";
+import { fullName, useEmployees, useFieldDefs, type FieldDef } from "@/lib/payroll";
 import { OTHER_SECTION, sectionNames } from "@/lib/employee-fields";
-import { Plus, Trash2 } from "lucide-react";
+import { FIELD_TYPES, fieldType, fieldTypeLabel, fitsType, formatValue, toType } from "@/lib/field-types";
+import { EditableLabel } from "@/components/EditableLabel";
+import { useLabels } from "@/lib/labels";
+import { customKey } from "@/lib/db/privacy";
+import { Plus, Trash2, TriangleAlert } from "lucide-react";
 
 const NEW_SECTION = "\u0000new";
 const cleanSection = (s: string | null | undefined) => {
@@ -17,6 +23,7 @@ const cleanSection = (s: string | null | undefined) => {
 export function useCategoryActions() {
   const qc = useQueryClient();
   const { data: defs = [] } = useFieldDefs();
+  const { data: employees = [] } = useEmployees();
   const refresh = () => qc.invalidateQueries({ queryKey: ["field-defs"] });
 
   const add = async (raw: string, fieldType: string, section: string | null) => {
@@ -29,11 +36,6 @@ export function useCategoryActions() {
     refresh();
     return true;
   };
-  const rename = async (defId: string, label: string) => {
-    if (!label.trim()) return;
-    const { error } = await db().update("employee_field_defs", defId, { label: label.trim() });
-    if (error) toast.error(error.message); else refresh();
-  };
   const move = async (defId: string, section: string | null) => {
     const { error } = await db().update("employee_field_defs", defId, { section: cleanSection(section) });
     if (error) toast.error(error.message); else refresh();
@@ -42,6 +44,41 @@ export function useCategoryActions() {
     if (!confirm(`Remove the "${label}" category for all employees?`)) return;
     const { error } = await db().remove("employee_field_defs", defId);
     if (error) toast.error(error.message); else refresh();
+  };
+  /**
+   * Changes a category's type. Values that convert cleanly ("$12" → 12, "Y" → yes) are rewritten after a backup;
+   * values that don't fit are kept as they are and flagged on the profile, after the user confirms.
+   */
+  const changeType = async (def: FieldDef, type: string) => {
+    if (fieldType(def.field_type) === type) return;
+    const values = employees.flatMap((e) => {
+      const v = ((e.custom_fields ?? {}) as Record<string, unknown>)[def.id];
+      return v === undefined || v === null || v === "" ? [] : [{ e, from: String(v), to: toType(type, String(v)) }];
+    });
+    const bad = values.filter((x) => !fitsType(type, x.to));
+    if (bad.length) {
+      const eg = bad.slice(0, 3).map((x) => `${fullName(x.e)}: "${x.from}"`).join(", ");
+      const what = bad.length === 1 ? "employee has a value that isn't" : "employees have values that aren't";
+      if (!confirm(`${bad.length} ${what} a valid ${fieldTypeLabel(type)} (${eg}${bad.length > 3 ? ", …" : ""}).\n\nThey'll be kept as they are and marked on each profile so you can fix them. Change "${def.label}" to ${fieldTypeLabel(type)}?`)) return;
+    }
+    const convert = values.filter((x) => x.to !== x.from && fitsType(type, x.to));
+    if (convert.length) {
+      try {
+        await backupBefore("bulk-edit");
+      } catch (e) {
+        toast.error(`Nothing was changed: ${(e as Error).message}`);
+        return;
+      }
+      const { error } = await db().updateMany("employees", convert.map((x) => ({
+        id: x.e.id, patch: { custom_fields: { ...((x.e.custom_fields ?? {}) as Record<string, unknown>), [def.id]: x.to } },
+      })) as never);
+      if (error) { toast.error(error.message); return; }
+      qc.invalidateQueries({ queryKey: ["employees"] });
+    }
+    const { error } = await db().update("employee_field_defs", def.id, { field_type: type });
+    if (error) { toast.error(error.message); return; }
+    toast.success(`"${def.label}" is now ${fieldTypeLabel(type)}${convert.length ? ` · ${convert.length} value${convert.length === 1 ? "" : "s"} converted (backup saved)` : ""}`);
+    refresh();
   };
   const inSection = (name: string) => defs.filter((d) => d.section?.trim().toLowerCase() === name.toLowerCase());
   const renameSection = async (from: string, to: string) => {
@@ -58,7 +95,7 @@ export function useCategoryActions() {
     const { error } = await db().updateMany("employee_field_defs", list.map((d) => ({ id: d.id, patch: { section: null } })));
     if (error) toast.error(error.message); else refresh();
   };
-  return { defs, add, rename, move, remove, renameSection, removeSection };
+  return { defs, add, move, changeType, remove, renameSection, removeSection };
 }
 
 /** Asks for a new section's name. Null when cancelled. */
@@ -74,6 +111,7 @@ export function SectionSelect({ value, onChange, className, extra = [] }: {
   value: string | null; onChange: (section: string | null) => void; className?: string; extra?: string[];
 }) {
   const { defs } = useCategoryActions();
+  const { label } = useLabels();
   const names = [...new Set([...sectionNames(defs), ...extra])];
   const current = value && names.find((n) => n.toLowerCase() === value.toLowerCase());
   return (
@@ -83,20 +121,23 @@ export function SectionSelect({ value, onChange, className, extra = [] }: {
         const name = askSectionName();
         if (name) onChange(name);
       }}>
-      {names.map((n) => <option key={n} value={n}>{n}</option>)}
-      <option value="">{OTHER_SECTION}</option>
+      {names.map((n) => <option key={n} value={n}>{label(`section:${n}`, n)}</option>)}
+      <option value="">{label(`section:${OTHER_SECTION}`, OTHER_SECTION)}</option>
       <option value={NEW_SECTION}>New section…</option>
     </select>
   );
 }
 
-/** Editable category name, the section it shows under, and a remove button, used as a field's label. */
-export function CategoryLabel({ id, label, section }: { id: string; label: string; section: string | null }) {
-  const { rename, move, remove } = useCategoryActions();
+/** A category's name (click to give it an alias), its type, the section it shows under, and a remove button, used as a field's label. */
+export function CategoryLabel({ def }: { def: FieldDef }) {
+  const { id, section } = def;
+  const { move, changeType, remove } = useCategoryActions();
+  const label = useLabels().label(customKey(id), def.label);
   return (
-    <span className="flex items-center justify-between gap-2">
-      <input className="label-mono min-w-0 flex-1 bg-transparent outline-none" defaultValue={label}
-        onBlur={(e) => e.target.value !== label && rename(id, e.target.value)} aria-label="Category name" title="Click to rename" />
+    <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
+      <span className="min-w-0 flex-1 truncate"><EditableLabel k={customKey(id)} name={def.label} className="label-mono" /></span>
+      <TypeSelect value={fieldType(def.field_type)} onChange={(t) => changeType(def, t)} title="What kind of value this category holds"
+        className="max-w-[5.5rem] cursor-pointer truncate rounded bg-transparent text-[10px] text-muted-foreground outline-none hover:text-foreground" />
       <SectionSelect value={section} onChange={(s) => move(id, s)}
         className="max-w-[7rem] cursor-pointer truncate rounded bg-transparent text-[10px] text-muted-foreground outline-none hover:text-foreground" />
       <button type="button" onClick={() => remove(id, label)} aria-label={`Remove ${label}`} className="text-muted-foreground hover:text-destructive"><Trash2 className="h-3.5 w-3.5" /></button>
@@ -126,12 +167,60 @@ export function AddCategory() {
     <div className="flex flex-wrap gap-2">
       <input className={`${inputCls} max-w-xs`} placeholder="New category, e.g. T-shirt size" value={label} onChange={(e) => setLabel(e.target.value)}
         onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } }} />
-      <select className={`${inputCls} max-w-[9rem]`} value={type} onChange={(e) => setType(e.target.value)} aria-label="Type">
-        <option value="text">Text</option><option value="number">Number</option><option value="date">Date</option>
-      </select>
+      <TypeSelect value={type} onChange={setType} className={`${inputCls} max-w-[9rem]`} />
       {/* A new section exists once a category is in it, so offer the one being typed until then. */}
       <SectionSelect value={section} onChange={setSection} extra={section ? [section] : []} className={`${inputCls} max-w-[12rem]`} />
       <button type="button" onClick={submit} className={btnPrimary}><Plus className="mr-1 inline h-4 w-4" />Add category</button>
     </div>
   );
+}
+
+export function TypeSelect({ value, onChange, className, title }: { value: string; onChange: (type: string) => void; className?: string; title?: string }) {
+  return (
+    <select className={className} value={value} onChange={(e) => onChange(e.target.value)} aria-label="Type" title={title}>
+      {FIELD_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+    </select>
+  );
+}
+
+const badValue = (type: string | null | undefined) => `Not a valid ${fieldTypeLabel(type).toLowerCase()}. Fix or clear it.`;
+
+/** The input for a category value, matching its type. A stored value that doesn't fit is edited as text so it's never hidden. */
+export function CategoryInput({ type, value, onChange, className = "", placeholder, disabled }: {
+  type: string | null | undefined; value: string; onChange: (v: string) => void; className?: string; placeholder?: string; disabled?: boolean;
+}) {
+  const t = fieldType(type);
+  const fits = fitsType(t, value);
+  const common = { className, value, placeholder, disabled, onChange: (e: { target: { value: string } }) => onChange(e.target.value) };
+  let input: React.ReactNode;
+  if (t === "yesno" && fits) {
+    input = <select {...common}><option value="">—</option><option value="yes">Yes</option><option value="no">No</option></select>;
+  } else if (t === "longtext") {
+    input = <textarea rows={2} {...common} />;
+  } else {
+    // Browsers blank out a number/date/time input holding anything else, so a mismatched value is edited as text.
+    const html = !fits || t === "yesno" || t === "text" ? "text" : t === "money" || t === "number" ? "number" : t;
+    input = <input {...common} type={html} step={t === "money" ? "0.01" : t === "number" ? "any" : undefined}
+      onBlur={(e) => { const v = toType(t, e.target.value); if (v !== e.target.value) onChange(v); }} />;
+  }
+  return (
+    <>
+      {input}
+      {!fits && <span className="mt-1 flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400"><TriangleAlert className="h-3.5 w-3.5" />{badValue(t)}</span>}
+    </>
+  );
+}
+
+/** A category value for reading: emails, links and phones are clickable; money and yes/no are formatted. */
+export function CategoryValue({ type, value }: { type: string | null | undefined; value: string }) {
+  if (!value) return null;
+  const t = fieldType(type);
+  if (!fitsType(t, value)) {
+    return <span title={badValue(t)}>{value}<TriangleAlert className="ml-1 inline h-3.5 w-3.5 align-[-2px] text-amber-500 print:hidden" aria-label={badValue(t)} /></span>;
+  }
+  const link = "text-primary underline-offset-2 hover:underline print:text-foreground";
+  if (t === "email") return <EmailLink email={value} />;
+  if (t === "url") return <a href={value} target="_blank" rel="noreferrer noopener" className={link}>{value.replace(/^https?:\/\//, "")}</a>;
+  if (t === "tel") return <a href={`tel:${value.replace(/[^\d+]/g, "")}`} className={link}>{value}</a>;
+  return <>{formatValue(t, value)}</>;
 }

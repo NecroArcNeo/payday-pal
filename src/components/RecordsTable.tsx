@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { fullName, money, useEmployees, useRecordPay, useShifts, weekday, type RecordWithEmp } from "@/lib/payroll";
 import { RecordPayCells, RecordPayHeaders, RecordShiftCell } from "@/components/RecordPay";
-import { BreakUnitToggle } from "@/components/BreakField";
+import { BreakHeader, BreakUnitToggle } from "@/components/BreakField";
 import { DataTable } from "./DataTable";
-import { breakLabel, formatBreak, useBreakUnit } from "@/lib/breaks";
+import { formatBreak, useBreakUnit } from "@/lib/breaks";
 import { Trash2 } from "lucide-react";
+import { EditableLabel } from "@/components/EditableLabel";
 
 export function RecordsTable({ records, title = "Time records", onDelete, showName = true }: { records: RecordWithEmp[]; title?: string; onDelete?: (id: string) => void; showName?: boolean }) {
   const [mode, setMode] = useState<"clock" | "hours">("clock");
@@ -36,18 +37,18 @@ export function RecordsTable({ records, title = "Time records", onDelete, showNa
         <DataTable id="recent-records" className="w-full text-sm">
           <thead>
             <tr className="border-b border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
-              {showName && <th className="px-5 py-3 text-left font-medium">Employee</th>}
-              <th className="px-3 py-3 text-left font-medium">Date</th>
-              <th className="px-3 py-3 text-left font-medium">Shift</th>
+              {showName && <th className="px-5 py-3 text-left font-medium"><EditableLabel k="employee" name="Employee" /></th>}
+              <th className="px-3 py-3 text-left font-medium"><EditableLabel k="date" name="Date" /></th>
+              <th className="px-3 py-3 text-left font-medium"><EditableLabel k="shift" name="Shift" /></th>
               {mode === "clock" && (
                 <>
-                  <th className="px-3 py-3 text-left font-medium">Clock in</th>
-                  <th className="px-3 py-3 text-left font-medium">Clock out</th>
-                  <th className="px-3 py-3 text-right font-medium">{breakLabel(breakUnit)}</th>
+                  <th className="px-3 py-3 text-left font-medium"><EditableLabel k="clock_in" name="Clock in" /></th>
+                  <th className="px-3 py-3 text-left font-medium"><EditableLabel k="clock_out" name="Clock out" /></th>
+                  <th className="px-3 py-3 text-right font-medium"><BreakHeader unit={breakUnit} /></th>
                 </>
               )}
-              <th className="px-3 py-3 text-right font-medium">Hours</th>
-              <th className="px-3 py-3 text-right font-medium">Rate</th>
+              <th className="px-3 py-3 text-right font-medium"><EditableLabel k="hours" name="Hours" /></th>
+              <th className="px-3 py-3 text-right font-medium"><EditableLabel k="hourly_rate" name="Rate" /></th>
               <RecordPayHeaders />
               {onDelete && <th className="w-10" />}
             </tr>

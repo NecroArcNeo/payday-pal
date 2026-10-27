@@ -3,8 +3,13 @@ import { getPref, setPref } from "@/lib/prefs";
 
 // A <table> whose cell borders can be dragged: a cell's right edge resizes its
 // column, its bottom edge resizes its row. Double-click an edge to reset it.
-// Column widths are remembered on this device per table (keyed by header text,
-// or a header's data-col); row heights last until the rows change.
+// Cells don't wrap, and every column is as wide as its widest entry (or the
+// width the user dragged it to, if wider), measured again whenever the rows
+// change. Only dragged widths are saved, so a row being edited, or a long
+// entry that's since been removed, never leaves a column wide. Space left over
+// in the panel goes to the last column.
+// Dragged widths are remembered on this device per table (keyed by a header's
+// data-col, its label's alias key, or its text); row heights last until the rows change.
 
 const EDGE = 5;
 const MIN_W = 36;
@@ -18,7 +23,9 @@ function headerCells(table: HTMLTableElement): HTMLTableCellElement[] {
   const cells = [...row.cells];
   return cells.some((c) => c.colSpan > 1) ? [] : cells;
 }
-const keyOf = (th: HTMLTableCellElement, i: number) => th.dataset["col"] || th.textContent?.trim().slice(0, 60) || `#${i}`;
+/** Stable when the user renames the column (EditableLabel's data-label-key). */
+const keyOf = (th: HTMLTableCellElement, i: number) =>
+  th.dataset["col"] || th.querySelector<HTMLElement>("[data-label-key]")?.dataset["labelKey"] || th.textContent?.trim().slice(0, 60) || `#${i}`;
 
 /** Which column a cell's right edge belongs to: its last column, counting colspans. */
 function columnOf(cell: HTMLTableCellElement) {
@@ -32,16 +39,17 @@ function columnOf(cell: HTMLTableCellElement) {
 
 export function DataTable({ id, className = "", children }: { id: string; className?: string; children: ReactNode }) {
   const ref = useRef<HTMLTableElement>(null);
-  const prefKey = `meridian-col-widths:${id}`;
+  // v2: widths saved before autofit stopped saving its own growth are dropped.
+  const prefKey = `meridian-col-widths:v2:${id}`;
   const lastSig = useRef("");
 
-  // After every render: apply the saved widths if the columns changed (a mode switch, a new column…).
+  // After every render: lay the columns out again if they, their saved widths or the rows changed.
   useLayoutEffect(() => {
     const table = ref.current;
     if (!table) return;
     const ths = headerCells(table);
     const saved = getPref<Widths>(prefKey, {});
-    const sig = ths.map(keyOf).join("|") + JSON.stringify(saved);
+    const sig = `${ths.map(keyOf).join("|")}\u0000${JSON.stringify(saved)}\u0000${table.textContent ?? ""}`;
     if (sig === lastSig.current) return;
     lastSig.current = sig;
     layout(table, ths, saved);
@@ -52,6 +60,7 @@ export function DataTable({ id, className = "", children }: { id: string; classN
     if (!table) return;
     let drag: null | { kind: "col"; th: HTMLTableCellElement; x: number; w: number } | { kind: "row"; tr: HTMLTableRowElement; y: number; h: number } = null;
     let moved = false;
+    const relayout = () => layout(table, headerCells(table), getPref<Widths>(prefKey, {}));
 
     const edgeAt = (e: PointerEvent | MouseEvent) => {
       const cell = (e.target as HTMLElement).closest("th,td") as HTMLTableCellElement | null;
@@ -77,7 +86,6 @@ export function DataTable({ id, className = "", children }: { id: string; classN
       e.preventDefault();
       moved = false;
       if (hit.kind === "col") {
-        freeze(table);
         drag = { kind: "col", th: hit.th, x: e.clientX, w: hit.th.getBoundingClientRect().width };
       } else {
         drag = { kind: "row", tr: hit.tr, y: e.clientY, h: hit.tr.getBoundingClientRect().height };
@@ -96,7 +104,12 @@ export function DataTable({ id, className = "", children }: { id: string; classN
     };
     const onUp = (e: PointerEvent) => {
       if (!drag) return;
-      if (drag.kind === "col" && moved) save(table, prefKey);
+      if (drag.kind === "col" && moved) {
+        // Save just this column; laying out again keeps it at least as wide as its widest entry.
+        const i = headerCells(table).indexOf(drag.th);
+        setPref(prefKey, { ...getPref<Widths>(prefKey, {}), [keyOf(drag.th, i)]: Math.round(parseFloat(drag.th.style.width)) });
+        relayout();
+      }
       drag = null;
       if (table.hasPointerCapture(e.pointerId)) table.releasePointerCapture(e.pointerId);
     };
@@ -107,13 +120,14 @@ export function DataTable({ id, className = "", children }: { id: string; classN
       if (!hit) return;
       e.preventDefault();
       if (hit.kind === "row") { hit.tr.style.height = ""; return; }
-      const ths = headerCells(table);
       const saved = { ...getPref<Widths>(prefKey, {}) };
-      delete saved[keyOf(hit.th, ths.indexOf(hit.th))];
+      delete saved[keyOf(hit.th, headerCells(table).indexOf(hit.th))];
       setPref(prefKey, saved);
-      lastSig.current = "";
-      layout(table, ths, saved);
+      relayout();
     };
+    // The leftover space given to the last column depends on the panel's width.
+    const resize = new ResizeObserver(() => { if (!drag) relayout(); });
+    if (table.parentElement) resize.observe(table.parentElement);
 
     table.addEventListener("pointermove", onHover);
     table.addEventListener("pointerdown", onDown);
@@ -123,6 +137,7 @@ export function DataTable({ id, className = "", children }: { id: string; classN
     table.addEventListener("click", onClick, true);
     table.addEventListener("dblclick", onDouble);
     return () => {
+      resize.disconnect();
       table.removeEventListener("pointermove", onHover);
       table.removeEventListener("pointerdown", onDown);
       table.removeEventListener("pointermove", onMove);
@@ -136,38 +151,27 @@ export function DataTable({ id, className = "", children }: { id: string; classN
   return <table ref={ref} className={`data-grid ${className}`}>{children}</table>;
 }
 
-/** Natural layout, then fixed widths for the saved columns (and measured ones for the rest). */
+/**
+ * Measures each column at its content width (a max-content table, nothing wrapping), widens the ones dragged
+ * wider, gives the panel's leftover space to the last column, and fixes those widths.
+ */
 function layout(table: HTMLTableElement, ths: HTMLTableCellElement[], saved: Widths) {
-  const keys = ths.map(keyOf);
   table.classList.remove("is-sized");
-  table.style.width = "";
   for (const th of ths) th.style.width = "";
-  if (!keys.some((k) => saved[k])) return;
-  const natural = ths.map((th) => th.getBoundingClientRect().width);
-  ths.forEach((th, i) => { th.style.width = `${Math.round(saved[keys[i]!] ?? natural[i]!)}px`; });
+  if (!ths.length) { table.style.width = ""; return; }
+  table.style.width = "max-content";
+  const widths = ths.map((th, i) => Math.ceil(Math.max(th.getBoundingClientRect().width, saved[keyOf(th, i)] ?? 0)));
+  const box = table.parentElement;
+  const room = box ? box.clientWidth - parseFloat(getComputedStyle(box).paddingLeft) - parseFloat(getComputedStyle(box).paddingRight) : 0;
+  const spare = room - widths.reduce((s, w) => s + w, 0);
+  if (spare > 0) widths[widths.length - 1]! += spare;
+  ths.forEach((th, i) => { th.style.width = `${widths[i]}px`; });
   table.classList.add("is-sized");
   fitTable(table);
 }
 
-/** Switches to fixed widths at the current sizes, so a column can shrink below its content. */
-function freeze(table: HTMLTableElement) {
-  if (table.classList.contains("is-sized")) return;
-  const ths = headerCells(table);
-  const natural = ths.map((th) => th.getBoundingClientRect().width);
-  ths.forEach((th, i) => { th.style.width = `${Math.round(natural[i]!)}px`; });
-  table.classList.add("is-sized");
-  fitTable(table);
-}
-
-/** Fixed layout needs the table as wide as its columns (it may still be wider to fill its box). */
+/** Fixed layout needs the table as wide as its columns. */
 function fitTable(table: HTMLTableElement) {
   const sum = headerCells(table).reduce((s, th) => s + (parseFloat(th.style.width) || 0), 0);
   table.style.width = `${sum}px`;
-}
-
-function save(table: HTMLTableElement, prefKey: string) {
-  const ths = headerCells(table);
-  const widths = { ...getPref<Widths>(prefKey, {}) };
-  ths.forEach((th, i) => { const w = parseFloat(th.style.width); if (w) widths[keyOf(th, i)] = Math.round(w); });
-  setPref(prefKey, widths);
 }

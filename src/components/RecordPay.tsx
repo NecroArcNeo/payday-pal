@@ -1,15 +1,16 @@
 import { money, type Shift } from "@/lib/payroll";
 import { shiftForRecord, type PayLine } from "@/lib/pay";
+import { EditableLabel } from "@/components/EditableLabel";
 
 /** Headers for the per-record pay columns, matching <RecordPayCells>. */
 export function RecordPayHeaders({ className = "px-3 py-3 text-right font-medium" }: { className?: string }) {
   return (
     <>
-      <th className={className}>Reg hrs</th>
-      <th className={className}>OT hrs</th>
-      <th className={className}>Reg pay</th>
-      <th className={className}>OT pay</th>
-      <th className={className} title="What this day pays: regular + overtime pay, the salaried share of the week, or the manual amount. Extra-pay entries are added on the Payroll page.">Total pay</th>
+      <th className={className}><EditableLabel k="reg_hrs" name="Reg hrs" /></th>
+      <th className={className}><EditableLabel k="ot_hrs" name="OT hrs" /></th>
+      <th className={className}><EditableLabel k="reg_pay" name="Reg pay" /></th>
+      <th className={className}><EditableLabel k="ot_pay" name="OT pay" /></th>
+      <th className={className} title="What this day pays: regular + overtime pay, the salaried share of the week, or the manual amount. Extra-pay entries are added on the Payroll page."><EditableLabel k="total_pay" name="Total pay" /></th>
     </>
   );
 }

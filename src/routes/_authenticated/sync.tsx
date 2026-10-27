@@ -4,15 +4,18 @@ import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { AppShell, btnGhost, btnPrimary } from "@/components/AppShell";
-import { useSession } from "@/lib/payroll";
+import { useFieldDefs, usePrivateFields, useSession } from "@/lib/payroll";
+import { EMPLOYEE_SECTIONS } from "@/lib/employee-fields";
+import { useLabels } from "@/lib/labels";
+import { ALWAYS_SYNCED, customKey, DEFAULT_PRIVATE, PRIVATE_COLUMNS } from "@/lib/db/privacy";
 import { cloudConfigured, setDataMode, useDataMode } from "@/lib/db/mode";
 import { localDb, requestPersistentStorage } from "@/lib/db/local";
 import { backupFileName, downloadSnapshot, getBackup, listBackups, reasonLabel, saveBackup } from "@/lib/db/backups";
 import { countRows, describeCounts, exportSnapshot, isEmpty, validateSnapshot, type Snapshot } from "@/lib/db/snapshot";
 import {
-  exportState, hasUnpushedChanges, localSyncState, markExported, pull, push, restoreSnapshot, supabaseCloud, type SyncDeps,
+  exportState, hasUnpushedChanges, localSyncState, markExported, pull, push, restoreSnapshot, setPrivateFields, supabaseCloud, type SyncDeps,
 } from "@/lib/db/sync";
-import { Cloud, Download, HardDrive, RotateCcw, Upload } from "lucide-react";
+import { Cloud, Download, HardDrive, Lock, RotateCcw, Upload } from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated/sync")({
   head: () => ({ meta: [{ title: "Sync & backup — Meridian Payroll" }] }),
@@ -107,10 +110,11 @@ function SyncPage() {
     if (r.kind === "done") toast.success(`Pulled from cloud: ${describeCounts(r.counts)}`);
   });
 
-  const restore = (snapshot: Snapshot, from: string) => run("restore", async () => {
+  const restore = (snapshot: Snapshot, from: string, fromCloud = false) => run("restore", async () => {
     const s = validateSnapshot(snapshot);
-    if (!confirm(`Replace the data on this device with ${from} (${describeCounts(countRows(s))})?\n\nThe current data is saved to Backups first.`)) return;
-    await restoreSnapshot(await localDb(), s, saveBackup);
+    const kept = fromCloud ? " Private fields keep this device's values, since the cloud never had them." : "";
+    if (!confirm(`Replace the data on this device with ${from} (${describeCounts(countRows(s))})?\n\nThe current data is saved to Backups first.${kept}`)) return;
+    await restoreSnapshot(await localDb(), s, saveBackup, { keepPrivateFields: fromCloud });
     toast.success("Backup restored on this device");
   });
 
@@ -198,6 +202,10 @@ function SyncPage() {
         </div>
       </section>
 
+      <PrivateFields busy={!!busy} onChange={(keys) => run("private", async () => {
+        await setPrivateFields(await localDb(), keys);
+      })} />
+
       <section className="glass-panel space-y-3 p-5">
         <div className="font-display font-extrabold tracking-tight">Backup files</div>
         <p className="text-sm text-muted-foreground">
@@ -235,11 +243,61 @@ function SyncPage() {
             empty={cloudBackups.isError ? `Couldn't read cloud backups: ${cloudBackups.error.message}` : "No cloud backups yet."}
             busy={!!busy}
             onDownload={async (id) => { const s = await fetchCloudBackup(id); downloadSnapshot(s, `cloud-${backupFileName()}`); }}
-            onRestore={async (id) => restore(await fetchCloudBackup(id), "a cloud backup")}
+            onRestore={async (id) => restore(await fetchCloudBackup(id), "a cloud backup", true)}
           />
         </section>
       )}
     </AppShell>
+  );
+}
+
+/** Ticks for the employee details that stay on this device and are never sent to the cloud. */
+function PrivateFields({ busy, onChange }: { busy: boolean; onChange: (keys: string[]) => void }) {
+  const { data: keys } = usePrivateFields();
+  const { data: defs = [] } = useFieldDefs();
+  const { label } = useLabels();
+  if (!keys) return null;
+  const groups = [
+    ...EMPLOYEE_SECTIONS.map((s) => ({ title: label(`section:${s.title}`, s.title), items: s.fields.filter((f) => !ALWAYS_SYNCED.includes(f.k)).map((f) => ({ key: f.k, label: label(f.k, f.label) })) })),
+    { title: "Other", items: [{ key: "notes", label: label("notes", "Notes") }, ...defs.map((d) => ({ key: customKey(d.id), label: label(customKey(d.id), d.label) }))] },
+  ];
+  const everything = [...PRIVATE_COLUMNS, ...defs.map((d) => customKey(d.id))];
+  const toggle = (k: string, on: boolean) => onChange(on ? [...keys, k] : keys.filter((x) => x !== k));
+  const preset = "rounded-lg bg-secondary px-2.5 py-1.5 text-xs text-muted-foreground ring-1 ring-border hover:text-foreground disabled:opacity-50";
+  return (
+    <section className="glass-panel space-y-4 p-5">
+      <div>
+        <div className="flex items-center gap-2 font-display font-extrabold tracking-tight"><Lock className="h-4 w-4" /> Private fields</div>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Ticked details stay on this device and are never sent to the cloud: pushing leaves them blank in the cloud copy, and pulling keeps this device's values.
+          Employee ID, names and hourly rate always sync, since payroll needs them.
+        </p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Making a field private after pushing? Push again to remove it from the cloud copy; older copies under "Backups in the cloud" still contain it.
+          Backup files you download, and backups on this device, keep everything.
+        </p>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        <button type="button" className={preset} disabled={busy} onClick={() => onChange(DEFAULT_PRIVATE)}>Only ID numbers</button>
+        <button type="button" className={preset} disabled={busy} onClick={() => onChange(everything)}>Every personal detail</button>
+        <button type="button" className={preset} disabled={busy} onClick={() => onChange([])}>Sync everything</button>
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {groups.map((g) => (
+          <div key={g.title}>
+            <div className="mb-1.5 text-xs font-semibold text-muted-foreground">{g.title}</div>
+            <div className="space-y-1">
+              {g.items.map((it) => (
+                <label key={it.key} className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" disabled={busy} checked={keys.includes(it.key)} onChange={(e) => toggle(it.key, e.target.checked)} />
+                  {it.label}
+                </label>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 

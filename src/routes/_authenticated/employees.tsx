@@ -3,16 +3,21 @@ import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { z } from "zod";
-import { db } from "@/lib/db/mode";
+import { db, useDataMode } from "@/lib/db/mode";
+import { customKey } from "@/lib/db/privacy";
 import { backupBefore } from "@/lib/db/safety";
 import { AppShell, btnGhost, btnPrimary, inputCls } from "@/components/AppShell";
 import { SearchInput } from "@/components/EmployeeSearch";
 import { DataTable } from "@/components/DataTable";
-import { fullName, money, useEmployeeDefaults, useEmployees, useFieldDefs, useShifts, type Employee, type FieldDef, type Shift } from "@/lib/payroll";
+import { EmailLink } from "@/components/EmailLink";
+import { CategoryInput } from "@/components/ProfileCategories";
+import { fullName, money, useEmployeeDefaults, useEmployees, useFieldDefs, usePrivateFields, useShifts, type Employee, type FieldDef, type Shift } from "@/lib/payroll";
 import { NO_DEFAULTS, withDefaults } from "@/lib/employee-fields";
 import { PAY_TYPES, shiftFor } from "@/lib/pay";
 import { describeEmployeeFilter, isFiltering, NO_FILTER, searchEmployees, type EmployeeFilter } from "@/lib/employee-search";
 import { IdCard, Pencil, Trash2, X } from "lucide-react";
+import { EditableLabel } from "@/components/EditableLabel";
+import { useLabels } from "@/lib/labels";
 
 export const Route = createFileRoute("/_authenticated/employees")({
   head: () => ({ meta: [{ title: "Employees — Meridian Payroll" }] }),
@@ -33,6 +38,7 @@ const empty = { employee_code: "", first_name: "", last_name: "", email: "", dep
 function EmployeesPage() {
   const { data: employees = [] } = useEmployees();
   const { data: defs = [] } = useFieldDefs();
+  const { label } = useLabels();
   const { data: shifts = [] } = useShifts();
   const { data: defaults = NO_DEFAULTS } = useEmployeeDefaults();
   const qc = useQueryClient();
@@ -113,7 +119,7 @@ function EmployeesPage() {
   };
 
   const field = (k: string, ph: string, type = "text") => (
-    <input className={inputCls} type={type} step="0.01" placeholder={ph} value={form[k]} onChange={(e) => setForm({ ...form, [k]: e.target.value })} />
+    <input className={inputCls} type={type} step="0.01" placeholder={label(k, ph)} aria-label={label(k, ph)} value={form[k]} onChange={(e) => setForm({ ...form, [k]: e.target.value })} />
   );
 
   return (
@@ -171,13 +177,13 @@ function EmployeesPage() {
           <thead>
             <tr className="border-b border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
               <th className="w-10 pl-5"><input type="checkbox" aria-label="Select all shown" checked={allShownPicked} onChange={toggleShown} disabled={!list.length} /></th>
-              <th className="px-3 py-3 text-left font-medium">Employee</th>
-              <th className="px-3 py-3 text-left font-medium">ID</th>
-              <th className="px-3 py-3 text-left font-medium">Position</th>
-              <th className="px-3 py-3 text-left font-medium">Department</th>
-              <th className="px-3 py-3 text-left font-medium">Shift</th>
-              <th className="px-3 py-3 text-left font-medium">Email</th>
-              <th className="px-3 py-3 text-right font-medium">Rate</th>
+              <th className="px-3 py-3 text-left font-medium"><EditableLabel k="employee" name="Employee" /></th>
+              <th className="px-3 py-3 text-left font-medium"><EditableLabel k="employee_code" name="ID" /></th>
+              <th className="px-3 py-3 text-left font-medium"><EditableLabel k="job_title" name="Position" /></th>
+              <th className="px-3 py-3 text-left font-medium"><EditableLabel k="department" name="Department" /></th>
+              <th className="px-3 py-3 text-left font-medium"><EditableLabel k="shift" name="Shift" /></th>
+              <th className="px-3 py-3 text-left font-medium"><EditableLabel k="email" name="Email" /></th>
+              <th className="px-3 py-3 text-right font-medium"><EditableLabel k="hourly_rate" name="Rate" /></th>
               <th className="w-20" />
             </tr>
           </thead>
@@ -198,10 +204,10 @@ function EmployeesPage() {
                 <td className="px-3 py-3 text-muted-foreground">{e.job_title ?? "—"}</td>
                 <td className="px-3 py-3 text-muted-foreground">{e.department ?? "—"}</td>
                 <td className="px-3 py-3 text-muted-foreground">{shiftFor(e.shift_id, shifts).name}</td>
-                <td className="px-3 py-3 text-muted-foreground">{e.email ?? "—"}</td>
+                <td className="px-3 py-3 text-muted-foreground">{e.email ? <EmailLink email={e.email} /> : "—"}</td>
                 <td className="px-3 py-3 text-right font-mono text-[13px]">{money(Number(e.hourly_rate))}<div className="font-body text-[10px] text-muted-foreground">{e.pay_type === "salary" ? "salary" : "hourly"}</div></td>
-                <td className="px-3 py-3">
-                  <div className="flex justify-end gap-3 text-muted-foreground">
+                <td className="py-3 pl-3 pr-6">
+                  <div className="flex justify-end gap-3.5 text-muted-foreground">
                     <Link to="/employees/$id" params={{ id: e.id }} aria-label={`Edit ${fullName(e)}`} title="Edit profile"><Pencil className="h-4 w-4 hover:text-foreground" /></Link>
                     <button onClick={() => remove(e.id)} aria-label="Delete"><Trash2 className="h-4 w-4 hover:text-destructive" /></button>
                   </div>
@@ -231,6 +237,11 @@ const textFields = [
 
 /** Changes only the fields that are ticked, on every selected employee. */
 function BulkEditPanel({ employees, defs, shifts, onClose, onDone }: { employees: Employee[]; defs: FieldDef[]; shifts: Shift[]; onClose: () => void; onDone: () => void }) {
+  // Private fields can't be written to the cloud, so they aren't offered when editing it directly.
+  const { data: privateKeys = [] } = usePrivateFields();
+  const hidden = useDataMode() === "cloud" ? privateKeys : [];
+  const fields = textFields.filter((f) => !hidden.includes(f.key));
+  const editableDefs = defs.filter((d) => !hidden.includes(customKey(d.id)));
   const [on, setOn] = useState<Record<string, boolean>>({});
   const [vals, setVals] = useState<Record<string, string>>({});
   const [rateMode, setRateMode] = useState<RateMode>("set");
@@ -253,12 +264,12 @@ function BulkEditPanel({ employees, defs, shifts, onClose, onDone }: { employees
   };
 
   const changes: string[] = [];
-  for (const f of textFields) if (on[f.key]) changes.push(val(f.key).trim() ? `${f.label} → “${val(f.key).trim()}”` : `clear ${f.label}`);
+  for (const f of fields) if (on[f.key]) changes.push(val(f.key).trim() ? `${f.label} → “${val(f.key).trim()}”` : `clear ${f.label}`);
   if (on["rate"]) changes.push(rateMode === "set" ? `rate → ${money(rateNum || 0)}` : rateMode === "pct" ? `rate ${rateNum >= 0 ? "+" : ""}${rateNum || 0}%` : `rate ${rateNum >= 0 ? "+" : "−"}${money(Math.abs(rateNum || 0))}`);
   if (on["active"]) changes.push(active ? "mark active" : "mark resigned");
   if (on["pay_type"]) changes.push(`pay type → ${payType === "salary" ? "salary" : "hourly"}`);
   if (on["shift"]) changes.push(`shift → ${shifts.find((s) => s.id === shiftId)?.name ?? "?"}`);
-  for (const d of defs) if (on[`custom:${d.id}`]) changes.push(val(`custom:${d.id}`).trim() ? `${d.label} → “${val(`custom:${d.id}`).trim()}”` : `clear ${d.label}`);
+  for (const d of editableDefs) if (on[`custom:${d.id}`]) changes.push(val(`custom:${d.id}`).trim() ? `${d.label} → “${val(`custom:${d.id}`).trim()}”` : `clear ${d.label}`);
 
   const apply = async () => {
     if (on["rate"]) {
@@ -268,14 +279,14 @@ function BulkEditPanel({ employees, defs, shifts, onClose, onDone }: { employees
     }
     const rows = employees.map((e) => {
       const patch: Record<string, unknown> = {};
-      for (const f of textFields) if (on[f.key]) patch[f.key] = val(f.key).trim().slice(0, f.max) || null;
+      for (const f of fields) if (on[f.key]) patch[f.key] = val(f.key).trim().slice(0, f.max) || null;
       if (on["rate"]) patch["hourly_rate"] = newRate(e);
       if (on["active"]) patch["active"] = active;
       if (on["shift"]) patch["shift_id"] = shiftId;
       if (on["pay_type"]) patch["pay_type"] = payType;
       const custom = { ...((e.custom_fields ?? {}) as Record<string, string>) };
       let customChanged = false;
-      for (const d of defs) {
+      for (const d of editableDefs) {
         const k = `custom:${d.id}`;
         if (!on[k]) continue;
         customChanged = true;
@@ -302,7 +313,7 @@ function BulkEditPanel({ employees, defs, shifts, onClose, onDone }: { employees
   const row = (k: string, label: string, control: React.ReactNode) => (
     <label key={k} className={`flex items-center gap-3 rounded-xl p-2 ring-1 ${on[k] ? "bg-accent/50 ring-primary/25" : "ring-border"}`}>
       {tick(k)}
-      <span className="w-40 shrink-0 text-sm">{label}</span>
+      <span className="w-40 shrink-0 text-sm"><EditableLabel k={k === "rate" ? "hourly_rate" : k} name={label} /></span>
       <div className="min-w-0 flex-1">{control}</div>
     </label>
   );
@@ -320,7 +331,7 @@ function BulkEditPanel({ employees, defs, shifts, onClose, onDone }: { employees
         <button onClick={onClose} className={btnGhost} aria-label="Close"><X className="h-4 w-4" /></button>
       </div>
       <div className="grid gap-2 md:grid-cols-2">
-        {textFields.map((f) => row(f.key, f.label, <input className={inputCls} value={val(f.key)} onChange={(e) => setVal(f.key, e.target.value)} placeholder="New value" />))}
+        {fields.map((f) => row(f.key, f.label, <input className={inputCls} value={val(f.key)} onChange={(e) => setVal(f.key, e.target.value)} placeholder="New value" />))}
         {row("rate", "Hourly rate", (
           <div className="flex gap-2">
             <select className={`${inputCls} w-auto`} value={rateMode} onChange={(e) => { setRateMode(e.target.value as RateMode); setOn((o) => ({ ...o, rate: true })); }}>
@@ -347,7 +358,7 @@ function BulkEditPanel({ employees, defs, shifts, onClose, onDone }: { employees
             {shifts.map((s) => <option key={s.id} value={s.id}>{s.name}{Number(s.multiplier) !== 1 ? ` (×${Number(s.multiplier)})` : ""}</option>)}
           </select>
         ))}
-        {defs.map((d) => row(`custom:${d.id}`, d.label, <input className={inputCls} type={d.field_type} value={val(`custom:${d.id}`)} onChange={(e) => setVal(`custom:${d.id}`, e.target.value)} placeholder="New value" />))}
+        {editableDefs.map((d) => row(`custom:${d.id}`, d.label, <div><CategoryInput type={d.field_type} className={`${inputCls} w-full`} value={val(`custom:${d.id}`)} onChange={(v) => setVal(`custom:${d.id}`, v)} placeholder="New value" /></div>))}
       </div>
       {on["rate"] && val("rate").trim() !== "" && Number.isFinite(rateNum) && (
         <div className="text-xs text-muted-foreground">

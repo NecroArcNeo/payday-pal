@@ -1,6 +1,7 @@
 import type { Tables, TablesInsert, TablesUpdate } from "@/integrations/supabase/types";
 import { supabase } from "@/integrations/supabase/client";
 import { localDb } from "./local";
+import { getPrivateFields, stripPrivate } from "./privacy";
 import { tableColumns, type Row, type Sql, type SqlDb } from "./snapshot";
 import type { TableName } from "./schema";
 
@@ -232,6 +233,13 @@ const check = <T>({ data, error }: { data: T | null; error: { message: string } 
 const wrap = (p: PromiseLike<{ error: { message: string } | null }>): Promise<Result> =>
   Promise.resolve(p).then(({ error }) => ({ error: error ? new Error(error.message) : null }), (e) => ({ error: toError(e) }));
 
+/** Private fields never reach the cloud, even when editing it directly. */
+async function cloudSafe<T>(table: string, rows: T): Promise<T> {
+  if (table !== "employees") return rows;
+  const keys = await getPrivateFields(await localDb());
+  return (Array.isArray(rows) ? rows.map((r) => stripPrivate(r, keys)) : stripPrivate(rows as Row, keys)) as T;
+}
+
 export const cloudStore: DataStore = {
   kind: "cloud",
   async listEmployees() {
@@ -286,20 +294,20 @@ export const cloudStore: DataStore = {
   async getSettings() {
     return check(await supabase.from("payroll_settings").select("*").maybeSingle());
   },
-  insert: (table, rows) => wrap(supabase.from(table).insert(rows as never)),
-  update: (table, id, patch) => wrap(supabase.from(table as "employees").update(patch as never).eq("id", id)),
+  insert: async (table, rows) => wrap(supabase.from(table).insert((await cloudSafe(table, rows)) as never)),
+  update: async (table, id, patch) => wrap(supabase.from(table as "employees").update((await cloudSafe(table, patch)) as never).eq("id", id)),
   remove: (table, id) => wrap(supabase.from(table as "employees").delete().eq("id", id)),
   async updateMany(table, rows) {
     let updated = 0;
     for (const { id, patch } of rows) {
-      const { error } = await wrap(supabase.from(table as "employees").update(patch as never).eq("id", id));
+      const { error } = await wrap(supabase.from(table as "employees").update((await cloudSafe(table, patch)) as never).eq("id", id));
       if (error) return { error: new Error(`${error.message} (${updated} of ${rows.length} were updated before this)`), updated };
       updated++;
     }
     return { error: null, updated };
   },
   removeMany: (table, ids) => wrap(supabase.from(table as "employees").delete().in("id", ids)),
-  upsertEmployeesByCode: (rows) => wrap(supabase.from("employees").upsert(rows as never, { onConflict: "owner_id,employee_code" })),
+  upsertEmployeesByCode: async (rows) => wrap(supabase.from("employees").upsert((await cloudSafe("employees", rows)) as never, { onConflict: "owner_id,employee_code" })),
   saveSettings: (s) => wrap(supabase.from("payroll_settings").upsert({ ...s, updated_at: new Date().toISOString() } as never, { onConflict: "owner_id" })),
-  saveEmployeeDefaults: (d) => wrap(supabase.from("payroll_settings").upsert({ employee_defaults: d, updated_at: new Date().toISOString() } as never, { onConflict: "owner_id" })),
+  saveEmployeeDefaults: async (d) => wrap(supabase.from("payroll_settings").upsert({ employee_defaults: stripPrivate(d as Row, await getPrivateFields(await localDb()), "delete"), updated_at: new Date().toISOString() } as never, { onConflict: "owner_id" })),
 };

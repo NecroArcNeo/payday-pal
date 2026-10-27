@@ -12,14 +12,19 @@ import {
   type Employee, type Shift,
 } from "@/lib/payroll";
 import { employeePay, shiftFor, weekEnd, weekStart } from "@/lib/pay";
+import { formatValue } from "@/lib/field-types";
+import { labelOf, useLabels } from "@/lib/labels";
+import { customKey } from "@/lib/db/privacy";
 import { Plus, Settings2, Trash2 } from "lucide-react";
+import { EditableLabel } from "@/components/EditableLabel";
 
 export const Route = createFileRoute("/_authenticated/payroll")({
   head: () => ({ meta: [{ title: "Payroll — Meridian Payroll" }] }),
   component: PayrollPage,
 });
 
-const builtInCols: { key: string; label: string; get: (e: Employee) => string }[] = [
+/** `key` is also the column's alias key (see src/lib/labels.ts); custom categories use customKey(id). */
+const builtInCols: { key: string; label: string; get: (e: Employee) => string; alias?: string }[] = [
   { key: "employee_code", label: "ID", get: (e) => e.employee_code },
   { key: "job_title", label: "Job title", get: (e) => e.job_title ?? "" },
   { key: "department", label: "Department", get: (e) => e.department ?? "" },
@@ -54,8 +59,10 @@ function PayrollPage() {
 
   const infoCols = [
     ...builtInCols,
-    ...defs.map((d) => ({ key: d.id, label: d.label, get: (e: Employee) => String(((e.custom_fields ?? {}) as Record<string, unknown>)[d.id] ?? "") })),
+    ...defs.map((d) => ({ key: d.id, alias: customKey(d.id), label: d.label, get: (e: Employee) => formatValue(d.field_type, String(((e.custom_fields ?? {}) as Record<string, unknown>)[d.id] ?? "")) })),
   ].filter((c) => visible.includes(c.key));
+  const aliasKey = (c: { key: string; alias?: string }) => c.alias ?? c.key;
+  const { label } = useLabels();
   const showDays = visible.includes("days");
   const showRate = visible.includes("rate");
   const showShift = visible.includes("shift");
@@ -84,8 +91,10 @@ function PayrollPage() {
   const shown = isFiltering(q) ? list.filter((r) => matchesEmployee(r.e, q)) : list;
 
   const exportCsv = () => {
-    const head = ["Name", ...infoCols.map((c) => c.label), "Pay type", "Shift", "Shift multiplier", ...(showDays ? ["Days"] : []), ...(showRate ? ["Rate"] : []),
-      "Regular hours", "Overtime hours", "Weekend hours", "Regular pay", "Overtime pay", "Manual day pay", ...categories, "Gross pay"];
+    const head = [labelOf("employee", "Name"), ...infoCols.map((c) => labelOf(aliasKey(c), c.label)), labelOf("pay_type", "Pay type"), labelOf("shift", "Shift"), "Shift multiplier",
+      ...(showDays ? [labelOf("days", "Days")] : []), ...(showRate ? [labelOf("hourly_rate", "Rate")] : []),
+      labelOf("reg_hrs", "Regular hours"), labelOf("ot_hrs", "Overtime hours"), "Weekend hours", labelOf("reg_pay", "Regular pay"), labelOf("ot_pay", "Overtime pay"),
+      labelOf("manual_pay", "Manual day pay"), ...categories.map((c) => labelOf(`extra:${c}`, c)), labelOf("gross_pay", "Gross pay")];
     const body = list.map((r) => [fullName(r.e), ...infoCols.map((c) => c.get(r.e)), r.e.pay_type === "salary" ? "Salary" : "Hourly", r.shift.name, r.shift.multiplier, ...(showDays ? [r.days] : []), ...(showRate ? [r.rate.toFixed(2)] : []),
       r.regular.toFixed(2), r.overtime.toFixed(2), r.weekendHours.toFixed(2), r.regPay.toFixed(2), r.otPay.toFixed(2), r.manualPay.toFixed(2),
       ...categories.map((c) => (r.extras[c] ?? 0).toFixed(2)), r.gross.toFixed(2)]);
@@ -113,7 +122,8 @@ function PayrollPage() {
 
       {showSettings && settings && (
         <>
-          <SettingsPanel settings={settings} cols={[...builtInCols.map((c) => ({ key: c.key, label: c.label })), { key: "shift", label: "Shift" }, { key: "days", label: "Days" }, { key: "rate", label: "Rate" }, ...defs.map((d) => ({ key: d.id, label: d.label }))]}
+          <SettingsPanel settings={settings} cols={[...builtInCols.map((c) => ({ key: c.key, label: label(c.key, c.label) })), { key: "shift", label: label("shift", "Shift") }, { key: "days", label: label("days", "Days") },
+            { key: "rate", label: label("hourly_rate", "Rate") }, ...defs.map((d) => ({ key: d.id, label: label(customKey(d.id), d.label) }))]}
             onSaved={() => qc.invalidateQueries({ queryKey: ["payroll-settings"] })} />
           <ShiftsPanel shifts={shifts} employees={employees} onChange={() => qc.invalidateQueries({ queryKey: ["shifts"] })} />
         </>
@@ -139,18 +149,18 @@ function PayrollPage() {
           <DataTable id="payroll" className="w-full text-sm">
             <thead>
               <tr className="border-b border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
-                <th className={`${th} pl-5 text-left`}>Employee</th>
-                {infoCols.map((c) => <th key={c.key} className={`${th} text-left`}>{c.label}</th>)}
-                {showDays && <th className={`${th} text-right`}>Days</th>}
-                {showShift && <th className={`${th} text-left`}>Shift</th>}
-                {showRate && <th className={`${th} text-right`}>Rate</th>}
-                <th className={`${th} text-right`}>Reg hrs</th>
-                <th className={`${th} text-right`}>OT hrs</th>
-                <th className={`${th} text-right`}>Regular pay</th>
-                <th className={`${th} text-right`}>OT pay</th>
-                {hasManual && <th className={`${th} text-right`}>Manual pay</th>}
-                {categories.map((c) => <th key={c} className={`${th} text-right`}>{c}</th>)}
-                <th className={`${th} pr-5 text-right`}>Gross pay</th>
+                <th className={`${th} pl-5 text-left`}><EditableLabel k="employee" name="Employee" /></th>
+                {infoCols.map((c) => <th key={c.key} className={`${th} text-left`}><EditableLabel k={aliasKey(c)} name={c.label} /></th>)}
+                {showDays && <th className={`${th} text-right`}><EditableLabel k="days" name="Days" /></th>}
+                {showShift && <th className={`${th} text-left`}><EditableLabel k="shift" name="Shift" /></th>}
+                {showRate && <th className={`${th} text-right`}><EditableLabel k="hourly_rate" name="Rate" /></th>}
+                <th className={`${th} text-right`}><EditableLabel k="reg_hrs" name="Reg hrs" /></th>
+                <th className={`${th} text-right`}><EditableLabel k="ot_hrs" name="OT hrs" /></th>
+                <th className={`${th} text-right`}><EditableLabel k="reg_pay" name="Regular pay" /></th>
+                <th className={`${th} text-right`}><EditableLabel k="ot_pay" name="OT pay" /></th>
+                {hasManual && <th className={`${th} text-right`}><EditableLabel k="manual_pay" name="Manual pay" /></th>}
+                {categories.map((c) => <th key={c} className={`${th} text-right`}><EditableLabel k={`extra:${c}`} name={c} /></th>)}
+                <th className={`${th} pr-5 text-right`}><EditableLabel k="gross_pay" name="Gross pay" /></th>
               </tr>
             </thead>
             <tbody className="font-mono text-[13px]">

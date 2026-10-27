@@ -5,6 +5,7 @@ import { useSession } from "@/lib/payroll";
 import { setDataMode, useDataMode } from "@/lib/db/mode";
 import { usePref } from "@/lib/prefs";
 import { ThemeToggle } from "./ThemeToggle";
+import { EditableLabel } from "./EditableLabel";
 import { Cloud, GripVertical, HardDrive, LogOut } from "lucide-react";
 
 const adminNav = [
@@ -63,7 +64,7 @@ export function AppShell({ eyebrow, title, actions, children }: { eyebrow: strin
               <div className="mt-1 font-mono text-[10px] tracking-widest text-muted-foreground">PAYROLL OS</div>
             </div>
           </div>
-          <nav className="space-y-1 p-3" aria-label="Pages (drag to reorder, or Alt+↑/↓)">
+          <nav className="space-y-1 p-3" aria-label="Pages (drag to reorder, or Alt+↑/↓; double-click a name to rename it)">
             {nav.items.map((n, i) => (
               <Link
                 key={n.to}
@@ -79,13 +80,13 @@ export function AppShell({ eyebrow, title, actions, children }: { eyebrow: strin
                   const other = nav.items[i + (e.key === "ArrowUp" ? -1 : 1)];
                   if (other) nav.move(n.to, other.to);
                 }}
-                title="Drag to reorder"
+                title="Drag to reorder. Double-click the name to rename it."
                 className={`group flex items-center justify-between rounded-xl px-3 py-2 text-sm text-foreground/80 hover:bg-secondary ${dragging === n.to ? "opacity-40" : ""} ${over === n.to && dragging && dragging !== n.to ? "ring-2 ring-primary/40" : ""}`}
                 activeProps={{ className: "bg-accent font-medium !text-accent-foreground ring-1 ring-primary/15" }}
               >
                 <span className="flex items-center gap-1.5">
                   <GripVertical className="-ml-1.5 h-3.5 w-3.5 cursor-grab text-muted-foreground/0 group-hover:text-muted-foreground" />
-                  {n.label}
+                  <EditableLabel k={`nav:${n.to}`} name={n.label} trigger="dblclick" />
                 </span>
                 <span className="font-mono text-[10px] text-muted-foreground">0{i + 1}</span>
               </Link>

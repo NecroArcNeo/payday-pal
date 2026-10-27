@@ -1,6 +1,7 @@
 import { supabase } from "@/integrations/supabase/client";
 import type { BackupReason } from "./backups";
 import { changeSeq, getMeta, setMeta } from "./local";
+import { getPrivateFields, keepPrivate, redactSnapshot, savePrivateFields } from "./privacy";
 import { SCHEMA_VERSION, TABLES } from "./schema";
 import { countRows, exportSnapshot, isEmpty, replaceWithSnapshot, validateSnapshot, type Snapshot, type SnapshotCounts, type Sql, type SqlDb } from "./snapshot";
 
@@ -8,6 +9,7 @@ import { countRows, exportSnapshot, isEmpty, replaceWithSnapshot, validateSnapsh
 // copies the account's database onto this device. Neither ever overwrites
 // anything without (1) a verified backup of what is about to be replaced and
 // (2) the user's confirmation when the other side changed since the last sync.
+// Private fields (privacy.ts) are never sent, and pulls keep this device's values for them.
 
 export class SyncConflictError extends Error {
   constructor() { super("The cloud copy changed while syncing. Nothing was overwritten — review and try again."); }
@@ -92,7 +94,10 @@ export async function push({ db, cloud, userId, backup }: SyncDeps, opts: { conf
     expected = remote.version;
   }
 
-  const { snapshot, seq } = await db.transaction(async (tx) => ({ snapshot: await exportSnapshot(tx), seq: await changeSeq(tx) }));
+  const { snapshot, seq } = await db.transaction(async (tx) => ({
+    snapshot: redactSnapshot(await exportSnapshot(tx), await getPrivateFields(tx)),
+    seq: await changeSeq(tx),
+  }));
   const version = await cloud.push(snapshot, expected);
 
   // Read it back: the push only counts once the cloud holds exactly what we sent.
@@ -117,7 +122,7 @@ export async function pull({ db, cloud, userId, backup }: SyncDeps, opts: { conf
   }
   if (!isEmpty(current)) await backup("before-pull", current);
 
-  await replaceWithSnapshot(db, incoming, {
+  await replaceWithSnapshot(db, keepPrivate(incoming, current, await getPrivateFields(db)), {
     // Refuse if anything was written after the backup was taken.
     before: async (tx) => { if ((await changeSeq(tx)) !== seq) throw new Error("Data on this device changed during the pull. Nothing was replaced — try again."); },
     after: async (tx) => markSynced(tx, await changeSeq(tx), remote.version, userId),
@@ -125,12 +130,25 @@ export async function pull({ db, cloud, userId, backup }: SyncDeps, opts: { conf
   return { kind: "done", counts: countRows(incoming) };
 }
 
-/** Replaces this device's data with a backup, after backing up what's there now. */
-export async function restoreSnapshot(db: SqlDb, snapshot: Snapshot, backup: SyncDeps["backup"]) {
+/**
+ * Saves which fields stay on this device. Making more fields private counts as an unpushed change, since the
+ * cloud copy still holds their values until the next push replaces it.
+ */
+export async function setPrivateFields(db: Sql, keys: string[]) {
+  const before = await getPrivateFields(db);
+  await savePrivateFields(db, keys);
+  if (keys.some((k) => !before.includes(k)) && (await getMeta(db, META.seq)) !== null) await setMeta(db, META.seq, "-1");
+}
+
+/**
+ * Replaces this device's data with a backup, after backing up what's there now. Cloud backups never held
+ * private fields, so `keepPrivateFields` keeps this device's values for them.
+ */
+export async function restoreSnapshot(db: SqlDb, snapshot: Snapshot, backup: SyncDeps["backup"], opts: { keepPrivateFields?: boolean } = {}) {
   const incoming = validateSnapshot(snapshot);
   const { snapshot: current, seq } = await db.transaction(async (tx) => ({ snapshot: await exportSnapshot(tx), seq: await changeSeq(tx) }));
   if (!isEmpty(current)) await backup("before-restore", current);
-  await replaceWithSnapshot(db, incoming, {
+  await replaceWithSnapshot(db, opts.keepPrivateFields ? keepPrivate(incoming, current, await getPrivateFields(db)) : incoming, {
     before: async (tx) => { if ((await changeSeq(tx)) !== seq) throw new Error("Data changed during the restore. Nothing was replaced — try again."); },
   });
 }

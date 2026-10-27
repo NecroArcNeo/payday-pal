@@ -86,6 +86,7 @@ function ImportPage() {
   const mode = useDataMode();
   const { data: employees = [] } = useEmployees();
   const { data: defs = [] } = useFieldDefs();
+  const typeOf = useMemo(() => { const m = new Map(defs.map((d) => [d.id, d.field_type])); return (id: string) => m.get(id); }, [defs]);
   const { data: defaults = NO_DEFAULTS } = useEmployeeDefaults();
   const { data: shifts = [] } = useShifts();
   const [file, setFile] = useState("");
@@ -141,12 +142,12 @@ function ImportPage() {
   const preview = useMemo(() => {
     const taken = new Set(employees.map((e) => e.employee_code.toLowerCase()));
     const resolve = (t: Target) => (t.startsWith("custom:") ? t.slice(7) : newCategories.has(t) ? t : undefined);
-    const people = sheets.map((s, i) => (setups[i]?.role === "people" ? parsePeople(s, setups[i]!, employees, taken, resolve, shifts, defaults) : null));
+    const people = sheets.map((s, i) => (setups[i]?.role === "people" ? parsePeople(s, setups[i]!, employees, taken, resolve, shifts, defaults, typeOf) : null));
     const newPeople = people.flatMap((r) => r?.ok ?? []);
     const pool = [...employees, ...newPeople.filter((p) => !employees.some((e) => e.employee_code.toLowerCase() === p.employee_code.toLowerCase()))];
     const records = sheets.map((s, i) => (setups[i]?.role === "records" ? parseRecords(s, setups[i]!, pool) : null));
     return { people, newPeople, records };
-  }, [sheets, setups, employees, newCategories, shifts, defaults]);
+  }, [sheets, setups, employees, newCategories, shifts, defaults, typeOf]);
 
   const allRecords = useMemo(() => preview.records.flatMap((r) => r?.ok ?? []), [preview]);
   const range = allRecords.length
@@ -185,7 +186,7 @@ function ImportPage() {
       // 3. People, then re-read employees so new people's hours can link to them.
       const taken = new Set(employees.map((e) => e.employee_code.toLowerCase()));
       const resolve = (t: Target) => (t.startsWith("custom:") ? t.slice(7) : created.get(t));
-      const people: PersonRow[] = sheets.flatMap((s, i) => (setups[i]!.role === "people" ? parsePeople(s, setups[i]!, employees, taken, resolve, shifts, defaults).ok : []));
+      const people: PersonRow[] = sheets.flatMap((s, i) => (setups[i]!.role === "people" ? parsePeople(s, setups[i]!, employees, taken, resolve, shifts, defaults, typeOf).ok : []));
       let fresh: Employee[] = employees;
       if (people.length) {
         const { error } = await db().upsertEmployeesByCode(people as never);

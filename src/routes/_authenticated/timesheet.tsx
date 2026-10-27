@@ -2,9 +2,13 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell, StatCard, btnGhost, inputCls } from "@/components/AppShell";
 import { EmployeePicker } from "@/components/EmployeeSearch";
 import { RECORD_PAY_COLUMNS, RecordPayCells, RecordPayHeaders, RecordShiftCell } from "@/components/RecordPay";
-import { BreakUnitToggle } from "@/components/BreakField";
+import { BreakHeader, BreakUnitToggle } from "@/components/BreakField";
 import { DataTable } from "@/components/DataTable";
-import { breakLabel, formatBreak, useBreakUnit, type BreakUnit } from "@/lib/breaks";
+import { EmailLink } from "@/components/EmailLink";
+import { CategoryValue } from "@/components/ProfileCategories";
+import { EditableLabel } from "@/components/EditableLabel";
+import { customKey } from "@/lib/db/privacy";
+import { formatBreak, useBreakUnit, type BreakUnit } from "@/lib/breaks";
 import { profileSections } from "@/lib/employee-fields";
 import {
   addDays, currentWeek, fullName, isoDate, money, useAdjustments, useAllRecords, useEmployees, useFieldDefs, usePayrollSettings, useShifts, weekday,
@@ -141,9 +145,9 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
   };
 
   const custom = (emp.custom_fields ?? {}) as Record<string, unknown>;
-  const info = (label: string, value: React.ReactNode) => (
-    <div key={label} className="min-w-0">
-      <div className="label-mono">{label}</div>
+  const info = (k: string, label: string, value: React.ReactNode) => (
+    <div key={k} className="min-w-0">
+      <div className="label-mono"><EditableLabel k={k} name={label} /></div>
       <div className="mt-0.5 truncate text-sm" title={typeof value === "string" ? value : undefined}>{value === "" || value === null || value === undefined ? <span className="text-muted-foreground">—</span> : value}</div>
     </div>
   );
@@ -183,23 +187,29 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
         </div>
         {profileSections(defs).filter((s) => s.fields.some(onSheet) || s.defs.length).map((s) => (
           <div key={s.title}>
-            <div className="mb-2 text-xs font-semibold text-muted-foreground">{s.title}</div>
+            <div className="mb-2 text-xs font-semibold text-muted-foreground">{s.custom ? s.title : <EditableLabel k={`section:${s.title}`} name={s.title} />}</div>
             <div className="grid grid-cols-2 gap-x-6 gap-y-3 md:grid-cols-4">
-              {s.fields.filter(onSheet).map((f) => info(f.label, fieldValue(f.k, f.type)))}
+              {s.fields.filter(onSheet).map((f) => {
+                const v = fieldValue(f.k, f.type);
+                return info(f.k, f.label, f.type === "email" && v ? <EmailLink email={v} /> : v);
+              })}
               {s.title === "Payroll" && (
                 <>
-                  {info("Pay type", salary ? `Salary (${rules.threshold} h × rate a week)` : "Hourly")}
-                  {info("Shift", `${shift.name}${shift.multiplier !== 1 ? ` · ×${shift.multiplier} (${money(rate * shift.multiplier)}/h)` : ""}`)}
-                  {info("Status", emp.active ? "Active" : "Resigned")}
+                  {info("pay_type", "Pay type", salary ? `Salary (${rules.threshold} h × rate a week)` : "Hourly")}
+                  {info("shift", "Shift", `${shift.name}${shift.multiplier !== 1 ? ` · ×${shift.multiplier} (${money(rate * shift.multiplier)}/h)` : ""}`)}
+                  {info("active", "Status", emp.active ? "Active" : "Resigned")}
                 </>
               )}
-              {s.defs.map((d) => info(d.label, custom[d.id] === undefined ? "" : String(custom[d.id])))}
+              {s.defs.map((d) => {
+                const v = custom[d.id] === undefined ? "" : String(custom[d.id]);
+                return info(customKey(d.id), d.label, v && <CategoryValue type={d.field_type} value={v} />);
+              })}
             </div>
           </div>
         ))}
         {emp.notes && (
           <div>
-            <div className="mb-1 text-xs font-semibold text-muted-foreground">Notes</div>
+            <div className="mb-1 text-xs font-semibold text-muted-foreground"><EditableLabel k="notes" name="Notes" /></div>
             <p className="whitespace-pre-wrap text-sm">{emp.notes}</p>
           </div>
         )}
@@ -229,14 +239,14 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
           <DataTable id="timesheet" className="w-full text-sm">
             <thead>
               <tr className="border-b border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
-                <th className={`${th} pl-5 text-left`}>Date</th>
-                <th className={`${th} text-left`}>Shift</th>
-                <th className={`${th} text-left`}>In</th>
-                <th className={`${th} text-left`}>Out</th>
-                <th className={`${th} text-right`}>{breakLabel(breakUnit)}</th>
-                <th className={`${th} text-right`}>Hours</th>
+                <th className={`${th} pl-5 text-left`}><EditableLabel k="date" name="Date" /></th>
+                <th className={`${th} text-left`}><EditableLabel k="shift" name="Shift" /></th>
+                <th className={`${th} text-left`}><EditableLabel k="clock_in" name="In" /></th>
+                <th className={`${th} text-left`}><EditableLabel k="clock_out" name="Out" /></th>
+                <th className={`${th} text-right`}><BreakHeader unit={breakUnit} /></th>
+                <th className={`${th} text-right`}><EditableLabel k="hours" name="Hours" /></th>
                 <RecordPayHeaders className={`${th} text-right`} />
-                <th className={`${th} pr-5 text-left`}>Note</th>
+                <th className={`${th} pr-5 text-left`}><EditableLabel k="note" name="Note" /></th>
               </tr>
             </thead>
             <tbody className="font-mono text-[13px]">
@@ -300,7 +310,7 @@ function WeekRows({ start, rows, lineById, breakUnit, shifts, employeeShiftId, t
           <td className="px-3 py-2.5 text-right">{r.entry_mode === "clock" ? formatBreak(r.lunch_minutes, breakUnit) : ""}</td>
           <td className="px-3 py-2.5 text-right">{Number(r.hours).toFixed(2)}</td>
           <RecordPayCells line={lineById.get(r.id)} cell="px-3 py-2.5 text-right" />
-          <td className="max-w-[14rem] truncate px-3 py-2.5 pr-5 font-body text-xs text-muted-foreground" title={r.note ?? ""}>{r.note}</td>
+          <td className="px-3 py-2.5 pr-5 font-body text-xs text-muted-foreground">{r.note}</td>
         </tr>
       ))}
       {showSubtotal && (

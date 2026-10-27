@@ -3,6 +3,8 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import type { Tables } from "@/integrations/supabase/types";
 import { cloudConfigured, storeFor, useDataMode } from "@/lib/db/mode";
+import { localDb } from "@/lib/db/local";
+import { getPrivateFields } from "@/lib/db/privacy";
 import { payByRecord, weekEnd, weekStart, type PayLine } from "@/lib/pay";
 import type { EmployeeDefaults } from "@/lib/employee-fields";
 
@@ -84,6 +86,11 @@ export function computeHours(clockIn: string, clockOut: string, lunch: number) {
 export type FieldDef = Tables<"employee_field_defs">;
 export type Adjustment = Tables<"pay_adjustments">;
 export type PayrollSettings = Tables<"payroll_settings">;
+
+/** Employee fields kept on this device only (see src/lib/db/privacy.ts). */
+export function usePrivateFields() {
+  return useQuery({ queryKey: ["private-fields"], queryFn: async () => getPrivateFields(await localDb()) });
+}
 
 export function useFieldDefs() {
   const mode = useDataMode();

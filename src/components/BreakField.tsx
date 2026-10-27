@@ -1,5 +1,11 @@
 import { useState } from "react";
 import { breakToMinutes, formatBreak, useBreakUnit, type BreakUnit } from "@/lib/breaks";
+import { EditableLabel } from "@/components/EditableLabel";
+
+/** "Break (min)" / "Break (h)" as a heading; the "Break" part takes the user's alias. */
+export function BreakHeader({ unit }: { unit: BreakUnit }) {
+  return <><EditableLabel k="break" name="Break" /> ({unit})</>;
+}
 
 /** Minutes / hours switch for how breaks are shown and typed everywhere. */
 export function BreakUnitToggle({ className = "" }: { className?: string }) {
