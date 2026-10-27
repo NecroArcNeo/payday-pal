@@ -1,35 +1,78 @@
 import { EMPLOYEE_SECTIONS } from "@/lib/employee-fields";
-import { getMeta, setMeta } from "./local";
+import { getMeta, setMeta } from "./meta";
 import type { Row, Snapshot, Sql } from "./snapshot";
 
 // Private fields are employee details that never leave this device. Push and direct cloud writes blank them
 // out; pull keeps this device's values for them. The choice is per device (in _meta), so it isn't synced
-// and a pull can't change it.
+// and a pull can't change it. It's stored as the fields that *do* sync, so anything added later (a new
+// custom category) starts private until the user chooses to sync it.
 //
 // Keys are employees column names ("ssn") or custom categories ("custom:<def id>").
 
 /** Needed to identify people and compute pay, so they always sync. */
 export const ALWAYS_SYNCED = ["employee_code", "first_name", "last_name", "hourly_rate"];
 export const PRIVATE_COLUMNS = [...EMPLOYEE_SECTIONS.flatMap((s) => s.fields.map((f) => f.k)).filter((k) => !ALWAYS_SYNCED.includes(k)), "notes"];
-/** Until the user chooses, ID numbers stay on the device. */
-export const DEFAULT_PRIVATE = EMPLOYEE_SECTIONS.flatMap((s) => s.fields).filter((f) => f.sensitive).map((f) => f.k);
+/** Work details that sync until the user chooses otherwise. Every other detail, and every custom category, starts private. */
+export const DEFAULT_SHARED = ["department", "job_title", "hire_date"];
+export const ID_NUMBERS = EMPLOYEE_SECTIONS.flatMap((s) => s.fields).filter((f) => f.sensitive).map((f) => f.k);
 
-const KEY = "private_fields";
+const SHARED = "shared_fields";
+/** Before shared_fields: the private list itself. Converted on first read. */
+const OLD_PRIVATE = "private_fields";
+const CONFIRMED = "private_fields_confirmed";
 export const customKey = (defId: string) => `custom:${defId}`;
 
-export async function getPrivateFields(sql: Sql): Promise<string[]> {
-  const v = await getMeta(sql, KEY);
-  if (v === null) return DEFAULT_PRIVATE;
+/**
+ * Every key that can be private: the built-in details, each custom category, and any custom value still on
+ * an employee or the default profile after its category was deleted (so leftover values stay private too).
+ */
+async function allKeys(sql: Sql) {
+  const { rows } = await sql.query<{ id: string }>(`
+    select id::text from (select id::text, created_at from employee_field_defs order by created_at, id) d
+    union all
+    (select distinct jsonb_object_keys(custom_fields) from employees where jsonb_typeof(custom_fields) = 'object'
+     union select jsonb_object_keys(employee_defaults->'custom_fields') from payroll_settings where jsonb_typeof(employee_defaults->'custom_fields') = 'object'
+     except select id::text from employee_field_defs)`);
+  return [...PRIVATE_COLUMNS, ...rows.map((r) => customKey(r.id))];
+}
+
+async function readList(sql: Sql, key: string): Promise<string[] | null> {
+  const v = await getMeta(sql, key);
+  if (v === null) return null;
   try {
-    const keys: unknown = JSON.parse(v);
-    return Array.isArray(keys) ? keys.filter((k): k is string => typeof k === "string") : DEFAULT_PRIVATE;
+    const list: unknown = JSON.parse(v);
+    return Array.isArray(list) ? list.filter((k): k is string => typeof k === "string") : null;
   } catch {
-    return DEFAULT_PRIVATE;
+    return null;
   }
 }
 
+export async function getPrivateFields(sql: Sql): Promise<string[]> {
+  const all = await allKeys(sql);
+  let shared = await readList(sql, SHARED);
+  if (!shared) {
+    const old = await readList(sql, OLD_PRIVATE);
+    if (!old) return all.filter((k) => !DEFAULT_SHARED.includes(k));
+    // A choice saved by an older version: keep it exactly, from now on as the list of what syncs.
+    shared = all.filter((k) => !old.includes(k));
+    await setMeta(sql, SHARED, JSON.stringify(shared));
+    await setMeta(sql, OLD_PRIVATE, null);
+  }
+  return all.filter((k) => !shared.includes(k));
+}
+
 export async function savePrivateFields(sql: Sql, keys: string[]) {
-  await setMeta(sql, KEY, JSON.stringify([...new Set(keys)]));
+  const all = await allKeys(sql);
+  await setMeta(sql, SHARED, JSON.stringify(all.filter((k) => !keys.includes(k))));
+  await setMeta(sql, OLD_PRIVATE, null);
+}
+
+/** Whether the user has looked at the private fields on this device (saved them, or confirmed them before a push). */
+export async function privateFieldsConfirmed(sql: Sql) {
+  return (await getMeta(sql, CONFIRMED)) !== null;
+}
+export async function confirmPrivateFields(sql: Sql) {
+  await setMeta(sql, CONFIRMED, new Date().toISOString());
 }
 
 const split = (keys: string[]) => ({

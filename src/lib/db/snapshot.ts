@@ -1,3 +1,4 @@
+import { getPrivateFields } from "./privacy";
 import { SCHEMA_VERSION, TABLES, type TableName } from "./schema";
 
 /** The subset of PGlite this module needs (also satisfied by a PGlite transaction). */
@@ -17,6 +18,8 @@ export type Snapshot = {
   schema_version: number;
   created_at: string;
   data: Record<TableName, Row[]>;
+  /** Which employee details the copied device kept private (privacy.ts), so a restore can keep them private. Not in cloud copies. */
+  private_fields?: string[];
 };
 
 export type SnapshotCounts = Record<TableName, number>;
@@ -96,7 +99,11 @@ export async function exportSnapshot(sql: Sql, schemaVersion = SCHEMA_VERSION): 
     );
     data[t] = rows[0]?.rows ?? [];
   }
-  return { format: BACKUP_FORMAT, schema_version: schemaVersion, created_at: new Date().toISOString(), data };
+  const snapshot: Snapshot = { format: BACKUP_FORMAT, schema_version: schemaVersion, created_at: new Date().toISOString(), data };
+  // An older database (before an update) may lack columns the private-field check reads; restoring such a
+  // backup assumes the defaults, which keep every personal detail private.
+  if (schemaVersion === SCHEMA_VERSION) snapshot.private_fields = await getPrivateFields(sql);
+  return snapshot;
 }
 
 /** Throws a readable error unless `raw` is a complete snapshot this version of the app can load. */
@@ -118,6 +125,7 @@ export function validateSnapshot(raw: unknown): Snapshot {
     }
   }
   if (s.data!.payroll_settings.length > 1) fail("more than one payroll settings row");
+  if (s.private_fields !== undefined && !(Array.isArray(s.private_fields) && s.private_fields.every((k) => typeof k === "string"))) fail("the private fields list is malformed");
   return s as Snapshot;
 }
 

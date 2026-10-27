@@ -2,9 +2,10 @@
 //
 // The pages are the static build in dist/client, served from app://meridian/.
 // The payroll database runs here, in Node, as a real Postgres data folder under
-// the app's own AppData folder (never Documents: OneDrive could copy it
-// mid-write). Automatic backups are plain JSON files in
-// Documents\Meridian Payroll\Backups, where syncing them is a good thing.
+// the app's own AppData folder. Automatic backups are JSON files beside it.
+// Neither goes in Documents: OneDrive may sync it, which would copy ID numbers
+// to Microsoft's cloud (and could copy the database mid-write). Copies meant to
+// leave the computer are the downloaded backup files, which are encrypted.
 // The page reaches both only through the bridge in preload.cjs.
 
 import { app, BrowserWindow, ipcMain, Menu, net, protocol, shell } from "electron";
@@ -24,7 +25,7 @@ const HOME = process.env.MERIDIAN_HOME;
 // The same folder in development and when installed (the package name would otherwise pick it in development).
 app.setPath("userData", HOME ? path.join(HOME, "app") : path.join(app.getPath("appData"), "Meridian Payroll"));
 const DATA_DIR = path.join(app.getPath("userData"), "database");
-const BACKUP_DIR = HOME ? path.join(HOME, "Backups") : path.join(app.getPath("documents"), "Meridian Payroll", "Backups");
+const BACKUP_DIR = path.join(app.getPath("userData"), "Backups");
 // Says whether the database is open. Still "open" at startup means the last session never closed it:
 // a crash, a power cut or a forced quit.
 const SESSION_FILE = path.join(app.getPath("userData"), "session.json");

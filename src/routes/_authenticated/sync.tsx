@@ -7,11 +7,12 @@ import { AppShell, btnGhost, btnPrimary } from "@/components/AppShell";
 import { useFieldDefs, usePrivateFields, useSession } from "@/lib/payroll";
 import { EMPLOYEE_SECTIONS } from "@/lib/employee-fields";
 import { useLabels } from "@/lib/labels";
-import { ALWAYS_SYNCED, customKey, DEFAULT_PRIVATE, PRIVATE_COLUMNS } from "@/lib/db/privacy";
+import { ALWAYS_SYNCED, confirmPrivateFields, customKey, DEFAULT_SHARED, getPrivateFields, ID_NUMBERS, PRIVATE_COLUMNS, privateFieldsConfirmed } from "@/lib/db/privacy";
 import { cloudConfigured, setDataMode, useDataMode } from "@/lib/db/mode";
 import { localDb, requestPersistentStorage } from "@/lib/db/local";
 import { desktop } from "@/lib/desktop";
-import { backupFileName, downloadSnapshot, getBackup, listBackups, reasonLabel, saveBackup } from "@/lib/db/backups";
+import { backupFileName, getBackup, listBackups, reasonLabel, saveBackup } from "@/lib/db/backups";
+import { readBackupFile, saveBackupFile } from "@/lib/backup-file";
 import { countRows, describeCounts, describeDiff, exportSnapshot, isEmpty, validateSnapshot, type Snapshot } from "@/lib/db/snapshot";
 import {
   deviceIdentity, exportState, hasUnpushedChanges, localSyncState, markExported, pull, push, restoreSnapshot, setDeviceName, setPrivateFields,
@@ -98,7 +99,33 @@ function SyncPage() {
     db: await localDb(), cloud: supabaseCloud, userId: user!.id, backup: saveBackup, defaultDeviceName: await defaultDeviceName(),
   });
 
+  const { data: defs = [] } = useFieldDefs();
+  const { label } = useLabels();
+  /** A detail's name as the user sees it (aliases included). */
+  const fieldName = (key: string) => {
+    if (key.startsWith("custom:")) { const def = defs.find((x) => customKey(x.id) === key); return label(key, def?.label ?? "a deleted category"); }
+    return label(key, EMPLOYEE_SECTIONS.flatMap((x) => x.fields).find((f) => f.k === key)?.label ?? (key === "notes" ? "Notes" : key));
+  };
+
+  /** Before the first push from this computer, show exactly what will and won't be uploaded. */
+  const privacyChecked = async () => {
+    const db = await localDb();
+    if (await privateFieldsConfirmed(db)) return true;
+    const keep = await getPrivateFields(db);
+    const send = [...PRIVATE_COLUMNS, ...defs.map((x) => customKey(x.id))].filter((k) => !keep.includes(k));
+    const list = (keys: string[]) => (keys.length ? keys.map(fieldName).join(", ") : "nothing");
+    const ok = confirm(
+      "This is the first push from this computer. Check what will be uploaded to the cloud:\n\n"
+      + `Uploaded: employee ID, names, hourly rate, ${list(send)}.\n\n`
+      + `Stays on this computer only: ${list(keep)}.\n\n`
+      + 'To change this, cancel and use "Private fields" further down this page. Push with these settings?',
+    );
+    if (ok) await confirmPrivateFields(db);
+    return ok;
+  };
+
   const doPush = () => run("push", async () => {
+    if (!(await privacyChecked())) return;
     const d = await deps();
     let r = await push(d);
     if (r.kind === "confirm") {
@@ -147,8 +174,7 @@ function SyncPage() {
 
   const exportFile = () => run("export", async () => {
     const db = await localDb();
-    downloadSnapshot(await exportSnapshot(db), backupFileName());
-    await markExported(db);
+    if (await saveBackupFile(await exportSnapshot(db), backupFileName())) await markExported(db);
   });
 
   const backupNow = () => run("backup", async () => {
@@ -160,9 +186,10 @@ function SyncPage() {
     if (fileRef.current) fileRef.current.value = "";
     if (!file) return;
     try {
-      await restore(validateSnapshot(JSON.parse(await file.text())), `the backup file "${file.name}"`);
+      const s = await readBackupFile(file);
+      if (s) await restore(s, `the backup file "${file.name}"`);
     } catch (e) {
-      toast.error(e instanceof SyntaxError ? "That file isn't a payroll backup (not valid JSON)." : (e as Error).message);
+      toast.error((e as Error).message);
     }
   };
 
@@ -289,7 +316,7 @@ function SyncPage() {
           rows={(backups.data ?? []).map((b) => ({ key: b.id, at: b.created_at, label: reasonLabel[b.reason] ?? b.reason, detail: describeCounts(b.counts) }))}
           empty={backups.isError ? `Couldn't read backups: ${backups.error.message}` : "No backups yet."}
           busy={!!busy}
-          onDownload={async (id) => { const b = await getBackup(id); if (b) downloadSnapshot(b.snapshot, backupFileName(new Date(b.created_at))); }}
+          onDownload={async (id) => { const b = await getBackup(id); if (b) await saveBackupFile(b.snapshot, backupFileName(new Date(b.created_at))); }}
           onRestore={async (id) => { const b = await getBackup(id); if (b) await restore(b.snapshot, `the backup from ${when(b.created_at)}`); }}
         />
       </section>
@@ -304,7 +331,7 @@ function SyncPage() {
             rows={(cloudBackups.data ?? []).map((b) => ({ key: b.id, at: b.created_at, label: b.reason === "before-push" ? "Cloud copy, before a push replaced it" : "Cloud data before switching to local-first", detail: `version ${b.version}` }))}
             empty={cloudBackups.isError ? `Couldn't read cloud backups: ${cloudBackups.error.message}` : "No cloud backups yet."}
             busy={!!busy}
-            onDownload={async (id) => { const s = await fetchCloudBackup(id); downloadSnapshot(s, `cloud-${backupFileName()}`); }}
+            onDownload={async (id) => { const s = await fetchCloudBackup(id); await saveBackupFile(s, `cloud-${backupFileName()}`); }}
             onRestore={async (id) => restore(await fetchCloudBackup(id), "a cloud backup", true)}
           />
         </section>
@@ -332,16 +359,17 @@ function PrivateFields({ busy, onChange }: { busy: boolean; onChange: (keys: str
         <div className="flex items-center gap-2 font-display font-extrabold tracking-tight"><Lock className="h-4 w-4" /> Private fields</div>
         <p className="mt-1 text-sm text-muted-foreground">
           Ticked details stay on this device and are never sent to the cloud: pushing leaves them blank in the cloud copy, and pulling keeps this device's values.
-          Employee ID, names and hourly rate always sync, since payroll needs them.
+          Employee ID, names and hourly rate always sync, since payroll needs them. Categories you add later start out private.
         </p>
         <p className="mt-1 text-xs text-muted-foreground">
           Making a field private after pushing? Push again to remove it from the cloud copy; older copies under "Backups in the cloud" still contain it.
-          Backup files you download, and backups on this device, keep everything.
+          Backups on this computer and backup files you download keep everything; downloaded files ask for a password.
         </p>
       </div>
       <div className="flex flex-wrap gap-1.5">
-        <button type="button" className={preset} disabled={busy} onClick={() => onChange(DEFAULT_PRIVATE)}>Only ID numbers</button>
-        <button type="button" className={preset} disabled={busy} onClick={() => onChange(everything)}>Every personal detail</button>
+        <button type="button" className={preset} disabled={busy} onClick={() => onChange(everything.filter((k) => !DEFAULT_SHARED.includes(k)))}>Recommended: only work details sync</button>
+        <button type="button" className={preset} disabled={busy} onClick={() => onChange(everything)}>Every detail</button>
+        <button type="button" className={preset} disabled={busy} onClick={() => onChange(ID_NUMBERS)}>Only ID numbers</button>
         <button type="button" className={preset} disabled={busy} onClick={() => onChange([])}>Sync everything</button>
       </div>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

@@ -14,6 +14,7 @@ import appCss from "../styles.css?url";
 import { supabase } from "@/integrations/supabase/client";
 import { cloudConfigured, getDataMode, setDataMode } from "@/lib/db/mode";
 import { Toaster } from "@/components/ui/sonner";
+import { PasswordPrompt } from "@/components/PasswordPrompt";
 
 function NotFoundComponent() {
   return (
@@ -148,6 +149,7 @@ function RootComponent() {
     <QueryClientProvider client={queryClient}>
       <Outlet />
       <Toaster />
+      <PasswordPrompt />
     </QueryClientProvider>
   );
 }

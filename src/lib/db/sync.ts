@@ -1,7 +1,7 @@
 import { supabase } from "@/integrations/supabase/client";
 import type { BackupReason } from "./backups";
 import { changeSeq, getMeta, setMeta } from "./local";
-import { getPrivateFields, keepPrivate, redactSnapshot, savePrivateFields } from "./privacy";
+import { confirmPrivateFields, customKey, DEFAULT_SHARED, getPrivateFields, keepPrivate, PRIVATE_COLUMNS, redactSnapshot, savePrivateFields } from "./privacy";
 import { SCHEMA_VERSION, TABLES } from "./schema";
 import { countRows, diffCounts, exportSnapshot, isEmpty, replaceWithSnapshot, validateSnapshot, type Snapshot, type SnapshotCounts, type Sql, type SqlDb } from "./snapshot";
 
@@ -183,19 +183,28 @@ export async function pull({ db, cloud, userId, backup }: SyncDeps, opts: { conf
 export async function setPrivateFields(db: Sql, keys: string[]) {
   const before = await getPrivateFields(db);
   await savePrivateFields(db, keys);
+  await confirmPrivateFields(db);
   if (keys.some((k) => !before.includes(k)) && (await getMeta(db, META.seq)) !== null) await setMeta(db, META.seq, "-1");
 }
 
 /**
  * Replaces this device's data with a backup, after backing up what's there now. Cloud backups never held
  * private fields, so `keepPrivateFields` keeps this device's values for them.
+ *
+ * A field stays private if either this device or the backup kept it private, so restoring onto a fresh
+ * install (whose choices are the defaults) can't make anything less private than it was.
  */
 export async function restoreSnapshot(db: SqlDb, snapshot: Snapshot, backup: SyncDeps["backup"], opts: { keepPrivateFields?: boolean } = {}) {
   const incoming = validateSnapshot(snapshot);
   const { snapshot: current, seq } = await db.transaction(async (tx) => ({ snapshot: await exportSnapshot(tx), seq: await changeSeq(tx) }));
   if (!isEmpty(current)) await backup("before-restore", current);
-  await replaceWithSnapshot(db, opts.keepPrivateFields ? keepPrivate(incoming, current, await getPrivateFields(db)) : incoming, {
+  const privateHere = await getPrivateFields(db);
+  // Backups from before private_fields was recorded: assume the defaults, with every category private.
+  const privateThere = incoming.private_fields
+    ?? [...PRIVATE_COLUMNS.filter((k) => !DEFAULT_SHARED.includes(k)), ...incoming.data.employee_field_defs.map((d) => customKey(String(d["id"])))];
+  await replaceWithSnapshot(db, opts.keepPrivateFields ? keepPrivate(incoming, current, privateHere) : incoming, {
     before: async (tx) => { if ((await changeSeq(tx)) !== seq) throw new Error("Data changed during the restore. Nothing was replaced — try again."); },
+    after: async (tx) => savePrivateFields(tx, [...new Set([...privateHere, ...privateThere])]),
   });
 }
 

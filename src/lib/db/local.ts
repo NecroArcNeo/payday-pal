@@ -141,17 +141,5 @@ export async function requestPersistentStorage(): Promise<boolean | null> {
   return navigator.storage.persist();
 }
 
-// _meta holds sync bookkeeping. It has no change trigger, so writing it never counts as a data change.
-export async function getMeta(sql: Sql, key: string): Promise<string | null> {
-  const { rows } = await sql.query<{ value: string }>("select value from _meta where key = $1", [key]);
-  return rows[0]?.value ?? null;
-}
-
-export async function setMeta(sql: Sql, key: string, value: string | null) {
-  if (value === null) await sql.query("delete from _meta where key = $1", [key]);
-  else await sql.query("insert into _meta (key, value) values ($1, $2) on conflict (key) do update set value = excluded.value", [key, value]);
-}
-
-export async function changeSeq(sql: Sql): Promise<number> {
-  return Number((await getMeta(sql, "change_seq")) ?? 0);
-}
+// Kept here too for existing imports; they live in meta.ts so privacy.ts and snapshot.ts can use them without a cycle.
+export { changeSeq, getMeta, setMeta } from "./meta";

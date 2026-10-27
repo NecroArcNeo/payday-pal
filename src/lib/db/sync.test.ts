@@ -8,7 +8,7 @@ import { LOCAL_MIGRATIONS, SCHEMA_VERSION } from "./schema";
 import { countRows, describeDiff, diffCounts, exportSnapshot, replaceWithSnapshot, validateSnapshot, type Snapshot } from "./snapshot";
 import { createLocalStore } from "./store";
 import { deviceIdentity, maybeAutoBackup, pull, push, restoreSnapshot, setDeviceName, setPrivateFields, SyncConflictError, type CloudSync, type SyncDeps } from "./sync";
-import { customKey, getPrivateFields, redactSnapshot, stripPrivate } from "./privacy";
+import { customKey, getPrivateFields, ID_NUMBERS, privateFieldsConfirmed, redactSnapshot, stripPrivate } from "./privacy";
 
 const parsers = { [types.NUMERIC]: (v: string) => Number(v), [types.DATE]: (v: string) => v, [types.TIMESTAMPTZ]: (v: string) => v };
 const migration = (name: string) => readFileSync(path.resolve(__dirname, "../../../drizzle/migrations", name), "utf8");
@@ -600,11 +600,76 @@ describe("private fields", () => {
   }
   const cloudEmployee = async () => (await cloudAs(cloud, A).pull()).snapshot.data.employees[0]!;
 
-  it("keeps ID numbers on the device by default", async () => {
-    const { laptop } = await privateLaptop();
-    expect(await getPrivateFields(laptop)).toEqual(["passport_no", "ssn"]);
+  it("keeps every personal detail and every category on the device by default; only work details sync", async () => {
+    const { laptop, store, emp } = await privateLaptop();
+    // privateLaptop's custom values have no category (as after deleting one): they're private too.
+    expect(await getPrivateFields(laptop)).toEqual(expect.arrayContaining([customKey("secret"), customKey("shirt")]));
+    await store.insert("employee_field_defs", { label: "Bank account" });
+    const bank = (await store.listFieldDefs())[0]!;
+    await store.update("employees", emp.id, { custom_fields: { [bank.id]: "GB00 1234" } });
+    const keys = await getPrivateFields(laptop);
+    expect(keys).toEqual(expect.arrayContaining(["ssn", "passport_no", "date_of_birth", "email", "phone", "address_line1", "emergency_contact_name", "notes", customKey(bank.id)]));
+    expect(keys).not.toEqual(expect.arrayContaining(["department"]));
+    expect(keys.filter((k) => ["department", "job_title", "hire_date"].includes(k))).toEqual([]);
     await push(deps(laptop, cloudAs(cloud, A), A).d);
-    expect(await cloudEmployee()).toMatchObject({ ssn: null, email: "ada@example.com", custom_fields: { secret: "S", shirt: "M" } });
+    const sent = await cloudEmployee();
+    expect(sent).toMatchObject({ ssn: null, email: null, department: "Ops" });
+    expect(sent["custom_fields"]).toEqual({});
+  });
+
+  it("makes a category added after choosing private until it's chosen to sync", async () => {
+    const { laptop, store } = await privateLaptop();
+    await setPrivateFields(laptop, ["ssn"]);
+    expect(await getPrivateFields(laptop)).toEqual(["ssn"]);
+    await store.insert("employee_field_defs", { label: "Medical notes" });
+    const medical = (await store.listFieldDefs())[0]!;
+    expect(await getPrivateFields(laptop)).toEqual(["ssn", customKey(medical.id)]);
+  });
+
+  it("converts a choice saved by an older version exactly, and later categories start private", async () => {
+    const { laptop, store } = await privateLaptop();
+    await store.insert("employee_field_defs", { label: "Shirt size" });
+    const shirt = (await store.listFieldDefs())[0]!;
+    // Older versions stored the private list itself, so a category they didn't list was synced.
+    await laptop.query("insert into _meta values ('private_fields', $1)", [JSON.stringify(["ssn", "email"])]);
+    expect(await getPrivateFields(laptop)).toEqual(["ssn", "email"]);
+    await store.insert("employee_field_defs", { label: "Medical notes" });
+    const medical = (await store.listFieldDefs()).find((d) => d.label === "Medical notes")!;
+    const keys = await getPrivateFields(laptop);
+    expect(keys).toContain(customKey(medical.id));
+    expect(keys).not.toContain(customKey(shirt.id));
+  });
+
+  it("never makes a field less private by restoring a backup, even onto a fresh install", async () => {
+    const { laptop } = await privateLaptop();
+    await setPrivateFields(laptop, [...ID_NUMBERS, "job_title"]);
+    const backup = await exportSnapshot(laptop);
+    expect(backup.private_fields).toEqual(expect.arrayContaining(["job_title", "ssn"]));
+
+    const fresh = await newLocal();
+    await setPrivateFields(fresh, ["email"]);
+    await restoreSnapshot(fresh, backup, async () => {});
+    expect(await getPrivateFields(fresh)).toEqual(expect.arrayContaining(["email", "job_title", "ssn", "passport_no"]));
+
+    // A backup from before private fields were recorded: the defaults apply, every category private.
+    const old = structuredClone(backup);
+    delete old.private_fields;
+    const other = await newLocal();
+    await setPrivateFields(other, []);
+    await restoreSnapshot(other, old, async () => {});
+    expect(await getPrivateFields(other)).toEqual(expect.arrayContaining(["ssn", "email", "date_of_birth"]));
+    expect(await getPrivateFields(other)).not.toContain("department");
+  });
+
+  it("asks before the first push until the private fields are confirmed or saved", async () => {
+    const db = await newLocal();
+    expect(await privateFieldsConfirmed(db)).toBe(false);
+    await setPrivateFields(db, ID_NUMBERS);
+    expect(await privateFieldsConfirmed(db)).toBe(true);
+    // Restoring a backup doesn't count as looking at them on this device.
+    const fresh = await newLocal();
+    await restoreSnapshot(fresh, await exportSnapshot(db), async () => {});
+    expect(await privateFieldsConfirmed(fresh)).toBe(false);
   });
 
   it("never pushes chosen fields, and a pull keeps this device's values for them", async () => {
@@ -632,6 +697,7 @@ describe("private fields", () => {
 
   it("marks the device as needing a push when a field becomes private, so the cloud copy gets cleaned", async () => {
     const { laptop } = await privateLaptop();
+    await setPrivateFields(laptop, ID_NUMBERS);
     await push(deps(laptop, cloudAs(cloud, A), A).d);
     expect((await cloudEmployee())["email"]).toBe("ada@example.com");
     await setPrivateFields(laptop, ["email"]);

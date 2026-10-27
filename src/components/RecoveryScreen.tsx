@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { btnGhost, btnPrimary } from "@/components/AppShell";
-import { backupFileName, downloadSnapshot, getBackup, listBackups, reasonLabel, saveBackup } from "@/lib/db/backups";
+import { backupFileName, getBackup, listBackups, reasonLabel, saveBackup } from "@/lib/db/backups";
+import { readBackupFile, saveBackupFile } from "@/lib/backup-file";
 import { localDb } from "@/lib/db/local";
 import { countRows, describeCounts, validateSnapshot, type Snapshot } from "@/lib/db/snapshot";
 import { restoreSnapshot } from "@/lib/db/sync";
@@ -51,7 +52,8 @@ export function RecoveryScreen({ error }: { error: Error }) {
   const restoreFile = async (file: File | undefined) => {
     if (!file) return;
     try {
-      await restore(JSON.parse(await file.text()) as Snapshot, `the file ${file.name}`);
+      const s = await readBackupFile(file);
+      if (s) await restore(s, `the file ${file.name}`);
     } catch (e) {
       setProblem((e as Error).message);
     }
@@ -89,7 +91,7 @@ export function RecoveryScreen({ error }: { error: Error }) {
                 <span className="block text-xs text-muted-foreground">{reasonLabel[b.reason] ?? b.reason} · {describeCounts(b.counts)}</span>
               </span>
               {!desktop && (
-                <button className={btnGhost} onClick={async () => { const full = await getBackup(b.id); if (full) downloadSnapshot(full.snapshot, backupFileName(new Date(full.created_at))); }}>Download</button>
+                <button className={btnGhost} onClick={async () => { const full = await getBackup(b.id); if (full) await saveBackupFile(full.snapshot, backupFileName(new Date(full.created_at))); }}>Download</button>
               )}
             </label>
           ))}

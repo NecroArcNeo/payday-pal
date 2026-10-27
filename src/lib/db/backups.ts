@@ -6,8 +6,9 @@ import { countRows, type Snapshot, type SnapshotCounts } from "./snapshot";
 // broken database can't take its backups down with it. In the browser they're
 // a separate IndexedDB database, on the same device — downloaded backup files
 // and the cloud are what survive the browser's storage being cleared. In the
-// desktop app they're JSON files in Documents\Meridian Payroll\Backups
-// (electron/main.mjs), flushed to disk before they count as saved.
+// desktop app they're JSON files in %APPDATA%\Meridian Payroll\Backups
+// (electron/main.mjs), flushed to disk before they count as saved. They hold
+// private fields, so they stay out of folders OneDrive may sync.
 
 const DB_NAME = "meridian-payroll-backups";
 const STORE = "backups";
@@ -85,8 +86,9 @@ async function prune() {
   else await run("readwrite", (s) => { for (const k of drop) s.delete(k); });
 }
 
-export function downloadSnapshot(snapshot: Snapshot, name: string) {
-  const blob = new Blob([JSON.stringify(snapshot, null, 1)], { type: "application/json" });
+/** Saves text as a download. Backup files go through saveBackupFile (src/lib/backup-file.ts), which asks for a password first. */
+export function downloadFile(text: string, name: string) {
+  const blob = new Blob([text], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
