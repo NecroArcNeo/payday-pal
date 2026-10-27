@@ -66,37 +66,42 @@ function RecordsPage() {
     for (const e of working) { const id = shiftFor(e.shift_id, shifts).id; if (id) m.set(id, [...(m.get(id) ?? []), e]); }
     return m;
   }, [working, shifts]);
-  /** Fills the form with these usual hours: the times for clock records, the hours they come to for daily-hours ones. */
-  const fillTimes = (t: UsualTimes | null) => {
-    if (!t) return;
-    setF((x) => ({ ...x, clock_in: t.clock_in, clock_out: t.clock_out, lunch_minutes: String(t.lunch_minutes), hours: String(computeHours(t.clock_in, t.clock_out, t.lunch_minutes)) }));
-  };
   const toggleShift = (shiftId: string) => {
     const ids = (byShift.get(shiftId) ?? []).map((e) => e.id);
-    if (ids.length && ids.every((id) => picked.includes(id))) { setPicked((p) => p.filter((id) => !ids.includes(id))); return; }
-    setPicked((p) => [...new Set([...p, ...ids])]);
-    fillTimes(usualTimes(shifts.find((x) => x.id === shiftId)));
+    if (ids.length && ids.every((id) => picked.includes(id))) setPicked((p) => p.filter((id) => !ids.includes(id)));
+    else setPicked((p) => [...new Set([...p, ...ids])]);
   };
-  // The usual hours each picked person's record would get, grouped: more than one group means their shifts differ.
-  const usualGroups = useMemo(() => {
-    const groups = new Map<string, { times: UsualTimes | null; shifts: Set<string>; people: number }>();
+  // The shift each picked person's record would be on (the one chosen for the record, else their own), with its usual hours.
+  const shiftGroups = useMemo(() => {
+    const groups = new Map<string, { name: string; times: UsualTimes | null; people: string[] }>();
     for (const id of picked) {
-      const u = usualTimesFor(employees.find((e) => e.id === id)?.shift_id, f.shift_id, shifts);
-      const key = u?.times ? JSON.stringify(u.times) : "none";
-      const g = groups.get(key) ?? { times: u?.times ?? null, shifts: new Set<string>(), people: 0 };
-      if (u) g.shifts.add(u.shift.name);
-      g.people++;
+      const emp = employees.find((e) => e.id === id);
+      const u = usualTimesFor(emp?.shift_id, f.shift_id, shifts);
+      const key = u?.shift.id ?? "";
+      const g = groups.get(key) ?? { name: u?.shift.name ?? "No shift", times: u?.times ?? null, people: [] };
+      g.people.push(emp ? fullName(emp) : "?");
       groups.set(key, g);
     }
     return [...groups.values()];
   }, [picked, employees, shifts, f.shift_id]);
-  const anyUsual = usualGroups.some((g) => g.times);
-  const mixedUsual = usualGroups.filter((g) => g.times).length > 1;
-  // Each person gets their own shift's usual hours; turned on by itself when the picked shifts' hours differ.
-  const [ownTimes, setOwnTimes] = useState(false);
-  useEffect(() => { if (mixedUsual) setOwnTimes(true); }, [mixedUsual]);
-  const useOwn = ownTimes && anyUsual;
-  const withoutUsual = usualGroups.find((g) => !g.times)?.people ?? 0;
+  const distinctTimes = new Set(shiftGroups.map((g) => (g.times ? JSON.stringify(g.times) : "none")));
+  // Everyone picked gets the same usual hours (or nobody's picked yet, but the record's shift has some): show them in the form.
+  const uniform: UsualTimes | null = picked.length
+    ? (distinctTimes.size === 1 ? shiftGroups[0]!.times : null)
+    : usualTimes(shifts.find((x) => x.id === f.shift_id));
+  const uniformKey = uniform ? JSON.stringify(uniform) : "";
+  useEffect(() => {
+    if (!uniform) return;
+    setF((x) => ({ ...x, clock_in: uniform.clock_in, clock_out: uniform.clock_out, lunch_minutes: String(uniform.lunch_minutes), hours: String(computeHours(uniform.clock_in, uniform.clock_out, uniform.lunch_minutes)) }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refill only when the selection's usual hours change, so edits stick
+  }, [uniformKey]);
+  // The picked people's shifts have different hours (or only some have usual hours): offer each shift's own.
+  const mixed = distinctTimes.size > 1 && shiftGroups.some((g) => g.times);
+  const [eachShift, setEachShift] = useState(true);
+  useEffect(() => { if (mixed) setEachShift(true); }, [mixed]);
+  const useOwn = mixed && eachShift;
+  // Every picked person's hours come from their shift, so the form's times aren't used at all.
+  const covered = useOwn && shiftGroups.every((g) => g.times);
 
   const preview = mode === "clock" ? computeHours(f.clock_in, f.clock_out, Number(f.lunch_minutes) || 0) : Number(f.hours) || 0;
 
@@ -280,39 +285,53 @@ function RecordsPage() {
         <div className="grid items-end gap-3 md:grid-cols-6">
           {mode === "clock" ? (
             <>
-              <label><span className="label-mono"><EditableLabel k="clock_in" name="Clock in" /></span><input type="time" className={`${inputCls} mt-1`} value={f.clock_in} onChange={(e) => setF({ ...f, clock_in: e.target.value })} required /></label>
-              <label><span className="label-mono"><EditableLabel k="clock_out" name="Clock out" /></span><input type="time" className={`${inputCls} mt-1`} value={f.clock_out} onChange={(e) => setF({ ...f, clock_out: e.target.value })} required /></label>
-              <label>
+              <label title={covered ? "Each shift's usual hours are used (see below)" : undefined}><span className="label-mono"><EditableLabel k="clock_in" name="Clock in" /></span><input type="time" className={`${inputCls} mt-1 disabled:opacity-40`} disabled={covered} value={covered ? "" : f.clock_in} onChange={(e) => setF({ ...f, clock_in: e.target.value })} required={!covered} /></label>
+              <label title={covered ? "Each shift's usual hours are used (see below)" : undefined}><span className="label-mono"><EditableLabel k="clock_out" name="Clock out" /></span><input type="time" className={`${inputCls} mt-1 disabled:opacity-40`} disabled={covered} value={covered ? "" : f.clock_out} onChange={(e) => setF({ ...f, clock_out: e.target.value })} required={!covered} /></label>
+              <label title={covered ? "Each shift's usual hours are used (see below)" : undefined}>
                 <span className="flex items-center justify-between gap-1"><span className="label-mono"><BreakHeader unit={breakUnit} /></span><BreakUnitToggle /></span>
-                <BreakInput minutes={f.lunch_minutes} onChange={(m) => setF({ ...f, lunch_minutes: m })} className={`${inputCls} mt-1`} />
+                {covered
+                  ? <input className={`${inputCls} mt-1 disabled:opacity-40`} disabled value="" aria-label="Break" />
+                  : <BreakInput minutes={f.lunch_minutes} onChange={(m) => setF({ ...f, lunch_minutes: m })} className={`${inputCls} mt-1`} />}
               </label>
             </>
           ) : (
-            <label className="md:col-span-3"><span className="label-mono"><EditableLabel k="hours" name="Hours worked" /></span><input type="number" step="0.25" min={0} max={24} className={`${inputCls} mt-1`} value={f.hours} onChange={(e) => setF({ ...f, hours: e.target.value })} /></label>
+            <label className="md:col-span-3" title={covered ? "Each shift's usual hours are used (see below)" : undefined}><span className="label-mono"><EditableLabel k="hours" name="Hours worked" /></span><input type="number" step="0.25" min={0} max={24} className={`${inputCls} mt-1 disabled:opacity-40`} disabled={covered} value={covered ? "" : f.hours} onChange={(e) => setF({ ...f, hours: e.target.value })} /></label>
           )}
           <label title="For covering a different shift than usual, e.g. a night worker on a day shift. Overtime pays the same either way.">
             <span className="label-mono"><EditableLabel k="shift" name="Shift" /></span>
-            <RecordShiftSelect value={f.shift_id} onChange={(id) => { setF({ ...f, shift_id: id }); if (id && !useOwn) fillTimes(usualTimes(shifts.find((x) => x.id === id))); }} shifts={shifts} ownLabel="Each person's usual" className={`${inputCls} mt-1`} />
+            <RecordShiftSelect value={f.shift_id} onChange={(id) => setF({ ...f, shift_id: id })} shifts={shifts} ownLabel="Each person's usual" className={`${inputCls} mt-1`} />
           </label>
           <label title="Leave empty to pay from hours. Enter an amount to pay exactly that for the day.">
             <span className="label-mono"><EditableLabel k="manual_pay" name="Day pay" /> (optional)</span>
             <input className={`${inputCls} mt-1`} inputMode="decimal" placeholder="auto" value={f.pay} onChange={(e) => setF({ ...f, pay: e.target.value })} />
           </label>
           <div>
-            <div className="mb-1 text-right font-mono text-[11px] text-muted-foreground">{useOwn && mixedUsual ? "varies" : `${preview.toFixed(2)} h`}</div>
+            <div className="mb-1 text-right font-mono text-[11px] text-muted-foreground">{useOwn ? "varies" : `${preview.toFixed(2)} h`}</div>
             <button className={`${btnPrimary} w-full`}>Add</button>
           </div>
         </div>
-        {anyUsual && (
-          <label className="flex items-start gap-2 text-xs text-muted-foreground">
-            <input type="checkbox" className="mt-0.5" checked={ownTimes} onChange={(e) => setOwnTimes(e.target.checked)} />
-            <span>
-              Use each person's shift hours
-              {" ("}{usualGroups.filter((g) => g.times).map((g) => `${[...g.shifts].join(", ")} ${describeTimes(g.times!)}`).join(" · ")}{")"}
-              {ownTimes && withoutUsual > 0 && `. ${withoutUsual} ${withoutUsual === 1 ? "person's shift has" : "people's shifts have"} no usual hours and get${withoutUsual === 1 ? "s" : ""} the ${mode === "clock" ? "times" : "hours"} above.`}
-              {ownTimes && withoutUsual === 0 && `. The ${mode === "clock" ? "times" : "hours"} above aren't used.`}
-            </span>
-          </label>
+        {mixed && (
+          <div className="space-y-1.5 rounded-xl bg-secondary/50 p-3 text-sm ring-1 ring-border">
+            <label className="flex items-center gap-2 font-medium">
+              <input type="checkbox" checked={eachShift} onChange={(e) => setEachShift(e.target.checked)} />
+              Add each shift's usual hours
+            </label>
+            {eachShift ? (
+              <ul className="space-y-1 pl-6 text-xs text-muted-foreground">
+                {shiftGroups.map((g) => (
+                  <li key={g.name}>
+                    <span className="font-medium text-foreground">{g.name}</span>
+                    {" · "}{g.people.length} {g.people.length === 1 ? "person" : "people"} ({g.people.slice(0, 3).join(", ")}{g.people.length > 3 ? ` +${g.people.length - 3} more` : ""}):{" "}
+                    {g.times
+                      ? <span className="font-mono text-foreground">{describeTimes(g.times)}, {formatBreak(g.times.lunch_minutes, breakUnit)} {breakUnit === "h" ? "h" : "min"} break = {computeHours(g.times.clock_in, g.times.clock_out, g.times.lunch_minutes).toFixed(2)} h</span>
+                      : <>no usual hours, gets the {mode === "clock" ? "times" : "hours"} above</>}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="pl-6 text-xs text-muted-foreground">Everyone gets the {mode === "clock" ? "times" : "hours"} above.</p>
+            )}
+          </div>
         )}
       </form>
 
