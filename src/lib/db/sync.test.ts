@@ -40,6 +40,7 @@ const applySyncMigration = async (cloud: PGlite) => {
   await cloud.exec(migration("0008_id_documents_category_sections.sql"));
   await cloud.exec(migration("0009_record_shift.sql"));
   await cloud.exec(migration("0010_push_device.sql"));
+  await cloud.exec(migration("0011_shift_default_times.sql"));
 };
 
 function cloudAs(db: PGlite, uid: string): CloudSync {
@@ -286,6 +287,29 @@ describe("a record's own shift (schema 7)", () => {
   });
 });
 
+describe("shift default times (schema 8)", () => {
+  it("stores a shift's usual times, all optional, and rejects a break over 10 hours", async () => {
+    const db = await newLocal();
+    const store = createLocalStore(async () => db);
+    const [day] = await store.listShifts();
+    expect(day).toMatchObject({ default_clock_in: null, default_clock_out: null, default_lunch_minutes: null });
+    expect((await store.update("shifts", day!.id, { default_clock_in: "07:00", default_clock_out: "15:30", default_lunch_minutes: 30 })).error).toBeNull();
+    expect((await store.listShifts())[0]).toMatchObject({ default_clock_in: "07:00:00", default_clock_out: "15:30:00", default_lunch_minutes: 30 });
+    expect((await store.update("shifts", day!.id, { default_lunch_minutes: 601 })).error).not.toBeNull();
+  });
+
+  it("restores a schema 7 backup with no default times", async () => {
+    const db = await newLocal();
+    await seed(db, "E1");
+    const v7 = structuredClone(await exportSnapshot(db)) as unknown as { schema_version: number; data: Record<string, Record<string, unknown>[]> };
+    v7.schema_version = 7;
+    for (const x of v7.data["shifts"]!) { delete x["default_clock_in"]; delete x["default_clock_out"]; delete x["default_lunch_minutes"]; }
+    const fresh = await newLocal();
+    await replaceWithSnapshot(fresh, validateSnapshot(v7));
+    expect((await createLocalStore(async () => fresh).listShifts()).map((x) => x.default_clock_in)).toEqual([null, null]);
+  });
+});
+
 describe("record pages", () => {
   it("pages through records newest first, with an exact total, filtered by date, type and employee", async () => {
     const db = await newLocal();
@@ -399,7 +423,7 @@ describe("cloud migration", () => {
     const { rows } = await cloud.query<{ reason: string }>("select reason from public.cloud_backups");
     expect(rows).toEqual([{ reason: "before-local-first-migration" }]);
     // 0004: the admin's account gets Day/Night and existing employees go on Day.
-    expect(remote.snapshot.schema_version).toBe(7);
+    expect(remote.snapshot.schema_version).toBe(SCHEMA_VERSION);
     expect(remote.snapshot.data.employees[0]!["pay_type"]).toBe("hourly");
     expect(remote.snapshot.data.shifts.map((x) => x["name"])).toEqual(["Day", "Night"]);
     const day = remote.snapshot.data.shifts.find((x) => x["name"] === "Day")!;
@@ -434,6 +458,18 @@ describe("push and pull", () => {
     const desktop = await newLocal();
     expect((await pull(deps(desktop, cloudAs(cloud, A), A).d)).kind).toBe("done");
     expect((await exportSnapshot(desktop)).data).toEqual((await exportSnapshot(laptop)).data);
+  });
+
+  it("carries shift default times through the cloud", async () => {
+    const laptop = await newLocal();
+    const store = createLocalStore(async () => laptop);
+    await seed(laptop, "E1");
+    const [, night] = await store.listShifts();
+    await store.update("shifts", night!.id, { default_clock_in: "22:00", default_clock_out: "06:00", default_lunch_minutes: 45 });
+    await push(deps(laptop, cloudAs(cloud, A), A).d);
+    const desktop = await newLocal();
+    await pull(deps(desktop, cloudAs(cloud, A), A).d);
+    expect((await createLocalStore(async () => desktop).listShifts())[1]).toMatchObject({ name: "Night", default_clock_in: "22:00:00", default_clock_out: "06:00:00", default_lunch_minutes: 45 });
   });
 
   it("asks before pulling over unpushed local changes, and backs them up first", async () => {

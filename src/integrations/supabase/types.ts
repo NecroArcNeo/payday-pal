@@ -267,6 +267,9 @@ export type Database = {
       shifts: {
         Row: {
           created_at: string
+          default_clock_in: string | null
+          default_clock_out: string | null
+          default_lunch_minutes: number | null
           id: string
           multiplier: number
           name: string
@@ -274,6 +277,9 @@ export type Database = {
         }
         Insert: {
           created_at?: string
+          default_clock_in?: string | null
+          default_clock_out?: string | null
+          default_lunch_minutes?: number | null
           id?: string
           multiplier?: number
           name: string
@@ -281,6 +287,9 @@ export type Database = {
         }
         Update: {
           created_at?: string
+          default_clock_in?: string | null
+          default_clock_out?: string | null
+          default_lunch_minutes?: number | null
           id?: string
           multiplier?: number
           name?: string

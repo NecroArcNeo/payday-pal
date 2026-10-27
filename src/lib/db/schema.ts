@@ -2,7 +2,7 @@
 // drizzle/migrations minus auth/RLS/owner columns, so a snapshot moves between
 // the two without translation. Bump SCHEMA_VERSION (here and in the cloud
 // sync functions) whenever a table's columns change.
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 /** Tables in foreign-key order: parents first. Deletes run in reverse. */
 export const TABLES = ["employee_field_defs", "shifts", "employees", "time_records", "pay_adjustments", "payroll_settings"] as const;
@@ -144,5 +144,12 @@ export const LOCAL_MIGRATIONS: string[] = [
   /* 7 — a day can be worked on a different shift than the employee's own */ `
   -- Null = the employee's own shift. Deleting a shift puts its days back on the employee's shift.
   alter table time_records add column shift_id uuid references shifts(id) on delete set null;
+  `,
+  /* 8 — a shift's usual start, end and break, used to fill in new time records */ `
+  -- All optional: a shift without them leaves the times to whoever adds the record.
+  alter table shifts
+    add column default_clock_in time,
+    add column default_clock_out time,
+    add column default_lunch_minutes integer check (default_lunch_minutes between 0 and 600);
   `,
 ];

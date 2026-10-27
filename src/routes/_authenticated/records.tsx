@@ -16,6 +16,7 @@ import { EmployeePicker, SearchInput } from "@/components/EmployeeSearch";
 import { describeEmployeeFilter, isFiltering, matchesEmployee, NO_FILTER, searchEmployees, type EmployeeFilter } from "@/lib/employee-search";
 import { addDays, computeHours, datesBetween, fullName, isoDate, useEmployees, useShifts, weekday, type Employee, type TimeRecord } from "@/lib/payroll";
 import { shiftFor } from "@/lib/pay";
+import { describeTimes, usualTimes, usualTimesFor, type UsualTimes } from "@/lib/shift-times";
 import { Check, Pencil, Plus, Trash2, X } from "lucide-react";
 
 /** Bulk-edit row keys to the label alias keys used everywhere else (src/lib/labels.ts). */
@@ -59,6 +60,44 @@ function RecordsPage() {
   const left = working.filter((e) => !picked.includes(e.id));
   const showLeftOut = picked.length > 0 && left.length > 0 && left.length <= picked.length && left.length <= 20;
 
+  // ---- picking by shift: each shift's working people, and its usual hours
+  const byShift = useMemo(() => {
+    const m = new Map<string, Employee[]>();
+    for (const e of working) { const id = shiftFor(e.shift_id, shifts).id; if (id) m.set(id, [...(m.get(id) ?? []), e]); }
+    return m;
+  }, [working, shifts]);
+  /** Fills the form with these usual hours: the times for clock records, the hours they come to for daily-hours ones. */
+  const fillTimes = (t: UsualTimes | null) => {
+    if (!t) return;
+    setF((x) => ({ ...x, clock_in: t.clock_in, clock_out: t.clock_out, lunch_minutes: String(t.lunch_minutes), hours: String(computeHours(t.clock_in, t.clock_out, t.lunch_minutes)) }));
+  };
+  const toggleShift = (shiftId: string) => {
+    const ids = (byShift.get(shiftId) ?? []).map((e) => e.id);
+    if (ids.length && ids.every((id) => picked.includes(id))) { setPicked((p) => p.filter((id) => !ids.includes(id))); return; }
+    setPicked((p) => [...new Set([...p, ...ids])]);
+    fillTimes(usualTimes(shifts.find((x) => x.id === shiftId)));
+  };
+  // The usual hours each picked person's record would get, grouped: more than one group means their shifts differ.
+  const usualGroups = useMemo(() => {
+    const groups = new Map<string, { times: UsualTimes | null; shifts: Set<string>; people: number }>();
+    for (const id of picked) {
+      const u = usualTimesFor(employees.find((e) => e.id === id)?.shift_id, f.shift_id, shifts);
+      const key = u?.times ? JSON.stringify(u.times) : "none";
+      const g = groups.get(key) ?? { times: u?.times ?? null, shifts: new Set<string>(), people: 0 };
+      if (u) g.shifts.add(u.shift.name);
+      g.people++;
+      groups.set(key, g);
+    }
+    return [...groups.values()];
+  }, [picked, employees, shifts, f.shift_id]);
+  const anyUsual = usualGroups.some((g) => g.times);
+  const mixedUsual = usualGroups.filter((g) => g.times).length > 1;
+  // Each person gets their own shift's usual hours; turned on by itself when the picked shifts' hours differ.
+  const [ownTimes, setOwnTimes] = useState(false);
+  useEffect(() => { if (mixedUsual) setOwnTimes(true); }, [mixedUsual]);
+  const useOwn = ownTimes && anyUsual;
+  const withoutUsual = usualGroups.find((g) => !g.times)?.people ?? 0;
+
   const preview = mode === "clock" ? computeHours(f.clock_in, f.clock_out, Number(f.lunch_minutes) || 0) : Number(f.hours) || 0;
 
   const add = async (e: React.FormEvent) => {
@@ -76,10 +115,14 @@ function RecordsPage() {
     const manual = pay === null ? {} : { pay_override: Math.round(pay * 100) / 100 };
     // Only store a shift when it differs from the person's usual one.
     const shiftOf = (id: string) => (f.shift_id && f.shift_id !== shiftFor(employees.find((e) => e.id === id)?.shift_id, shifts).id ? { shift_id: f.shift_id } : {});
-    const rows: TablesInsert<"time_records">[] = days.flatMap((work_date) => picked.map((employee_id) =>
-      mode === "clock"
-        ? { employee_id, work_date, entry_mode: "clock", clock_in: f.clock_in, clock_out: f.clock_out, lunch_minutes: lunch, ...manual, ...shiftOf(employee_id) }
-        : { employee_id, work_date, entry_mode: "hours", hours, ...manual, ...shiftOf(employee_id) }));
+    // With "each person's shift hours", people whose shift has usual hours get those; everyone else the times typed here.
+    const own = (id: string) => (useOwn ? usualTimesFor(employees.find((e) => e.id === id)?.shift_id, f.shift_id, shifts)?.times ?? null : null);
+    const rows: TablesInsert<"time_records">[] = days.flatMap((work_date) => picked.map((employee_id) => {
+      const t = own(employee_id);
+      return mode === "clock"
+        ? { employee_id, work_date, entry_mode: "clock", clock_in: t?.clock_in ?? f.clock_in, clock_out: t?.clock_out ?? f.clock_out, lunch_minutes: t?.lunch_minutes ?? lunch, ...manual, ...shiftOf(employee_id) }
+        : { employee_id, work_date, entry_mode: "hours", hours: t ? computeHours(t.clock_in, t.clock_out, t.lunch_minutes) : hours, ...manual, ...shiftOf(employee_id) };
+    }));
     if (days.length > 1 && !confirm(`Add ${rows.length} records: ${picked.length} employee${picked.length === 1 ? "" : "s"} × ${days.length} days (${weekday(days[0]!)} ${days[0]} to ${weekday(days.at(-1)!)} ${days.at(-1)})?`)) return;
     const { error } = await db().insert("time_records", rows);
     if (error) { toast.error(error.message); return; }
@@ -164,6 +207,25 @@ function RecordsPage() {
               <button type="button" className="hover:text-foreground" onClick={() => setPicked([])}>Clear</button>
             </div>
           </div>
+          {shifts.length > 1 && working.length > 0 && (
+            <div className="mb-2 flex flex-wrap items-center gap-1.5 text-xs">
+              <span className="label-mono mr-1">By <EditableLabel k="shift" name="Shift" /></span>
+              {shifts.map((sh) => {
+                const people = byShift.get(sh.id) ?? [];
+                const on = people.length > 0 && people.every((e) => picked.includes(e.id));
+                const t = usualTimes(sh);
+                return (
+                  <button type="button" key={sh.id} onClick={() => toggleShift(sh.id)} disabled={!people.length} aria-pressed={on}
+                    title={on ? `Leave out everyone on ${sh.name}` : `Select everyone on ${sh.name}${t ? ` and fill in its usual hours (${describeTimes(t)})` : ""}`}
+                    className={`rounded-lg px-2.5 py-1 ring-1 ring-border disabled:opacity-40 ${on ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground hover:text-foreground"}`}>
+                    {on && <Check className="-ml-0.5 mr-1 inline h-3 w-3" />}
+                    {sh.name} · {people.length}
+                    {t && <span className="ml-1 font-mono opacity-70">{describeTimes(t)}</span>}
+                  </button>
+                );
+              })}
+            </div>
+          )}
           <SearchInput value={pickQ} onChange={setPickQ} employees={working} className="mb-2" />
           <div className="flex max-h-40 flex-wrap gap-2 overflow-y-auto">
             {working.length === 0 && <span className="text-sm text-muted-foreground">{resigned ? "Everyone has resigned." : "No employees yet."}</span>}
@@ -230,17 +292,28 @@ function RecordsPage() {
           )}
           <label title="For covering a different shift than usual, e.g. a night worker on a day shift. Overtime pays the same either way.">
             <span className="label-mono"><EditableLabel k="shift" name="Shift" /></span>
-            <RecordShiftSelect value={f.shift_id} onChange={(id) => setF({ ...f, shift_id: id })} shifts={shifts} ownLabel="Each person's usual" className={`${inputCls} mt-1`} />
+            <RecordShiftSelect value={f.shift_id} onChange={(id) => { setF({ ...f, shift_id: id }); if (id && !useOwn) fillTimes(usualTimes(shifts.find((x) => x.id === id))); }} shifts={shifts} ownLabel="Each person's usual" className={`${inputCls} mt-1`} />
           </label>
           <label title="Leave empty to pay from hours. Enter an amount to pay exactly that for the day.">
             <span className="label-mono"><EditableLabel k="manual_pay" name="Day pay" /> (optional)</span>
             <input className={`${inputCls} mt-1`} inputMode="decimal" placeholder="auto" value={f.pay} onChange={(e) => setF({ ...f, pay: e.target.value })} />
           </label>
           <div>
-            <div className="mb-1 text-right font-mono text-[11px] text-muted-foreground">{preview.toFixed(2)} h</div>
+            <div className="mb-1 text-right font-mono text-[11px] text-muted-foreground">{useOwn && mixedUsual ? "varies" : `${preview.toFixed(2)} h`}</div>
             <button className={`${btnPrimary} w-full`}>Add</button>
           </div>
         </div>
+        {anyUsual && (
+          <label className="flex items-start gap-2 text-xs text-muted-foreground">
+            <input type="checkbox" className="mt-0.5" checked={ownTimes} onChange={(e) => setOwnTimes(e.target.checked)} />
+            <span>
+              Use each person's shift hours
+              {" ("}{usualGroups.filter((g) => g.times).map((g) => `${[...g.shifts].join(", ")} ${describeTimes(g.times!)}`).join(" · ")}{")"}
+              {ownTimes && withoutUsual > 0 && `. ${withoutUsual} ${withoutUsual === 1 ? "person's shift has" : "people's shifts have"} no usual hours and get${withoutUsual === 1 ? "s" : ""} the ${mode === "clock" ? "times" : "hours"} above.`}
+              {ownTimes && withoutUsual === 0 && `. The ${mode === "clock" ? "times" : "hours"} above aren't used.`}
+            </span>
+          </label>
+        )}
       </form>
 
       <div className="flex flex-wrap items-center gap-3">

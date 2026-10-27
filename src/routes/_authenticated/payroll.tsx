@@ -17,6 +17,9 @@ import { labelOf, useLabels } from "@/lib/labels";
 import { customKey } from "@/lib/db/privacy";
 import { Plus, Settings2, Trash2 } from "lucide-react";
 import { EditableLabel } from "@/components/EditableLabel";
+import { BreakInput } from "@/components/BreakField";
+import { useBreakUnit, validBreak, breakRangeText } from "@/lib/breaks";
+import type { TablesUpdate } from "@/integrations/supabase/types";
 
 export const Route = createFileRoute("/_authenticated/payroll")({
   head: () => ({ meta: [{ title: "Payroll — Meridian Payroll" }] }),
@@ -337,7 +340,7 @@ function ShiftsPanel({ shifts, employees, onChange }: { shifts: Shift[]; employe
     setName(""); setMultiplier("1");
     onChange();
   };
-  const save = async (s: Shift, patch: { name?: string; multiplier?: number }) => {
+  const save = async (s: Shift, patch: TablesUpdate<"shifts">) => {
     const { error } = await db().update("shifts", s.id, patch);
     if (error) toast.error(error.message); else { toast.success(`${patch.name ?? s.name} shift saved`); onChange(); }
   };
@@ -357,7 +360,7 @@ function ShiftsPanel({ shifts, employees, onChange }: { shifts: Shift[]; employe
         <div className="font-display font-extrabold tracking-tight">Shifts</div>
         <p className="text-xs text-muted-foreground">
           Each employee is on one shift. The multiplier scales their rate for regular hours (1 = normal, 1.1 = 10% more). Overtime hours are paid at the overtime rate instead, not stacked with the shift. A single day can be put on another shift on the Time records page.
-          New employees start on the first shift.
+          New employees start on the first shift. A shift's usual hours (optional) fill in the clock-in, clock-out and break when you add records for its people on the Time records page.
         </p>
       </div>
       <div className="divide-y divide-border">
@@ -375,22 +378,39 @@ function ShiftsPanel({ shifts, employees, onChange }: { shifts: Shift[]; employe
 
 function ShiftRow({ shift, isDefault, count, onSave, onRemove, checkMult }: {
   shift: Shift; isDefault: boolean; count: number;
-  onSave: (s: Shift, patch: { name?: string; multiplier?: number }) => void; onRemove: (s: Shift) => void; checkMult: (v: string) => number | null;
+  onSave: (s: Shift, patch: TablesUpdate<"shifts">) => void; onRemove: (s: Shift) => void; checkMult: (v: string) => number | null;
 }) {
-  const [name, setName] = useState(shift.name);
-  const [mult, setMult] = useState(String(Number(shift.multiplier)));
-  useEffect(() => { setName(shift.name); setMult(String(Number(shift.multiplier))); }, [shift.name, shift.multiplier]);
-  const dirty = name.trim() !== shift.name || Number(mult) !== Number(shift.multiplier);
+  const [unit] = useBreakUnit();
+  const saved = {
+    name: shift.name, mult: String(Number(shift.multiplier)),
+    start: shift.default_clock_in?.slice(0, 5) ?? "", end: shift.default_clock_out?.slice(0, 5) ?? "",
+    brk: shift.default_lunch_minutes === null ? "" : String(shift.default_lunch_minutes),
+  };
+  const [v, setV] = useState(saved);
+  const savedKey = JSON.stringify(saved);
+  useEffect(() => { setV(JSON.parse(savedKey) as typeof saved); }, [savedKey]);
+  const set = (k: keyof typeof saved, val: string) => setV((x) => ({ ...x, [k]: val }));
+  const dirty = v.name.trim() !== saved.name || Number(v.mult) !== Number(saved.mult) || v.start !== saved.start || v.end !== saved.end || (!!v.start && v.brk !== saved.brk);
   const save = () => {
-    if (!name.trim()) { toast.error("A shift needs a name"); return; }
-    const m = checkMult(mult);
-    if (m !== null) onSave(shift, { name: name.trim().slice(0, 40), multiplier: m });
+    if (!v.name.trim()) { toast.error("A shift needs a name"); return; }
+    const m = checkMult(v.mult);
+    if (m === null) return;
+    if (!v.start !== !v.end) { toast.error("Set both the usual start and end, or clear both"); return; }
+    const brk = v.start ? Number(v.brk || 0) : null;
+    if (brk !== null && !validBreak(brk)) { toast.error(breakRangeText(unit)); return; }
+    onSave(shift, { name: v.name.trim().slice(0, 40), multiplier: m, default_clock_in: v.start || null, default_clock_out: v.end || null, default_lunch_minutes: brk });
   };
   return (
     <div className="flex flex-wrap items-center gap-3 px-5 py-3 text-sm">
-      <input className={`${inputCls} max-w-[12rem]`} value={name} onChange={(e) => setName(e.target.value)} aria-label="Shift name" />
+      <input className={`${inputCls} max-w-[12rem]`} value={v.name} onChange={(e) => set("name", e.target.value)} aria-label="Shift name" />
       <span className="text-muted-foreground">×</span>
-      <input type="number" step="0.05" min="0.05" max="10" className={`${inputCls} w-24`} value={mult} onChange={(e) => setMult(e.target.value)} aria-label={`${shift.name} multiplier`} />
+      <input type="number" step="0.05" min="0.05" max="10" className={`${inputCls} w-24`} value={v.mult} onChange={(e) => set("mult", e.target.value)} aria-label={`${shift.name} multiplier`} />
+      <span className="ml-2 text-xs text-muted-foreground">Usual hours</span>
+      <input type="time" className={`${inputCls} !w-[7.5rem]`} value={v.start} onChange={(e) => set("start", e.target.value)} aria-label={`${shift.name} usual start`} />
+      <span className="text-muted-foreground">–</span>
+      <input type="time" className={`${inputCls} !w-[7.5rem]`} value={v.end} onChange={(e) => set("end", e.target.value)} aria-label={`${shift.name} usual end`} />
+      <BreakInput minutes={v.brk} onChange={(m) => set("brk", m)} className={`${inputCls} !w-20`} label={`${shift.name} usual break`} />
+      <span className="text-xs text-muted-foreground">{unit === "h" ? "h" : "min"} break</span>
       <span className="text-xs text-muted-foreground">{count} employee{count === 1 ? "" : "s"}{isDefault ? " · default" : ""}</span>
       <div className="ml-auto flex gap-2">
         {dirty && <button onClick={save} className={btnPrimary}>Save</button>}

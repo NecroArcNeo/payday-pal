@@ -27,3 +27,7 @@
 - [ ] Optional: app password/lock; payroll CSV exports are plain files (no ID numbers, but names and pay)
 - [ ] Optional: speed — memoize table rows (opening an edit with 500 rows is slow on old PCs); check PGlite updates (0.5.12+)
 - [ ] Timesheet export with selectable templates (started, interrupted)
+
+## Shifts (Oct 27, 2026)
+- [x] Shifts have optional usual hours (start, end, break) on Payroll → Customize → Shifts (schema 8; cloud migration `0011_shift_default_times.sql`)
+- [x] Time records: "By shift" buttons select everyone on a shift and fill in its usual hours; "Use each person's shift hours" gives mixed selections each person's own

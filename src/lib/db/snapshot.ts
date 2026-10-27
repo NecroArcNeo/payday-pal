@@ -156,6 +156,8 @@ function upgrade(s: Partial<Snapshot>): Partial<Snapshot> {
   if (s.schema_version === 5) s = { ...s, schema_version: 6 };
   // 7 only added time_records.shift_id, which restores empty (the employee's own shift).
   if (s.schema_version === 6) s = { ...s, schema_version: 7 };
+  // 8 only added shifts' default times, which restore empty.
+  if (s.schema_version === 7) s = { ...s, schema_version: 8 };
   return s;
 }
 
