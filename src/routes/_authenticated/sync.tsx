@@ -127,6 +127,11 @@ function SyncPage() {
     await markExported(db);
   });
 
+  const backupNow = () => run("backup", async () => {
+    await saveBackup("manual", await exportSnapshot(await localDb()));
+    toast.success("Backup saved. It's kept until you delete it.");
+  });
+
   const onFile = async (file: File | undefined) => {
     if (fileRef.current) fileRef.current.value = "";
     if (!file) return;
@@ -230,8 +235,11 @@ function SyncPage() {
 
       <section className="glass-panel overflow-hidden">
         <div className="border-b border-border px-5 py-4">
-          <div className="font-display font-extrabold tracking-tight">Backups on this device</div>
-          <p className="text-xs text-muted-foreground">Saved automatically every day you make changes, and before every pull, push or restore. The newest 60 are kept.</p>
+          <div className="flex items-center justify-between gap-3">
+            <div className="font-display font-extrabold tracking-tight">Backups on this device</div>
+            <button onClick={backupNow} disabled={!!busy} className={btnGhost}>{busy === "backup" ? "Saving…" : "Back up now"}</button>
+          </div>
+          <p className="text-xs text-muted-foreground">Saved automatically every 30 minutes while there are changes{desktop ? ", when you close the app" : ""}, and before every pull, push, restore or app update. All from the last 2 days are kept, then one per day for a month, one per week for a year and one per month after that. Backups you save yourself are always kept.</p>
           {desktop && (
             <p className="mt-1 text-xs text-muted-foreground">
               Saved as files in <code className="break-all">{folders.data?.backupDir ?? "…"}</code>.{" "}

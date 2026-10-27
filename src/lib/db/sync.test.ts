@@ -4,7 +4,7 @@ import path from "node:path";
 import { PGlite, types } from "@electric-sql/pglite";
 import { beforeEach, describe, expect, it } from "vitest";
 import { migrate } from "./local";
-import { LOCAL_MIGRATIONS } from "./schema";
+import { LOCAL_MIGRATIONS, SCHEMA_VERSION } from "./schema";
 import { countRows, exportSnapshot, replaceWithSnapshot, validateSnapshot, type Snapshot } from "./snapshot";
 import { createLocalStore } from "./store";
 import { maybeAutoBackup, pull, push, restoreSnapshot, setPrivateFields, SyncConflictError, type CloudSync, type SyncDeps } from "./sync";
@@ -598,7 +598,7 @@ describe("restore and automatic backups", () => {
     expect(await createLocalStore(async () => db).listEmployees()).toEqual([]);
   });
 
-  it("takes an automatic backup only when data changed and 12 hours passed", async () => {
+  it("takes an automatic backup only when data changed and 30 minutes passed", async () => {
     const db = await newLocal();
     const saved: string[] = [];
     const backup = async (reason: string) => { saved.push(reason); };
@@ -607,8 +607,39 @@ describe("restore and automatic backups", () => {
     const t0 = Date.parse("2026-10-24T00:00:00Z");
     expect(await maybeAutoBackup(db, backup, t0)).toBe(true);
     await seed(db, "E2");
-    expect(await maybeAutoBackup(db, backup, t0 + 3_600_000)).toBe(false);
-    expect(await maybeAutoBackup(db, backup, t0 + 13 * 3_600_000)).toBe(true);
-    expect(saved).toEqual(["automatic", "automatic"]);
+    expect(await maybeAutoBackup(db, backup, t0 + 10 * 60_000)).toBe(false);
+    expect(await maybeAutoBackup(db, backup, t0 + 31 * 60_000)).toBe(true);
+    // Nothing changed since: no backup, however long it's been.
+    expect(await maybeAutoBackup(db, backup, t0 + 24 * 3_600_000)).toBe(false);
+    // Closing the app backs up any change right away.
+    await seed(db, "E3");
+    expect(await maybeAutoBackup(db, backup, t0 + 24 * 3_600_000 + 1000, 0)).toBe(true);
+    expect(saved).toEqual(["automatic", "automatic", "automatic"]);
+  });
+
+  it("backs up an existing database before updating it, stamped with its old version", async () => {
+    const db = new PGlite({ parsers });
+    await db.exec(`set time zone 'UTC'; create table _migrations (version integer primary key, applied_at timestamptz not null default now())`);
+    await db.exec(LOCAL_MIGRATIONS[0]!);
+    await db.exec(`insert into _migrations (version) values (1);
+      insert into employees (employee_code, first_name, last_name, hourly_rate) values ('OLD', 'Old', 'Timer', 21);`);
+    const saved: Snapshot[] = [];
+    await migrate(db, async (s) => { saved.push(s); });
+    expect(saved).toHaveLength(1);
+    expect(saved[0]!.schema_version).toBe(1);
+    expect(saved[0]!.data.employees.map((e) => e["employee_code"])).toEqual(["OLD"]);
+    expect("shifts" in saved[0]!.data).toBe(false);
+    // And that backup still restores into the current version.
+    const fresh = await newLocal();
+    await replaceWithSnapshot(fresh, validateSnapshot(structuredClone(saved[0])));
+    expect((await createLocalStore(async () => fresh).listEmployees()).map((e) => e.employee_code)).toEqual(["OLD"]);
+    // Already up to date, or brand new: no backup.
+    await migrate(db, async (s) => { saved.push(s); });
+    await migrate(new PGlite({ parsers }), async (s) => { saved.push(s); });
+    expect(saved).toHaveLength(1);
+  });
+
+  it("keeps the schema version equal to the number of local migrations (pre-update backups rely on it)", () => {
+    expect(LOCAL_MIGRATIONS.length).toBe(SCHEMA_VERSION);
   });
 });

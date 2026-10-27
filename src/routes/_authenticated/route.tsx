@@ -7,6 +7,7 @@ import { saveBackup } from "@/lib/db/backups";
 import { maybeAutoBackup } from "@/lib/db/sync";
 import { setDataMode, useDataMode } from "@/lib/db/mode";
 import { useSession } from "@/lib/payroll";
+import { desktop } from "@/lib/desktop";
 
 // No sign-in needed: the app runs on this device's database. (The folder name
 // predates that; renaming it would only churn the route tree.)
@@ -15,21 +16,44 @@ export const Route = createFileRoute("/_authenticated")({
   component: DataGate,
 });
 
+/** Checks for unsaved-to-backup changes this often; maybeAutoBackup decides whether one is due. */
+const AUTO_BACKUP_CHECK_MS = 5 * 60 * 1000;
+
+let backingUp: Promise<unknown> | null = null;
+let warned = false;
+/** One automatic backup at a time; a failure is shown once, not every few minutes. */
+function autoBackup(everyMs?: number) {
+  backingUp ??= localDb()
+    .then((db) => maybeAutoBackup(db, saveBackup, Date.now(), everyMs))
+    .then(() => { warned = false; })
+    .catch((e: Error) => {
+      if (warned) return;
+      warned = true;
+      toast.warning(`Automatic backup failed: ${e.message}. Download a backup file from Sync & backup.`);
+    })
+    .finally(() => { backingUp = null; });
+  return backingUp;
+}
+
 function DataGate() {
   const ready = useQuery({
     queryKey: ["local-db-ready"],
     queryFn: async () => {
-      const db = await localDb();
-      try {
-        await maybeAutoBackup(db, saveBackup);
-      } catch (e) {
-        toast.warning(`Automatic backup failed: ${(e as Error).message}. Download a backup file from Sync & backup.`);
-      }
+      await localDb();
+      await autoBackup();
+      // The desktop app asks before its window closes, so the last changes get backed up too.
+      desktop?.onClosing(() => autoBackup(0));
       return true;
     },
     staleTime: Infinity,
     retry: false,
   });
+
+  useEffect(() => {
+    if (!ready.isSuccess) return;
+    const timer = setInterval(() => void autoBackup(), AUTO_BACKUP_CHECK_MS);
+    return () => clearInterval(timer);
+  }, [ready.isSuccess]);
 
   // Cloud mode needs a signed-in account; without one, fall back to this device's data.
   const mode = useDataMode();

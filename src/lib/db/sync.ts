@@ -153,15 +153,19 @@ export async function restoreSnapshot(db: SqlDb, snapshot: Snapshot, backup: Syn
   });
 }
 
-const AUTO_BACKUP_EVERY_MS = 12 * 60 * 60 * 1000;
+/** At most this much work is ever missing from the newest automatic backup while the app is open. */
+export const AUTO_BACKUP_EVERY_MS = 30 * 60 * 1000;
 
-/** Takes a backup when data changed since the last automatic one and it's been 12+ hours. */
-export async function maybeAutoBackup(db: SqlDb, backup: SyncDeps["backup"], now = Date.now()) {
+/**
+ * Takes a backup when data changed since the last automatic one and `everyMs` has passed.
+ * Pass 0 to back up any change right away (when the app closes).
+ */
+export async function maybeAutoBackup(db: SqlDb, backup: SyncDeps["backup"], now = Date.now(), everyMs = AUTO_BACKUP_EVERY_MS) {
   const seq = await changeSeq(db);
   const lastSeq = await getMeta(db, "auto_backup_seq");
   const lastAt = await getMeta(db, "auto_backup_at");
   if (lastSeq === String(seq)) return false;
-  if (lastAt && now - Date.parse(lastAt) < AUTO_BACKUP_EVERY_MS) return false;
+  if (lastAt && now - Date.parse(lastAt) < everyMs) return false;
   const snapshot = await exportSnapshot(db);
   if (isEmpty(snapshot)) return false;
   await backup("automatic", snapshot);

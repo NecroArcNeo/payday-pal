@@ -39,17 +39,25 @@ export function describeCounts(c: SnapshotCounts) {
   return `${c.employees} employees, ${c.time_records} time records, ${c.pay_adjustments} extra-pay entries`;
 }
 
-/** Reads every table. jsonb_agg gives ISO timestamps, matching what the cloud returns. */
-export async function exportSnapshot(sql: Sql): Promise<Snapshot> {
+/**
+ * Reads every table. jsonb_agg gives ISO timestamps, matching what the cloud returns.
+ * `schemaVersion` is for a database that hasn't been updated yet (backed up before its update): the
+ * snapshot is stamped with that version and leaves out tables it doesn't have, so `upgrade` can bring it up later.
+ */
+export async function exportSnapshot(sql: Sql, schemaVersion = SCHEMA_VERSION): Promise<Snapshot> {
   const data = {} as Record<TableName, Row[]>;
   for (const t of TABLES) {
+    if (schemaVersion !== SCHEMA_VERSION) {
+      const { rows } = await sql.query<{ found: boolean }>("select to_regclass($1) is not null as found", [t]);
+      if (!rows[0]?.found) continue;
+    }
     const order = t === "payroll_settings" ? "id" : t === "shifts" ? "sort_order, created_at, id" : "created_at, id";
     const { rows } = await sql.query<{ rows: Row[] }>(
       `select coalesce(jsonb_agg(x order by ${order}), '[]'::jsonb) as rows from ${t} x`,
     );
     data[t] = rows[0]?.rows ?? [];
   }
-  return { format: BACKUP_FORMAT, schema_version: SCHEMA_VERSION, created_at: new Date().toISOString(), data };
+  return { format: BACKUP_FORMAT, schema_version: schemaVersion, created_at: new Date().toISOString(), data };
 }
 
 /** Throws a readable error unless `raw` is a complete snapshot this version of the app can load. */

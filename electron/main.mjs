@@ -160,17 +160,27 @@ handle("backups:get", (_e, id) => {
   const file = backupFile(id);
   return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : undefined;
 });
+// Each file's details (everything but the snapshot), read once per file version. The folder is the
+// truth: files added, changed or removed outside the app show up on the next listing.
+const infoCache = new Map();
 handle("backups:list", () => backupIds().map((id) => {
+  const file = backupFile(id);
   try {
-    const { snapshot: _skip, ...info } = JSON.parse(fs.readFileSync(backupFile(id), "utf8"));
+    const stamp = fs.statSync(file).mtimeMs;
+    const hit = infoCache.get(file);
+    if (hit?.stamp === stamp) return hit.info;
+    const { snapshot: _skip, ...info } = JSON.parse(fs.readFileSync(file, "utf8"));
+    infoCache.set(file, { stamp, info });
     return info;
   } catch {
     return null; // a damaged file is left alone and skipped
   }
 }).filter(Boolean));
-handle("backups:ids", () => backupIds());
 handle("backups:delete", (_e, ids) => {
-  for (const id of ids) fs.rmSync(backupFile(id), { force: true });
+  for (const id of ids) {
+    fs.rmSync(backupFile(id), { force: true });
+    infoCache.delete(backupFile(id));
+  }
   return null;
 });
 
@@ -201,6 +211,18 @@ function openOutside(url) {
 }
 
 let win;
+let pageWatchesClose = false;
+let closeApproved = false;
+let closeTimer = null;
+const CLOSE_WAIT_MS = 30_000;
+function approveClose() {
+  closeApproved = true;
+  clearTimeout(closeTimer);
+  win?.close();
+}
+ipcMain.on("app:close-watch", () => { pageWatchesClose = true; });
+ipcMain.on("app:close-ready", approveClose);
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1400,
@@ -213,13 +235,26 @@ function createWindow() {
     webPreferences: { preload: path.join(here, "preload.cjs"), contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
   win.once("ready-to-show", () => win.show());
+  // Give the page a chance to back up its last changes. It only gets asked if it said it's listening,
+  // and the window closes anyway if it takes longer than CLOSE_WAIT_MS.
+  win.on("close", (e) => {
+    if (closeApproved || !pageWatchesClose) return;
+    e.preventDefault();
+    if (closeTimer) return; // already asked
+    win.webContents.send("app:closing");
+    closeTimer = setTimeout(approveClose, CLOSE_WAIT_MS);
+  });
   const contents = win.webContents;
   const id = contents.id;
   contents.setWindowOpenHandler(({ url }) => { openOutside(url); return { action: "deny" }; });
   contents.on("will-navigate", (e, url) => {
     if (!url.startsWith(ORIGIN)) { e.preventDefault(); openOutside(url); }
   });
-  contents.on("did-start-navigation", (details) => { if (details.isMainFrame && !details.isSameDocument) rollbackFor(id); });
+  contents.on("did-start-navigation", (details) => {
+    if (!details.isMainFrame || details.isSameDocument) return;
+    rollbackFor(id);
+    pageWatchesClose = false; // the new page registers again once its data is open
+  });
   contents.on("render-process-gone", () => rollbackFor(id));
   contents.on("destroyed", () => rollbackFor(id));
   void win.loadURL(`${ORIGIN}/dashboard`);

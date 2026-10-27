@@ -1,7 +1,8 @@
 import type { PGlite, Transaction } from "@electric-sql/pglite";
 import { desktop, type DesktopBridge } from "../desktop";
+import { saveBackup } from "./backups";
 import { LOCAL_MIGRATIONS } from "./schema";
-import type { Sql, SqlDb } from "./snapshot";
+import { exportSnapshot, type Snapshot, type Sql, type SqlDb } from "./snapshot";
 
 export const LOCAL_DB_NAME = "meridian-payroll";
 const LOCK_NAME = "meridian-payroll-db";
@@ -45,7 +46,7 @@ async function openLocalDb(): Promise<PGlite> {
   });
   await db.waitReady;
   saveAfterTransactions(db);
-  await migrate(db);
+  await migrate(db, backupBeforeUpdate);
   void requestPersistentStorage();
   return db;
 }
@@ -70,9 +71,11 @@ async function openDesktopDb(bridge: DesktopBridge): Promise<LocalDb> {
       return result;
     },
   };
-  await migrate(db);
+  await migrate(db, backupBeforeUpdate);
   return db;
 }
+
+const backupBeforeUpdate = (snapshot: Snapshot) => saveBackup("before-update", snapshot);
 
 /**
  * PGlite copies the database to IndexedDB after each statement, except inside a transaction, and (as of
@@ -89,11 +92,16 @@ function saveAfterTransactions(db: PGlite) {
   }) as PGlite["transaction"];
 }
 
-/** Runs pending LOCAL_MIGRATIONS. Each one commits atomically with its version number. */
-export async function migrate(db: SqlDb & { exec(sql: string): Promise<unknown> }) {
+/**
+ * Runs pending LOCAL_MIGRATIONS. Each one commits atomically with its version number. When an existing
+ * database is about to change, `backup` saves a copy of it first (stamped with its current version,
+ * which equals the number of migrations applied); if that fails, nothing is changed.
+ */
+export async function migrate(db: LocalDb, backup?: (snapshot: Snapshot) => Promise<unknown>) {
   await db.exec(`set time zone 'UTC'; create table if not exists _migrations (version integer primary key, applied_at timestamptz not null default now())`);
   const { rows } = await db.query<{ v: number | null }>("select max(version) as v from _migrations");
   const current = rows[0]?.v ?? 0;
+  if (backup && current > 0 && current < LOCAL_MIGRATIONS.length) await backup(await exportSnapshot(db, current));
   for (let v = current + 1; v <= LOCAL_MIGRATIONS.length; v++) {
     await db.transaction(async (tx) => {
       await (tx as Sql & { exec(sql: string): Promise<unknown> }).exec(LOCAL_MIGRATIONS[v - 1]!);

@@ -13,12 +13,13 @@ export interface DesktopBridge {
     add(record: object): Promise<number>;
     get<T>(id: number): Promise<T | undefined>;
     list<T>(): Promise<T[]>;
-    ids(): Promise<number[]>;
     remove(ids: number[]): Promise<null>;
   };
   /** Where the database folder and the backup files are. */
   info(): Promise<{ dataDir: string; backupDir: string }>;
   openFolder(which: "data" | "backups"): Promise<null>;
+  /** Runs `beforeClose` when the window is about to close; the window waits for it (up to 30 s). Replaces any earlier one. */
+  onClosing(beforeClose: () => Promise<unknown>): void;
 }
 
 export const desktop: DesktopBridge | undefined =

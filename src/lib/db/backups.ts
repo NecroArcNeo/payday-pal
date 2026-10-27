@@ -1,4 +1,5 @@
 import { desktop } from "../desktop";
+import { backupsToDrop } from "./retention";
 import { countRows, type Snapshot, type SnapshotCounts } from "./snapshot";
 
 // Automatic on-device backups, kept apart from the payroll database so a
@@ -10,12 +11,10 @@ import { countRows, type Snapshot, type SnapshotCounts } from "./snapshot";
 
 const DB_NAME = "meridian-payroll-backups";
 const STORE = "backups";
-/** Oldest backups beyond this are pruned. Pre-sync backups are a few KB each for a typical payroll. */
-export const MAX_BACKUPS = 60;
 
 export type BackupReason = "before-pull" | "before-push-cloud-copy" | "before-restore" | "before-import" | "before-import-cloud-copy"
   | "before-bulk-edit" | "before-bulk-edit-cloud-copy" | "before-bulk-delete" | "before-bulk-delete-cloud-copy"
-  | "before-record-edit" | "before-record-edit-cloud-copy" | "before-record-delete" | "before-record-delete-cloud-copy" | "automatic" | "manual";
+  | "before-record-edit" | "before-record-edit-cloud-copy" | "before-record-delete" | "before-record-delete-cloud-copy" | "before-update" | "automatic" | "manual";
 export const reasonLabel: Record<BackupReason, string> = {
   "before-pull": "This device, before pulling from cloud",
   "before-push-cloud-copy": "Cloud copy, before pushing over it",
@@ -30,8 +29,9 @@ export const reasonLabel: Record<BackupReason, string> = {
   "before-record-edit-cloud-copy": "Cloud copy, before editing several time records",
   "before-record-delete": "This device, before deleting several time records",
   "before-record-delete-cloud-copy": "Cloud copy, before deleting several time records",
-  automatic: "Automatic daily backup",
-  manual: "Manual backup",
+  "before-update": "This device, before an app update changed how data is stored",
+  automatic: "Automatic backup",
+  manual: "Saved by you (kept until you delete it)",
 };
 
 export type BackupInfo = { id: number; created_at: string; reason: BackupReason; counts: SnapshotCounts };
@@ -77,12 +77,10 @@ export async function listBackups(): Promise<BackupInfo[]> {
   return all.map(({ id, created_at, reason, counts }) => ({ id, created_at, reason, counts })).reverse();
 }
 
-/** Drops the oldest backups past MAX_BACKUPS. */
+/** Thins out older backups (see retention.ts). */
 async function prune() {
-  const keys = desktop ? await desktop.backups.ids() : ((await run("readonly", (s) => s.getAllKeys())) as number[]);
-  const extra = keys.length - MAX_BACKUPS;
-  if (extra <= 0) return;
-  const drop = keys.sort((a, b) => a - b).slice(0, extra);
+  const drop = backupsToDrop(await listBackups());
+  if (!drop.length) return;
   if (desktop) await desktop.backups.remove(drop);
   else await run("readwrite", (s) => { for (const k of drop) s.delete(k); });
 }

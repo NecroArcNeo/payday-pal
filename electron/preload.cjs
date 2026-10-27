@@ -20,9 +20,15 @@ contextBridge.exposeInMainWorld("meridianDesktop", {
     add: (record) => call("backups:add", record),
     get: (id) => call("backups:get", id),
     list: () => call("backups:list"),
-    ids: () => call("backups:ids"),
     remove: (ids) => call("backups:delete", ids),
   },
   info: () => call("desktop:info"),
   openFolder: (which) => call("desktop:open-folder", which),
+  onClosing: (beforeClose) => {
+    ipcRenderer.removeAllListeners("app:closing");
+    ipcRenderer.on("app:closing", () => {
+      Promise.resolve().then(beforeClose).catch(() => {}).finally(() => ipcRenderer.send("app:close-ready"));
+    });
+    ipcRenderer.send("app:close-watch");
+  },
 });
