@@ -31,3 +31,5 @@
 ## Shifts (Oct 27, 2026)
 - [x] Shifts have optional usual hours (start, end, break) on Payroll → Customize → Shifts (schema 8; cloud migration `0011_shift_default_times.sql`)
 - [x] Time records: "By shift" buttons select everyone on a shift. When everyone picked shares one shift's usual hours (however they were picked, or via the record's Shift), those show in the clock in/out/break cells. Picking shifts with different hours shows "Add each shift's usual hours" (ticked) with each shift's people and times; the cells go blank while it's on
+- [x] "By shift" buttons only pick people the employee search shows (search Spotter, press Day: only day-shift spotters)
+- [x] Time records list can be filtered by shift (records set to it, plus ones on the employee's usual shift)

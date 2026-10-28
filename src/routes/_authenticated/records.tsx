@@ -47,6 +47,7 @@ function RecordsPage() {
   const [picked, setPicked] = useState<string[]>([]);
   const [pickQ, setPickQ] = useState<EmployeeFilter>(NO_FILTER);
   const [listQ, setListQ] = useState<EmployeeFilter>(NO_FILTER);
+  const [listShift, setListShift] = useState("");
   // Resigned employees can't be given new hours, so they aren't offered here (their old records still list below).
   const working = useMemo(() => employees.filter((e) => e.active), [employees]);
   const resigned = employees.length - working.length;
@@ -60,12 +61,12 @@ function RecordsPage() {
   const left = working.filter((e) => !picked.includes(e.id));
   const showLeftOut = picked.length > 0 && left.length > 0 && left.length <= picked.length && left.length <= 20;
 
-  // ---- picking by shift: each shift's working people, and its usual hours
+  // ---- picking by shift: each shift's working people among those the search shows, and its usual hours
   const byShift = useMemo(() => {
     const m = new Map<string, Employee[]>();
-    for (const e of working) { const id = shiftFor(e.shift_id, shifts).id; if (id) m.set(id, [...(m.get(id) ?? []), e]); }
+    for (const e of shownEmployees) { const id = shiftFor(e.shift_id, shifts).id; if (id) m.set(id, [...(m.get(id) ?? []), e]); }
     return m;
-  }, [working, shifts]);
+  }, [shownEmployees, shifts]);
   const toggleShift = (shiftId: string) => {
     const ids = (byShift.get(shiftId) ?? []).map((e) => e.id);
     if (ids.length && ids.every((id) => picked.includes(id))) setPicked((p) => p.filter((id) => !ids.includes(id)));
@@ -151,7 +152,8 @@ function RecordsPage() {
   const filter = useMemo<RecordFilter>(() => ({
     from: from || undefined, to: to || undefined, mode: listMode,
     employeeIds: isFiltering(listQ) ? employees.filter((e) => matchesEmployee(e, listQ)).map((e) => e.id) : undefined,
-  }), [from, to, listMode, listQ, employees]);
+    shift: listShift ? { id: listShift, employeeIds: employees.filter((e) => shiftFor(e.shift_id, shifts).id === listShift).map((e) => e.id) } : undefined,
+  }), [from, to, listMode, listQ, listShift, employees, shifts]);
   const filterKey = JSON.stringify(filter);
   // A new filter starts again from the first page, with nothing selected.
   useEffect(() => { setLimit(PAGE); setSelected(new Set()); setBulk(null); }, [filterKey]);
@@ -170,6 +172,7 @@ function RecordsPage() {
     listMode === "clock" ? "clock in/out" : "daily-hours",
     from || to ? `from ${from ? `${weekday(from)} ${from}` : "the start"} to ${to ? `${weekday(to)} ${to}` : "the latest"}` : "",
     isFiltering(listQ) ? `for employees matching ${describeEmployeeFilter(listQ)}` : "",
+    listShift ? `on the ${shifts.find((x) => x.id === listShift)?.name ?? "chosen"} shift` : "",
   ].filter(Boolean).join(" ");
 
   const deleteMany = async (which: "selected" | "all") => {
@@ -221,7 +224,7 @@ function RecordsPage() {
                 const t = usualTimes(sh);
                 return (
                   <button type="button" key={sh.id} onClick={() => toggleShift(sh.id)} disabled={!people.length} aria-pressed={on}
-                    title={on ? `Leave out everyone on ${sh.name}` : `Select everyone on ${sh.name}${t ? ` and fill in its usual hours (${describeTimes(t)})` : ""}`}
+                    title={`${on ? "Leave out" : "Select"} everyone${isFiltering(pickQ) ? ` shown (${describeEmployeeFilter(pickQ)})` : ""} on ${sh.name}${!on && t ? ` and fill in its usual hours (${describeTimes(t)})` : ""}`}
                     className={`rounded-lg px-2.5 py-1 ring-1 ring-border disabled:opacity-40 ${on ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground hover:text-foreground"}`}>
                     {on && <Check className="-ml-0.5 mr-1 inline h-3 w-3" />}
                     {sh.name} · {people.length}
@@ -340,6 +343,13 @@ function RecordsPage() {
         <input type="date" className={`${inputCls} max-w-[11rem]`} value={from} onChange={(e) => setFrom(e.target.value)} aria-label="From date" />
         <span className="text-muted-foreground">→</span>
         <input type="date" className={`${inputCls} max-w-[11rem]`} value={to} onChange={(e) => setTo(e.target.value)} aria-label="To date" />
+        {shifts.length > 1 && (
+          <select className={`${inputCls} max-w-[10rem]`} value={listShift} onChange={(e) => setListShift(e.target.value)} aria-label="Filter by shift"
+            title="Records on this shift: ones set to it, and ones left on the employee's usual shift when that's this one">
+            <option value="">All shifts</option>
+            {shifts.map((sh) => <option key={sh.id} value={sh.id}>{sh.name}</option>)}
+          </select>
+        )}
         <SearchInput value={listQ} onChange={setListQ} employees={employees} placeholder="Filter by employee name, ID, position, department…" className="min-w-[16rem] flex-1" />
       </div>
 

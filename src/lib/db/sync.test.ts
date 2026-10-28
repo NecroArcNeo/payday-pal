@@ -330,6 +330,27 @@ describe("record pages", () => {
     expect((await store.listRecordsPage({ employeeIds: [] }, 0, 50)).total).toBe(0);
     expect(await store.listRecordsMatching({ mode: "hours", employeeIds: [a!.id] })).toHaveLength(15);
   });
+
+  it("filters by shift: records set to it, plus records left on the employee's usual shift when that's this one", async () => {
+    const db = await newLocal();
+    const store = createLocalStore(async () => db);
+    await store.upsertEmployeesByCode([{ employee_code: "A", first_name: "A", last_name: "One" }, { employee_code: "B", first_name: "B", last_name: "Two" }]);
+    const [a, b] = await store.listEmployees();
+    const [day, night] = await store.listShifts();
+    await store.update("employees", b!.id, { shift_id: night!.id });
+    await store.insert("time_records", [
+      { employee_id: a!.id, work_date: "2026-09-01", entry_mode: "hours", hours: 8 },
+      { employee_id: a!.id, work_date: "2026-09-02", entry_mode: "hours", hours: 8, shift_id: night!.id },
+      { employee_id: b!.id, work_date: "2026-09-03", entry_mode: "hours", hours: 8 },
+      { employee_id: b!.id, work_date: "2026-09-04", entry_mode: "hours", hours: 8, shift_id: day!.id },
+    ]);
+    const dates = async (shift: { id: string; employeeIds: string[] }) => (await store.listRecordsMatching({ shift })).map((r) => r.work_date).sort();
+    // A has no shift, so is on the first one (Day); B is usually on Night.
+    expect(await dates({ id: day!.id, employeeIds: [a!.id] })).toEqual(["2026-09-01", "2026-09-04"]);
+    expect(await dates({ id: night!.id, employeeIds: [b!.id] })).toEqual(["2026-09-02", "2026-09-03"]);
+    expect(await dates({ id: night!.id, employeeIds: [] })).toEqual(["2026-09-02"]);
+    expect((await store.listRecordsPage({ shift: { id: day!.id, employeeIds: [a!.id] }, employeeIds: [b!.id] }, 0, 50)).total).toBe(1);
+  });
 });
 
 describe("bulk employee changes", () => {

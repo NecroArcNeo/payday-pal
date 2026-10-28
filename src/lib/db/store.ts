@@ -12,8 +12,12 @@ type RecordWithEmp = Tables<"time_records"> & {
 type EditableTable = Exclude<TableName, "payroll_settings">;
 export type SettingsInput = { ot_threshold: number; ot_multiplier: number; weekend_overtime: boolean; visible_columns: string[] };
 type Result = { error: Error | null };
-/** Narrows a records list. `employeeIds: []` matches nothing; leave it out to match everyone. */
-export type RecordFilter = { from?: string | undefined; to?: string | undefined; mode?: "clock" | "hours" | undefined; employeeIds?: string[] | undefined };
+/**
+ * Narrows a records list. `employeeIds: []` matches nothing; leave it out to match everyone.
+ * `shift` keeps records on that shift: ones set to it, plus ones with no shift of their own whose employee is usually on it
+ * (`shift.employeeIds`, worked out by the caller with `shiftFor`, since an employee with no shift is on the first one).
+ */
+export type RecordFilter = { from?: string | undefined; to?: string | undefined; mode?: "clock" | "hours" | undefined; employeeIds?: string[] | undefined; shift?: { id: string; employeeIds: string[] } | undefined };
 export type RecordKey = Pick<Tables<"time_records">, "employee_id" | "work_date" | "entry_mode" | "clock_in" | "clock_out" | "hours">;
 const RECORD_KEY_COLUMNS = "employee_id, work_date, entry_mode, clock_in, clock_out, hours";
 
@@ -57,8 +61,9 @@ async function attempt(fn: () => Promise<unknown>): Promise<Result> {
 // ---------------------------------------------------------------- local
 
 const RECORD_WHERE = `($1::date is null or r.work_date >= $1::date) and ($2::date is null or r.work_date <= $2::date)
-  and ($3::text is null or r.entry_mode = $3) and ($4::uuid[] is null or r.employee_id = any($4::uuid[]))`;
-const recordParams = (f: RecordFilter) => [f.from || null, f.to || null, f.mode ?? null, f.employeeIds ?? null];
+  and ($3::text is null or r.entry_mode = $3) and ($4::uuid[] is null or r.employee_id = any($4::uuid[]))
+  and ($5::uuid is null or r.shift_id = $5::uuid or (r.shift_id is null and r.employee_id = any($6::uuid[])))`;
+const recordParams = (f: RecordFilter) => [f.from || null, f.to || null, f.mode ?? null, f.employeeIds ?? null, f.shift?.id ?? null, f.shift?.employeeIds ?? []];
 
 async function knownColumns(sql: Sql, table: TableName, keys: string[]) {
   const cols = await tableColumns(sql, table);
@@ -115,7 +120,7 @@ export function createLocalStore(getDb: () => Promise<SqlDb>): DataStore {
           `select r.*, case when e.id is null then null else jsonb_build_object(
               'first_name', e.first_name, 'last_name', e.last_name, 'employee_code', e.employee_code, 'hourly_rate', e.hourly_rate) end as employees
            from time_records r left join employees e on e.id = r.employee_id
-           where ${RECORD_WHERE} order by r.work_date desc, r.created_at desc, r.id limit $5 offset $6`,
+           where ${RECORD_WHERE} order by r.work_date desc, r.created_at desc, r.id limit $7 offset $8`,
           [...recordParams(filter), limit, offset],
         );
         const { rows: n } = await tx.query<{ n: number }>(`select count(*)::int as n from time_records r where ${RECORD_WHERE}`, recordParams(filter));
@@ -215,13 +220,18 @@ export const localStore = createLocalStore(localDb);
 
 /** Employee ids go in the request URL, so very broad employee searches are refused rather than failing obscurely. */
 const MAX_CLOUD_EMPLOYEE_FILTER = 200;
-function filterRecords<Q extends { gte: (c: string, v: string) => Q; lte: (c: string, v: string) => Q; eq: (c: string, v: string) => Q; in: (c: string, v: string[]) => Q }>(q: Q, f: RecordFilter): Q {
+function filterRecords<Q extends { gte: (c: string, v: string) => Q; lte: (c: string, v: string) => Q; eq: (c: string, v: string) => Q; in: (c: string, v: string[]) => Q; or: (filters: string) => Q }>(q: Q, f: RecordFilter): Q {
   if (f.from) q = q.gte("work_date", f.from);
   if (f.to) q = q.lte("work_date", f.to);
   if (f.mode) q = q.eq("entry_mode", f.mode);
   if (f.employeeIds) {
     if (f.employeeIds.length > MAX_CLOUD_EMPLOYEE_FILTER) throw new Error(`The search matches ${f.employeeIds.length} employees; narrow it to ${MAX_CLOUD_EMPLOYEE_FILTER} or fewer when editing the cloud.`);
     q = q.in("employee_id", f.employeeIds.length ? f.employeeIds : ["00000000-0000-0000-0000-000000000000"]);
+  }
+  if (f.shift) {
+    const ids = f.shift.employeeIds;
+    if (ids.length > MAX_CLOUD_EMPLOYEE_FILTER) throw new Error(`That shift has ${ids.length} employees; filter by ${MAX_CLOUD_EMPLOYEE_FILTER} or fewer when editing the cloud.`);
+    q = q.or(ids.length ? `shift_id.eq.${f.shift.id},and(shift_id.is.null,employee_id.in.(${ids.join(",")}))` : `shift_id.eq.${f.shift.id}`);
   }
   return q;
 }
