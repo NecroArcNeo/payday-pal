@@ -41,4 +41,5 @@
 - [x] Adding a record for someone who already has one that day asks first: Cancel / Add anyway / Skip those, add the rest
 - [x] Pay rate history (schema 9, cloud migration `0012_pay_rates.sql`): changing a rate asks "from which day" (or "fix a typo"); earlier days keep the old rate on Payroll, Timesheet, Dashboard and record tables; history listed on the profile. A database trigger keeps old rates even for bulk edits, imports and cloud edits (those start "today")
 - [x] Lock paid periods (schema 10, cloud migration `0013_lock_paid_days.sql`): Payroll page → "Lock through <period end>"; records, extra pay and pay rates on or before it can't be added, changed or deleted (the database refuses) until "Change lock…" moves or removes it. Overtime rules and shift multipliers aren't frozen (noted in the dialog); a later idea: store each paid period's totals
-- [ ] Undo / redo (Ctrl+Z, Ctrl+Shift+Z / Ctrl+Y)
+- [x] Undo / redo (Ctrl+Z, Ctrl+Shift+Z / Ctrl+Y, and buttons in the header): every change to this device's data this session, each action as one step
+- [x] Lock bar on the Time records page too; click a locked record to unlock just it, or select several and unlock them (schema 11, cloud migration `0014_unlock_records.sql`); moving the lock locks them again

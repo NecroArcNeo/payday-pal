@@ -6,6 +6,7 @@ import { setDataMode, useDataMode } from "@/lib/db/mode";
 import { usePref } from "@/lib/prefs";
 import { ThemeToggle } from "./ThemeToggle";
 import { EditableLabel } from "./EditableLabel";
+import { UndoButtons } from "./UndoButtons";
 import { Cloud, GripVertical, HardDrive, LogOut } from "lucide-react";
 
 const adminNav = [
@@ -121,6 +122,7 @@ export function AppShell({ eyebrow, title, actions, children }: { eyebrow: strin
             </div>
             <div className="flex items-center gap-3">
               {actions}
+              <UndoButtons />
               <Link
                 to="/sync"
                 title={mode === "cloud" ? "Changes are saved straight to your cloud account" : "Changes are saved on this device"}

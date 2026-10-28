@@ -20,7 +20,8 @@ import { describeRecord, sameDayClashes, type Clash } from "@/lib/record-clash";
 import { addDays, computeHours, datesBetween, fullName, isoDate, useEmployees, usePayrollSettings, useShifts, weekday, type Employee, type TimeRecord } from "@/lib/payroll";
 import { shiftFor } from "@/lib/pay";
 import { describeTimes, usualTimes, usualTimesFor, type UsualTimes } from "@/lib/shift-times";
-import { Check, Pencil, Plus, Trash2, X } from "lucide-react";
+import { Check, Lock, LockOpen, Pencil, Plus, Trash2, X } from "lucide-react";
+import { PayLock } from "@/components/PayLock";
 
 /** One shift's times for "Add each shift's usual hours", as typed (break in minutes). */
 type GroupTimes = { clock_in: string; clock_out: string; lunch_minutes: string; hours: string };
@@ -135,7 +136,7 @@ function RecordsPage() {
     if (days.length === 0) { toast.error(f.skip_weekends ? "That range only has weekend days" : "Pick a date"); return; }
     if (days.length > 366) { toast.error("Pick a range of at most a year"); return; }
     const lockedThrough = settings?.locked_through;
-    if (lockedThrough && days[0]! <= lockedThrough) { toast.error(`Days up to ${weekday(lockedThrough)} ${lockedThrough} are locked as paid. Pick a later date, or unlock them on the Payroll page.`); return; }
+    if (lockedThrough && days[0]! <= lockedThrough) { toast.error(`Days up to ${weekday(lockedThrough)} ${lockedThrough} are locked as paid. Pick a later date, or change the lock above.`); return; }
     const lunch = Number(f.lunch_minutes);
     const hours = Number(f.hours);
     // With each shift's hours, the times come from the list below the form instead of the form's cells.
@@ -232,6 +233,18 @@ function RecordsPage() {
     isFiltering(listQ) ? `for employees matching ${describeEmployeeFilter(listQ)}` : "",
     facetActive(listShifts) ? `on shift ${describeFacet(listShifts, (id) => shifts.find((x) => x.id === id)?.name ?? "deleted")}` : "",
   ].filter(Boolean).join(" ");
+
+  // Selected records on locked days: unlock them one by one, or lock them again.
+  const lockedThrough = settings?.locked_through ?? null;
+  const onLockedDay = pickedRows.filter((r) => lockedThrough && r.work_date <= lockedThrough);
+  const stillLocked = onLockedDay.filter((r) => !r.unlocked);
+  const reopened = onLockedDay.filter((r) => r.unlocked);
+  const setUnlocked = async (rs: typeof pickedRows, unlocked: boolean) => {
+    const { error } = await db().setRecordsUnlocked(rs.map((r) => r.id), unlocked);
+    if (error) { toast.error(error.message); return; }
+    toast.success(`${unlocked ? "Unlocked" : "Locked again"}: ${rs.length} record${rs.length === 1 ? "" : "s"}`);
+    refresh();
+  };
 
   const deleteMany = async (which: "selected" | "all") => {
     const n = which === "selected" ? pickedRows.length : total;
@@ -431,6 +444,8 @@ function RecordsPage() {
         <SearchInput value={listQ} onChange={setListQ} employees={employees} placeholder="Filter by employee name, ID, position, department…" className="min-w-[16rem] flex-1" />
       </div>
 
+      <PayLock periodEnd={to || undefined} />
+
       {bulk && (
         <BulkRecordEdit
           mode={listMode} employees={employees}
@@ -444,6 +459,8 @@ function RecordsPage() {
         <div className="glass-panel flex flex-wrap items-center justify-between gap-3 px-5 py-3 text-sm">
           <span className="font-semibold">{selected.size} selected</span>
           <div className="flex gap-2">
+            {stillLocked.length > 0 && <button onClick={() => setUnlocked(stillLocked, true)} className={btnGhost} title="Lets just these records change while the rest of their days stay locked"><LockOpen className="mr-1 inline h-4 w-4" />Unlock {stillLocked.length === pickedRows.length ? "selected" : `${stillLocked.length} locked`}</button>}
+            {reopened.length > 0 && <button onClick={() => setUnlocked(reopened, false)} className={btnGhost}><Lock className="mr-1 inline h-4 w-4" />Lock {reopened.length === pickedRows.length ? "selected" : reopened.length} again</button>}
             <button onClick={() => setBulk("selected")} className={btnPrimary}><Pencil className="mr-1 inline h-4 w-4" />Edit selected</button>
             <button onClick={() => deleteMany("selected")} className={`${btnGhost} hover:!text-destructive`}><Trash2 className="mr-1 inline h-4 w-4" />Delete selected</button>
             <button onClick={() => setSelected(new Set())} className={btnGhost} aria-label="Clear selection"><X className="h-4 w-4" /></button>

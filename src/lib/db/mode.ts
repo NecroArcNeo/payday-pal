@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { cloudStore, localStore, type DataStore } from "./store";
+import { localUndo } from "./undo";
 
 /** Where reads and writes go: this device's database, or the signed-in account's cloud copy. */
 export type DataMode = "local" | "cloud";
@@ -40,6 +41,11 @@ export function useDataMode(): DataMode {
 
 export function storeFor(m: DataMode): DataStore {
   return m === "cloud" ? cloudStore : localStore;
+}
+
+/** Runs an action that writes more than once (a profile with its rate history, an import) as one undo step. */
+export function undoable<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  return mode === "local" ? localUndo.record(label, fn) : fn();
 }
 
 /** The store for the current mode. Pages call this for writes. */

@@ -3,7 +3,7 @@ import { useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
-import { db, storeFor, useDataMode } from "@/lib/db/mode";
+import { db, storeFor, undoable, useDataMode } from "@/lib/db/mode";
 import { backupBefore } from "@/lib/db/safety";
 import { AppShell, btnGhost, btnPrimary, inputCls } from "@/components/AppShell";
 import { EmployeePicker } from "@/components/EmployeeSearch";
@@ -320,7 +320,7 @@ function ImportPage() {
                     Skip {duplicates.size} shift{duplicates.size === 1 ? "" : "s"} already in the app
                   </label>
                 )}
-                <button disabled={!total || busy} onClick={commit} className={btnPrimary}>{busy ? "Importing…" : `Import ${total} rows`}</button>
+                <button disabled={!total || busy} onClick={() => undoable("imported a file", commit)} className={btnPrimary}>{busy ? "Importing…" : `Import ${total} rows`}</button>
               </div>
             </div>
             {problems.length > 0 && (

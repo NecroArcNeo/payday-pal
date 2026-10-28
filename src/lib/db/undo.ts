@@ -1,0 +1,226 @@
+import { localDb } from "./local";
+import { TABLES, type TableName } from "./schema";
+import type { Row, Sql, SqlDb } from "./snapshot";
+import type { DataStore } from "./store";
+
+/** One row written: what it was before (null for an insert) and after (null for a delete), as the database logged it. */
+export type UndoOp = { tbl: TableName; op: "INSERT" | "UPDATE" | "DELETE"; old: Row | null; new: Row | null };
+/** Everything one action wrote, triggers and cascades included, undone or redone as one. */
+export type UndoStep = { label: string; ops: UndoOp[] };
+
+/** The data has changed since the step was recorded, so putting it back would overwrite something else. */
+export class StaleUndoError extends Error {
+  constructor(what: "undo" | "redo", label: string) {
+    super(`Can't ${what} "${label}": that data has changed since (for example by a restore or sync), so nothing was changed.`);
+  }
+}
+
+/** Steps kept per session. Older ones are dropped; the automatic backups cover anything further back. */
+const LIMIT = 100;
+
+/**
+ * Session-only undo/redo for the local database. Each action runs with the `_undo_log` trigger on (schema 11), so the
+ * step holds every row it changed, before and after. Undo writes the "before" rows back, newest first; redo writes the
+ * "after" rows again. Each row is checked to still be exactly what the step left (or found) first, and the whole step
+ * runs in one transaction, so it either fully happens or not at all. The lock triggers apply as to any write.
+ */
+export class UndoHistory {
+  private undoStack: UndoStep[] = [];
+  private redoStack: UndoStep[] = [];
+  private depth = 0;
+  private listeners = new Set<() => void>();
+  private version = 0;
+
+  constructor(private getDb: () => Promise<SqlDb>) {}
+
+  /** Runs `fn` as one undoable step. Steps started inside it join it (the outermost label wins). */
+  async record<T>(label: string, fn: () => Promise<T>): Promise<T> {
+    if (this.depth > 0) return fn();
+    this.depth++;
+    const sql = await this.getDb().catch((e) => { this.depth--; throw e; });
+    let ops: UndoOp[] = [];
+    try {
+      await sql.query("delete from _undo_log");
+      await sql.query("select set_config('meridian.undo_log', 'on', false)");
+      return await fn();
+    } finally {
+      try {
+        await sql.query("select set_config('meridian.undo_log', '', false)");
+        ops = (await sql.query<UndoOp>("select tbl, op, old, new from _undo_log order by seq")).rows;
+        await sql.query("delete from _undo_log");
+      } finally {
+        this.depth--;
+      }
+      if (ops.length) {
+        this.undoStack.push({ label, ops });
+        if (this.undoStack.length > LIMIT) this.undoStack.shift();
+        this.redoStack = [];
+        this.changed();
+      }
+    }
+  }
+
+  get nextUndo(): string | null { return this.undoStack.at(-1)?.label ?? null; }
+  get nextRedo(): string | null { return this.redoStack.at(-1)?.label ?? null; }
+
+  /** Undoes the latest step; its label, or null when there's nothing to undo. */
+  undo(): Promise<string | null> { return this.move("undo"); }
+  redo(): Promise<string | null> { return this.move("redo"); }
+
+  clear() {
+    this.undoStack = [];
+    this.redoStack = [];
+    this.changed();
+  }
+
+  subscribe = (l: () => void) => { this.listeners.add(l); return () => { this.listeners.delete(l); }; };
+  /** Changes whenever the stacks do (for useSyncExternalStore). */
+  getVersion = () => this.version;
+
+  private changed() {
+    this.version++;
+    for (const l of this.listeners) l();
+  }
+
+  private async move(what: "undo" | "redo"): Promise<string | null> {
+    if (this.depth > 0) throw new Error("Wait for the change in progress to finish first.");
+    const from = what === "undo" ? this.undoStack : this.redoStack;
+    const step = from.at(-1);
+    if (!step) return null;
+    this.depth++;
+    try {
+      const sql = await this.getDb();
+      await sql.transaction(async (tx) => {
+        await tx.query("select set_config('meridian.replaying', 'on', true)");
+        // A run can depend on one that comes later (undoing a shift's delete restores the employees moved off it,
+        // which needs the shift back first), so a run that fails on a key or a row's state waits for a later pass;
+        // only when a whole pass makes no progress has the data really changed since.
+        let pending = runs(plan(step, what));
+        while (pending.length) {
+          const waiting: Change[][] = [];
+          let reason: unknown = new StaleUndoError(what, step.label);
+          for (const run of pending) {
+            await tx.query("savepoint undo_run");
+            try {
+              if (await apply(tx, run)) { await tx.query("release savepoint undo_run"); continue; }
+            } catch (e) {
+              if (!/foreign key|duplicate key/i.test((e as Error).message)) throw e;
+              reason = e;
+            }
+            await tx.query("rollback to savepoint undo_run");
+            waiting.push(run);
+          }
+          if (waiting.length === pending.length) throw reason instanceof StaleUndoError ? reason : new StaleUndoError(what, step.label);
+          pending = waiting;
+        }
+      });
+    } catch (e) {
+      // Stale history can't come right again; anything else (a lock, say) may, so the step stays.
+      if (e instanceof StaleUndoError) this.clear();
+      throw e;
+    } finally {
+      this.depth--;
+    }
+    from.pop();
+    (what === "undo" ? this.redoStack : this.undoStack).push(step);
+    this.changed();
+    return step.label;
+  }
+}
+
+/** One row to put back, change or remove: what it must be now (null: absent) and what it becomes (null: gone). */
+type Change = { tbl: TableName; kind: "put" | "change" | "remove"; now: Row | null; then: Row | null };
+
+/**
+ * A step's rows in the order to write them: undo goes newest first, from each row's "after" back to its "before"; redo
+ * goes oldest first. The log doesn't follow foreign keys (deleting an employee logs them before the records that went
+ * with them), so within a stretch of only put-backs, parents go first, and within one of only removals, children do.
+ */
+function plan(step: UndoStep, what: "undo" | "redo"): Change[] {
+  const changes: Change[] = (what === "undo" ? [...step.ops].reverse() : step.ops).map((o) => {
+    const [now, then] = what === "undo" ? [o.new, o.old] : [o.old, o.new];
+    return { tbl: o.tbl, kind: now === null ? "put" : then === null ? "remove" : "change", now, then };
+  });
+  const out: Change[] = [];
+  for (let i = 0; i < changes.length;) {
+    const kind = changes[i]!.kind;
+    let j = i + 1;
+    if (kind !== "change") while (j < changes.length && changes[j]!.kind === kind) j++;
+    const rank = (c: Change) => TABLES.indexOf(c.tbl) * (kind === "put" ? 1 : -1);
+    out.push(...changes.slice(i, j).sort((a, b) => rank(a) - rank(b)));
+    i = j;
+  }
+  return out;
+}
+
+/** Consecutive changes of the same kind to the same table, each row at most once, so each run is one statement. */
+function runs(changes: Change[]): Change[][] {
+  const out: Change[][] = [];
+  let ids = new Set<string>();
+  for (const c of changes) {
+    const last = out.at(-1);
+    const id = String((c.then ?? c.now)!["id"]);
+    if (last && last[0]!.tbl === c.tbl && last[0]!.kind === c.kind && !ids.has(id)) { last.push(c); ids.add(id); continue; }
+    out.push([c]);
+    ids = new Set([id]);
+  }
+  return out;
+}
+
+/**
+ * Writes one run, and says whether every row ended up as the step makes it. Only rows still exactly as the step left
+ * them are changed or removed, and only missing rows are put back; a row already in its new state counts as done
+ * (redoing a shift's delete clears its employees' shift on its own, before their logged change comes up).
+ */
+async function apply(tx: Sql, run: Change[]): Promise<boolean> {
+  const t = run[0]!.tbl;
+  if (!TABLES.includes(t)) throw new Error(`Unknown table in undo history: ${t}`);
+  const kind = run[0]!.kind;
+  const json = JSON.stringify(run.map(({ now, then }) => ({ now, then })));
+  const rowOf = (k: "now" | "then") => `jsonb_populate_record(null::${t}, e->'${k}')`;
+  if (kind === "put") {
+    await tx.query(`insert into ${t} select r.* from jsonb_array_elements($1::jsonb) e, ${rowOf("then")} r where not exists (select 1 from ${t} x where x.id = r.id)`, [json]);
+  } else if (kind === "change") {
+    const cols = (await tx.query<{ c: string }>(
+      "select column_name as c from information_schema.columns where table_schema = current_schema() and table_name = $1 and column_name <> 'id'", [t],
+    )).rows.map((r) => `"${r.c}" = n."${r.c}"`);
+    await tx.query(`update ${t} x set ${cols.join(", ")} from jsonb_array_elements($1::jsonb) e, ${rowOf("then")} n where x.id = n.id and to_jsonb(x) = e->'now'`, [json]);
+  } else {
+    await tx.query(`delete from ${t} x using jsonb_array_elements($1::jsonb) e where x.id = (${rowOf("now")}).id and to_jsonb(x) = e->'now'`, [json]);
+  }
+  const { rows } = await tx.query<{ n: number }>(
+    kind === "remove"
+      ? `select count(*)::int as n from ${t} x, jsonb_array_elements($1::jsonb) e where x.id = (${rowOf("now")}).id`
+      : `select count(*)::int as n from ${t} x, jsonb_array_elements($1::jsonb) e where x.id = (${rowOf("then")}).id and to_jsonb(x) = e->'then'`,
+    [json],
+  );
+  return rows[0]?.n === (kind === "remove" ? 0 : run.length);
+}
+
+const NOUNS: Record<TableName, [string, string]> = {
+  employee_field_defs: ["a category", "categories"], shifts: ["a shift", "shifts"], employees: ["an employee", "employees"],
+  pay_rates: ["a pay rate", "pay rates"], time_records: ["a record", "records"], pay_adjustments: ["an extra-pay entry", "extra-pay entries"],
+  payroll_settings: ["the settings", "the settings"],
+};
+const count = (t: TableName, n: number) => (n === 1 ? NOUNS[t][0] : `${n} ${NOUNS[t][1]}`);
+
+/** The store with every write recorded as one undoable step, labelled after what it did ("deleted 3 records"). */
+export function undoableStore(store: DataStore, history: UndoHistory): DataStore {
+  const r = history.record.bind(history);
+  return {
+    ...store,
+    insert: (t, rows) => r(`added ${count(t, Array.isArray(rows) ? rows.length : 1)}`, () => store.insert(t, rows)),
+    update: (t, id, patch) => r(`edited ${count(t, 1)}`, () => store.update(t, id, patch)),
+    remove: (t, id) => r(`deleted ${count(t, 1)}`, () => store.remove(t, id)),
+    updateMany: (t, rows) => r(`edited ${count(t, rows.length)}`, () => store.updateMany(t, rows)),
+    removeMany: (t, ids) => r(`deleted ${count(t, ids.length)}`, () => store.removeMany(t, ids)),
+    upsertEmployeesByCode: (rows) => r(`imported ${count("employees", rows.length)}`, () => store.upsertEmployeesByCode(rows)),
+    saveSettings: (s) => r("changed the payroll settings", () => store.saveSettings(s)),
+    saveEmployeeDefaults: (d) => r("changed the new-employee defaults", () => store.saveEmployeeDefaults(d)),
+    setLockedThrough: (date) => r(date ? `locked days through ${date}` : "unlocked every day", () => store.setLockedThrough(date)),
+    setRecordsUnlocked: (ids, unlocked) => r(`${unlocked ? "unlocked" : "locked again"} ${count("time_records", ids.length)}`, () => store.setRecordsUnlocked(ids, unlocked)),
+  };
+}
+
+/** This device's undo history (the cloud, edited directly, has none). */
+export const localUndo = new UndoHistory(localDb);

@@ -258,6 +258,7 @@ export type Database = {
           lunch_minutes: number
           pay_override: number | null
           shift_id: string | null
+          unlocked: boolean
           note: string | null
           work_date: string
         }
@@ -272,6 +273,7 @@ export type Database = {
           lunch_minutes?: number
           pay_override?: number | null
           shift_id?: string | null
+          unlocked?: boolean
           note?: string | null
           work_date: string
         }
@@ -286,6 +288,7 @@ export type Database = {
           lunch_minutes?: number
           pay_override?: number | null
           shift_id?: string | null
+          unlocked?: boolean
           note?: string | null
           work_date?: string
         }

@@ -117,6 +117,9 @@ export async function migrate(db: LocalDb, backup?: (snapshot: Snapshot) => Prom
       await tx.query("insert into _migrations (version) values ($1)", [v]);
     });
   }
+  // Undo history lives in memory, so any log a closed session left behind (desktop: the database outlives the page) goes.
+  await db.query("select set_config('meridian.undo_log', '', false)");
+  await db.query("delete from _undo_log");
 }
 
 function acquireTabLock(): Promise<void> {

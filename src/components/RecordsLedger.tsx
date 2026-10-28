@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { toast } from "sonner";
-import { Check, Lock, Pencil, Trash2, X } from "lucide-react";
+import { Check, Lock, LockOpen, Pencil, Trash2, X } from "lucide-react";
 import { db } from "@/lib/db/mode";
 import { btnGhost, inputCls } from "@/components/AppShell";
 import { EmployeePicker } from "@/components/EmployeeSearch";
@@ -26,8 +26,14 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
   const cols = (mode === "clock" ? 11 : 8) + RECORD_PAY_COLUMNS;
   const pay = useRecordPay(rows);
   const { data: rateHistory } = usePayRates();
-  // Days locked as paid can't change (the database refuses), so their rows offer no edit or delete.
+  // Days locked as paid can't change (the database refuses), so their rows offer no edit or delete, only unlocking that one.
   const lockedThrough = usePayrollSettings().data?.locked_through ?? null;
+  const setUnlocked = async (id: string, unlocked: boolean) => {
+    const { error } = await db().setRecordsUnlocked([id], unlocked);
+    if (error) { toast.error(error.message); return; }
+    toast.success(unlocked ? "Unlocked this record. It can be changed until you lock it again." : "Locked again");
+    onChanged();
+  };
   const { data: shifts = [] } = useShifts();
   const [breakUnit] = useBreakUnit();
   const empById = new Map(employees.map((e) => [e.id, e]));
@@ -97,10 +103,13 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
                 <td className="px-3 py-3 font-body text-xs text-muted-foreground">{r.note}</td>
                 <td className="pl-3 pr-6">
                   <div className="flex justify-end gap-3.5 text-muted-foreground">
-                    {lockedThrough && r.work_date <= lockedThrough ? (
-                      <span title={`Locked as paid (days up to ${lockedThrough}). Unlock it on the Payroll page to change it.`} aria-label="Locked as paid"><Lock className="h-4 w-4" /></span>
+                    {lockedThrough && r.work_date <= lockedThrough && !r.unlocked ? (
+                      <button onClick={() => setUnlocked(r.id, true)} title={`Locked as paid (days up to ${lockedThrough}). Click to unlock just this record.`} aria-label="Locked as paid: unlock this record"><Lock className="h-4 w-4 text-primary hover:text-foreground" /></button>
                     ) : (
                       <>
+                        {lockedThrough && r.work_date <= lockedThrough && (
+                          <button onClick={() => setUnlocked(r.id, false)} title="Unlocked on a locked day. Click to lock it again." aria-label="Lock this record again"><LockOpen className="h-4 w-4 text-amber-600 hover:text-foreground" /></button>
+                        )}
                         <button onClick={() => setEditing(r.id)} aria-label="Edit record"><Pencil className="h-4 w-4 hover:text-foreground" /></button>
                         <button onClick={() => onDelete(r.id)} aria-label="Delete record"><Trash2 className="h-4 w-4 hover:text-destructive" /></button>
                       </>

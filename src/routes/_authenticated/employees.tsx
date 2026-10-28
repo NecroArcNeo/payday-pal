@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { z } from "zod";
-import { db, useDataMode } from "@/lib/db/mode";
+import { db, undoable, useDataMode } from "@/lib/db/mode";
 import { customKey } from "@/lib/db/privacy";
 import { backupBefore } from "@/lib/db/safety";
 import { AppShell, btnGhost, btnPrimary, inputCls } from "@/components/AppShell";
@@ -392,7 +392,7 @@ function BulkEditPanel({ employees, defs, shifts, onClose, onDone }: { employees
       )}
       <div className="flex items-center justify-between gap-3">
         <div className="text-sm text-muted-foreground">{changes.length ? changes.join(" · ") : "Nothing ticked yet."}</div>
-        <button onClick={apply} disabled={!changes.length || busy} className={btnPrimary}>{busy ? "Saving…" : `Apply to ${employees.length}`}</button>
+        <button onClick={() => undoable(`edited ${employees.length === 1 ? "an employee" : `${employees.length} employees`}`, apply)} disabled={!changes.length || busy} className={btnPrimary}>{busy ? "Saving…" : `Apply to ${employees.length}`}</button>
       </div>
     </div>
   );

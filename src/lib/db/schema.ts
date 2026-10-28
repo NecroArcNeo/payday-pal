@@ -2,7 +2,7 @@
 // drizzle/migrations minus auth/RLS/owner columns, so a snapshot moves between
 // the two without translation. Bump SCHEMA_VERSION (here and in the cloud
 // sync functions) whenever a table's columns change.
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 
 /** Tables in foreign-key order: parents first. Deletes run in reverse. */
 export const TABLES = ["employee_field_defs", "shifts", "employees", "pay_rates", "time_records", "pay_adjustments", "payroll_settings"] as const;
@@ -235,5 +235,59 @@ export const LOCAL_MIGRATIONS: string[] = [
     end if;
     return null;
   end $$;
+  `,
+  /* 11 — records unlocked one by one on locked days, and the log undo/redo reads */ `
+  -- A record on a locked day the user unlocked by itself: it can be changed until the lock moves (which locks it again).
+  alter table time_records add column unlocked boolean not null default false;
+
+  -- As before, plus: switching a record's unlocked flag is always allowed, and an unlocked record can change.
+  create or replace function refuse_locked() returns trigger language plpgsql as $$
+  declare
+    lim date := (select locked_through from payroll_settings limit 1);
+  begin
+    if lim is null or coalesce(current_setting('meridian.bypass_lock', true), '') = 'on' then return null; end if;
+    if tg_op = 'UPDATE' and (to_jsonb(new) - 'unlocked') = (to_jsonb(old) - 'unlocked') then return null; end if;
+    if (tg_op <> 'INSERT' and (to_jsonb(old)->>tg_argv[0])::date <= lim and not coalesce((to_jsonb(old)->>'unlocked')::boolean, false))
+       or (tg_op <> 'DELETE' and (to_jsonb(new)->>tg_argv[0])::date <= lim and not coalesce((to_jsonb(new)->>'unlocked')::boolean, false)) then
+      raise exception 'Days up to % are locked as paid. Unlock them on the Payroll or Time records page to change them.', to_char(lim, 'Dy YYYY-MM-DD');
+    end if;
+    return null;
+  end $$;
+
+  -- Undo and redo put back exactly the rows logged, rate history included, so the rate trigger stays out of it.
+  create or replace function record_rate_change() returns trigger language plpgsql as $$
+  declare
+    was text := coalesce(current_setting('meridian.bypass_lock', true), '');
+  begin
+    if new.hourly_rate is not distinct from old.hourly_rate or coalesce(current_setting('meridian.replaying', true), '') = 'on' then return null; end if;
+    perform set_config('meridian.bypass_lock', 'on', true);
+    insert into pay_rates (employee_id, effective_from, hourly_rate)
+      select old.id, date '0001-01-01', old.hourly_rate
+      where not exists (select 1 from pay_rates where employee_id = old.id);
+    perform set_config('meridian.bypass_lock', was, true);
+    if (select hourly_rate from pay_rates where employee_id = new.id order by effective_from desc limit 1) is distinct from new.hourly_rate then
+      insert into pay_rates (employee_id, effective_from, hourly_rate) values (new.id, current_date, new.hourly_rate)
+        on conflict (employee_id, effective_from) do update set hourly_rate = excluded.hourly_rate;
+    end if;
+    return null;
+  end $$;
+
+  -- Undo (src/lib/db/undo.ts): while meridian.undo_log is on, every row written is logged before and after; the app
+  -- reads and empties it after each action and keeps the history in memory, so nothing outlives the session.
+  create table _undo_log (seq bigserial primary key, tbl text not null, op text not null, old jsonb, new jsonb);
+  create function log_undo() returns trigger language plpgsql as $$
+  begin
+    if coalesce(current_setting('meridian.undo_log', true), '') <> 'on' then return null; end if;
+    insert into _undo_log (tbl, op, old, new) values (tg_table_name, tg_op,
+      case when tg_op <> 'INSERT' then to_jsonb(old) end, case when tg_op <> 'DELETE' then to_jsonb(new) end);
+    return null;
+  end $$;
+  create trigger employee_field_defs_undo after insert or update or delete on employee_field_defs for each row execute function log_undo();
+  create trigger shifts_undo after insert or update or delete on shifts for each row execute function log_undo();
+  create trigger employees_undo after insert or update or delete on employees for each row execute function log_undo();
+  create trigger pay_rates_undo after insert or update or delete on pay_rates for each row execute function log_undo();
+  create trigger time_records_undo after insert or update or delete on time_records for each row execute function log_undo();
+  create trigger pay_adjustments_undo after insert or update or delete on pay_adjustments for each row execute function log_undo();
+  create trigger payroll_settings_undo after insert or update or delete on payroll_settings for each row execute function log_undo();
   `,
 ];

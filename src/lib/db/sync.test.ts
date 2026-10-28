@@ -45,6 +45,7 @@ const applySyncMigration = async (cloud: PGlite) => {
   await cloud.exec(migration("0011_shift_default_times.sql"));
   await cloud.exec(migration("0012_pay_rates.sql"));
   await cloud.exec(migration("0013_lock_paid_days.sql"));
+  await cloud.exec(migration("0014_unlock_records.sql"));
 };
 
 function cloudAs(db: PGlite, uid: string): CloudSync {
@@ -459,6 +460,26 @@ describe("locked paid days (schema 10)", () => {
     const v1 = await remote.push(snap, 0, ELSEWHERE);
     await remote.push(snap, v1, ELSEWHERE);
     expect((await remote.pull()).snapshot.data.time_records).toHaveLength(2);
+  });
+});
+
+describe("records unlocked one by one (schema 11)", () => {
+  it("keep their flag through a push, and the cloud lets only them change on locked days", async () => {
+    const db = await newLocal();
+    const { store } = await seed(db, "E1");
+    await store.setLockedThrough("2026-10-31");
+    const [oct19] = await store.listRecordsMatching({ to: "2026-10-19" });
+    const [oct20] = await store.listRecordsMatching({ from: "2026-10-20" });
+    await store.setRecordsUnlocked([oct19!.id], true);
+    const cloud = await newCloud();
+    await applySyncMigration(cloud);
+    await cloudAs(cloud, A).push(await exportSnapshot(db), 0, ELSEWHERE);
+    expect((await cloudAs(cloud, A).pull()).snapshot.data.time_records.find((r) => r["id"] === oct19!.id)!["unlocked"]).toBe(true);
+    await cloud.query("select set_config('test.uid', $1, false)", [A]);
+    await cloud.query("update public.time_records set note = 'fixed' where id = $1", [oct19!.id]);
+    await expect(cloud.query("update public.time_records set note = 'x' where id = $1", [oct20!.id])).rejects.toThrow(/locked as paid/);
+    // Switching the flag is always allowed.
+    await cloud.query("update public.time_records set unlocked = true where id = $1", [oct20!.id]);
   });
 });
 

@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { db } from "@/lib/db/mode";
+import { db, undoable } from "@/lib/db/mode";
 import { AppShell } from "@/components/AppShell";
 import { ProfileForm, profileValues, type ProfileValues } from "@/components/ProfileForm";
 import { codeTakenMessage, employeeWithCode, friendlySaveError } from "@/lib/employee-code";
@@ -35,7 +35,9 @@ function ProfilePage() {
   if (isLoading) return <AppShell eyebrow="Profile" title="Loading…"><div /></AppShell>;
   if (!emp) return <AppShell eyebrow="Profile" title="Not found"><Link to="/employees" className="underline">Back to employees</Link></AppShell>;
 
-  const save = async ({ form, custom }: ProfileValues) => {
+  // The rate history and the profile are one undo step.
+  const save = (v: ProfileValues) => undoable(`saved ${fullName(emp)}'s profile`, () => saveProfile(v));
+  const saveProfile = async ({ form, custom }: ProfileValues) => {
     for (const k of required) if (!form[k]?.trim()) { toast.error("Employee ID, first and last name are required"); return; }
     const owner = employeeWithCode(employees, form["employee_code"] ?? "", id);
     if (owner) { toast.error(codeTakenMessage(form["employee_code"] ?? "", owner)); return; }
@@ -82,7 +84,8 @@ function ProfilePage() {
 function RateHistory({ employeeId, history, currentRate }: { employeeId: string; history: StoredRate[]; currentRate: number }) {
   const qc = useQueryClient();
   const rows = [...history].sort((a, b) => b.effective_from.localeCompare(a.effective_from));
-  const remove = async (r: StoredRate) => {
+  const remove = (r: StoredRate) => undoable("deleted a pay rate", () => removeRate(r));
+  const removeRate = async (r: StoredRate) => {
     const prev = rows[rows.indexOf(r) + 1];
     if (!confirm(`Delete the ${money(Number(r.hourly_rate))} rate ${r.effective_from === SINCE_START ? "kept from the start" : `from ${r.effective_from}`}?
 

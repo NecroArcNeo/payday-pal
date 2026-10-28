@@ -165,6 +165,8 @@ function upgrade(s: Partial<Snapshot>): Partial<Snapshot> {
   }
   // 10 only added payroll_settings.locked_through, which restores empty (nothing locked).
   if (s.schema_version === 9) s = { ...s, schema_version: 10 };
+  // 11 only added time_records.unlocked, which restores as its default (locked like its day).
+  if (s.schema_version === 10) s = { ...s, schema_version: 11 };
   return s;
 }
 

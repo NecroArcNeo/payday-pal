@@ -4,6 +4,7 @@ import { localDb } from "./local";
 import { getPrivateFields, stripPrivate } from "./privacy";
 import { tableColumns, type Row, type Sql, type SqlDb } from "./snapshot";
 import type { TableName } from "./schema";
+import { localUndo, undoableStore } from "./undo";
 
 type Employee = Tables<"employees">;
 type RecordWithEmp = Tables<"time_records"> & {
@@ -51,8 +52,12 @@ export interface DataStore {
   saveSettings(s: SettingsInput): Promise<Result>;
   /** Replaces the default profile new employees start with. Leaves the other settings alone. */
   saveEmployeeDefaults(d: Record<string, unknown>): Promise<Result>;
-  /** Locks days up to and including `date` as paid (null unlocks everything). Leaves the other settings alone. */
+  /** Locks days up to and including `date` as paid (null unlocks everything), and locks again records unlocked one by one. Leaves the other settings alone. */
   setLockedThrough(date: string | null): Promise<Result>;
+  /** Unlocks records on locked days one by one (or locks them again). */
+  setRecordsUnlocked(ids: string[], unlocked: boolean): Promise<Result>;
+  /** How many records are unlocked one by one. */
+  countUnlockedRecords(): Promise<number>;
 }
 
 /** The cap the pages have always used for record lists. */
@@ -221,16 +226,27 @@ export function createLocalStore(getDb: () => Promise<SqlDb>): DataStore {
     }),
     setLockedThrough: (date) => attempt(async () => {
       const db = await getDb();
-      await db.query(
-        `insert into payroll_settings (id, locked_through, updated_at) values (true, $1::date, now())
-         on conflict (id) do update set locked_through = excluded.locked_through, updated_at = excluded.updated_at`,
-        [date],
-      );
+      await db.transaction(async (tx) => {
+        await tx.query(
+          `insert into payroll_settings (id, locked_through, updated_at) values (true, $1::date, now())
+           on conflict (id) do update set locked_through = excluded.locked_through, updated_at = excluded.updated_at`,
+          [date],
+        );
+        await tx.query("update time_records set unlocked = false where unlocked");
+      });
     }),
+    setRecordsUnlocked: (ids, unlocked) => attempt(async () => {
+      const db = await getDb();
+      await db.query("update time_records set unlocked = $2 where id = any($1::uuid[]) and unlocked <> $2", [ids, unlocked]);
+    }),
+    async countUnlockedRecords() {
+      const db = await getDb();
+      return (await db.query<{ n: number }>("select count(*)::int as n from time_records where unlocked")).rows[0]?.n ?? 0;
+    },
   };
 }
 
-export const localStore = createLocalStore(localDb);
+export const localStore = undoableStore(createLocalStore(localDb), localUndo);
 
 // ---------------------------------------------------------------- cloud
 // Rows carry owner_id (defaulted to the signed-in user); RLS limits every query to that user's rows.
@@ -345,6 +361,15 @@ export const cloudStore: DataStore = {
   removeMany: (table, ids) => wrap(supabase.from(table as "employees").delete().in("id", ids)),
   upsertEmployeesByCode: async (rows) => wrap(supabase.from("employees").upsert((await cloudSafe("employees", rows)) as never, { onConflict: "owner_id,employee_code" })),
   saveSettings: (s) => wrap(supabase.from("payroll_settings").upsert({ ...s, updated_at: new Date().toISOString() } as never, { onConflict: "owner_id" })),
-  setLockedThrough: (date) => wrap(supabase.from("payroll_settings").upsert({ locked_through: date, updated_at: new Date().toISOString() } as never, { onConflict: "owner_id" })),
+  setLockedThrough: async (date) => {
+    const r = await wrap(supabase.from("payroll_settings").upsert({ locked_through: date, updated_at: new Date().toISOString() } as never, { onConflict: "owner_id" }));
+    return r.error ? r : wrap(supabase.from("time_records").update({ unlocked: false }).eq("unlocked", true));
+  },
+  setRecordsUnlocked: (ids, unlocked) => wrap(supabase.from("time_records").update({ unlocked }).in("id", ids)),
+  countUnlockedRecords: async () => {
+    const { count, error } = await supabase.from("time_records").select("id", { count: "exact", head: true }).eq("unlocked", true);
+    if (error) throw new Error(error.message);
+    return count ?? 0;
+  },
   saveEmployeeDefaults: async (d) => wrap(supabase.from("payroll_settings").upsert({ employee_defaults: stripPrivate(d as Row, await getPrivateFields(await localDb()), "delete"), updated_at: new Date().toISOString() } as never, { onConflict: "owner_id" })),
 };
