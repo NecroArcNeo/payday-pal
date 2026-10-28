@@ -13,7 +13,8 @@ import { BreakHeader, BreakInput, BreakUnitToggle } from "@/components/BreakFiel
 import { EditableLabel } from "@/components/EditableLabel";
 import { breakRangeText, formatBreak, useBreakUnit, validBreak } from "@/lib/breaks";
 import { EmployeePicker, SearchInput } from "@/components/EmployeeSearch";
-import { describeEmployeeFilter, isFiltering, matchesEmployee, NO_FILTER, searchEmployees, type EmployeeFilter } from "@/lib/employee-search";
+import { ANY, describeEmployeeFilter, describeFacet, facetActive, facetAllows, isFiltering, matchesEmployee, NO_FILTER, searchEmployees, type EmployeeFilter, type Facet } from "@/lib/employee-search";
+import { FacetFilter } from "@/components/FacetFilter";
 import { addDays, computeHours, datesBetween, fullName, isoDate, useEmployees, useShifts, weekday, type Employee, type TimeRecord } from "@/lib/payroll";
 import { shiftFor } from "@/lib/pay";
 import { describeTimes, usualTimes, usualTimesFor, type UsualTimes } from "@/lib/shift-times";
@@ -47,7 +48,7 @@ function RecordsPage() {
   const [picked, setPicked] = useState<string[]>([]);
   const [pickQ, setPickQ] = useState<EmployeeFilter>(NO_FILTER);
   const [listQ, setListQ] = useState<EmployeeFilter>(NO_FILTER);
-  const [listShift, setListShift] = useState("");
+  const [listShifts, setListShifts] = useState<Facet>(ANY);
   // Resigned employees can't be given new hours, so they aren't offered here (their old records still list below).
   const working = useMemo(() => employees.filter((e) => e.active), [employees]);
   const resigned = employees.length - working.length;
@@ -149,11 +150,13 @@ function RecordsPage() {
   const [limit, setLimit] = useState(PAGE);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulk, setBulk] = useState<null | "selected" | "all">(null);
+  // The shifts the shift filter lets through (excluding some is keeping the rest); undefined when it isn't set.
+  const shiftsShown = useMemo(() => (facetActive(listShifts) ? shifts.map((x) => x.id).filter((id) => facetAllows(listShifts, id)) : undefined), [listShifts, shifts]);
   const filter = useMemo<RecordFilter>(() => ({
     from: from || undefined, to: to || undefined, mode: listMode,
     employeeIds: isFiltering(listQ) ? employees.filter((e) => matchesEmployee(e, listQ)).map((e) => e.id) : undefined,
-    shift: listShift ? { id: listShift, employeeIds: employees.filter((e) => shiftFor(e.shift_id, shifts).id === listShift).map((e) => e.id) } : undefined,
-  }), [from, to, listMode, listQ, listShift, employees, shifts]);
+    shifts: shiftsShown ? { ids: shiftsShown, employeeIds: employees.filter((e) => shiftsShown.includes(shiftFor(e.shift_id, shifts).id ?? "")).map((e) => e.id) } : undefined,
+  }), [from, to, listMode, listQ, shiftsShown, employees, shifts]);
   const filterKey = JSON.stringify(filter);
   // A new filter starts again from the first page, with nothing selected.
   useEffect(() => { setLimit(PAGE); setSelected(new Set()); setBulk(null); }, [filterKey]);
@@ -172,7 +175,7 @@ function RecordsPage() {
     listMode === "clock" ? "clock in/out" : "daily-hours",
     from || to ? `from ${from ? `${weekday(from)} ${from}` : "the start"} to ${to ? `${weekday(to)} ${to}` : "the latest"}` : "",
     isFiltering(listQ) ? `for employees matching ${describeEmployeeFilter(listQ)}` : "",
-    listShift ? `on the ${shifts.find((x) => x.id === listShift)?.name ?? "chosen"} shift` : "",
+    facetActive(listShifts) ? `on shift ${describeFacet(listShifts, (id) => shifts.find((x) => x.id === id)?.name ?? "deleted")}` : "",
   ].filter(Boolean).join(" ");
 
   const deleteMany = async (which: "selected" | "all") => {
@@ -344,11 +347,7 @@ function RecordsPage() {
         <span className="text-muted-foreground">→</span>
         <input type="date" className={`${inputCls} max-w-[11rem]`} value={to} onChange={(e) => setTo(e.target.value)} aria-label="To date" />
         {shifts.length > 1 && (
-          <select className={`${inputCls} max-w-[10rem]`} value={listShift} onChange={(e) => setListShift(e.target.value)} aria-label="Filter by shift"
-            title="Records on this shift: ones set to it, and ones left on the employee's usual shift when that's this one">
-            <option value="">All shifts</option>
-            {shifts.map((sh) => <option key={sh.id} value={sh.id}>{sh.name}</option>)}
-          </select>
+          <FacetFilter options={shifts.map((sh) => ({ value: sh.id, label: sh.name }))} value={listShifts} onChange={setListShifts} allLabel="All shifts" label="shift" />
         )}
         <SearchInput value={listQ} onChange={setListQ} employees={employees} placeholder="Filter by employee name, ID, position, department…" className="min-w-[16rem] flex-1" />
       </div>

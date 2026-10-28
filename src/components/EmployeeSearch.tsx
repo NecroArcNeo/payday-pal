@@ -4,24 +4,20 @@ import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from "@
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { inputCls } from "@/components/AppShell";
 import { fullName, type Employee } from "@/lib/payroll";
-import { describeEmployeeFilter, employeeFacets, NO_FILTER, SEARCH_HINT, searchEmployees, type EmployeeFilter } from "@/lib/employee-search";
+import { FacetFilter } from "@/components/FacetFilter";
+import { describeEmployeeFilter, employeeFacets, facetActive, isFiltering, NO_FILTER, SEARCH_HINT, searchEmployees, type EmployeeFilter } from "@/lib/employee-search";
 
-/** Department and position dropdowns. Hidden when no employee has either. */
+/** Department and position checklists (tick to include, or exclude). Hidden when no employee has either. */
 function FacetSelects({ employees, value, onChange, className = "", selectCls = inputCls }: {
   employees: Employee[]; value: EmployeeFilter; onChange: (f: EmployeeFilter) => void; className?: string; selectCls?: string;
 }) {
   const { departments, positions } = useMemo(() => employeeFacets(employees), [employees]);
-  // Keep a chosen value listed even if nobody has it any more, so it can be seen and cleared.
-  const opts = (list: string[], cur: string) => (cur && !list.some((x) => x.toLowerCase() === cur.toLowerCase()) ? [cur, ...list] : list);
   const select = (key: "department" | "position", all: string, list: string[]) =>
-    (list.length > 0 || value[key]) && (
-      <select className={`${selectCls} w-auto max-w-[12rem] ${value[key] ? "ring-2 ring-primary/40" : ""}`} value={value[key]} aria-label={`Filter by ${key}`}
-        onChange={(e) => onChange({ ...value, [key]: e.target.value })}>
-        <option value="">{all}</option>
-        {opts(list, value[key]).map((x) => <option key={x} value={x}>{x}</option>)}
-      </select>
+    (list.length > 0 || facetActive(value[key])) && (
+      <FacetFilter options={list.map((x) => ({ value: x, label: x }))} value={value[key]} onChange={(v) => onChange({ ...value, [key]: v })}
+        allLabel={all} label={key} triggerCls={selectCls} />
     );
-  if (!departments.length && !positions.length && !value.department && !value.position) return null;
+  if (!departments.length && !positions.length && !facetActive(value.department) && !facetActive(value.position)) return null;
   return (
     <div className={`flex gap-2 ${className}`}>
       {select("department", "All departments", departments)}
@@ -86,7 +82,7 @@ export function EmployeePicker({ employees: all, value, onChange, placeholder = 
           <FacetSelects employees={employees} value={f} onChange={setF} className="border-b border-border p-2" selectCls={`${inputCls} !py-1 text-xs flex-1`} />
           <CommandList className="max-h-72">
             <CommandEmpty>No employee matches {describeEmployeeFilter(f)}.</CommandEmpty>
-            {emptyLabel !== undefined && !q && !f.department && !f.position && (
+            {emptyLabel !== undefined && !isFiltering(f) && (
               <CommandItem value="__none" onSelect={() => pick("")}>
                 <Check className={`mr-2 h-4 w-4 ${value ? "opacity-0" : ""}`} /> <span className="text-muted-foreground">{emptyLabel}</span>
               </CommandItem>

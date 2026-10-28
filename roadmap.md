@@ -33,3 +33,4 @@
 - [x] Time records: "By shift" buttons select everyone on a shift. When everyone picked shares one shift's usual hours (however they were picked, or via the record's Shift), those show in the clock in/out/break cells. Picking shifts with different hours shows "Add each shift's usual hours" (ticked) with each shift's people and times; the cells go blank while it's on
 - [x] "By shift" buttons only pick people the employee search shows (search Spotter, press Day: only day-shift spotters)
 - [x] Time records list can be filtered by shift (records set to it, plus ones on the employee's usual shift)
+- [x] Department, position and shift filters are checklists: tick several to include any of them, or press Exclude to leave some out; typing `-word` in a search leaves out anyone it matches

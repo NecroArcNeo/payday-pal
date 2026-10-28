@@ -344,12 +344,14 @@ describe("record pages", () => {
       { employee_id: b!.id, work_date: "2026-09-03", entry_mode: "hours", hours: 8 },
       { employee_id: b!.id, work_date: "2026-09-04", entry_mode: "hours", hours: 8, shift_id: day!.id },
     ]);
-    const dates = async (shift: { id: string; employeeIds: string[] }) => (await store.listRecordsMatching({ shift })).map((r) => r.work_date).sort();
+    const dates = async (shifts: { ids: string[]; employeeIds: string[] }) => (await store.listRecordsMatching({ shifts })).map((r) => r.work_date).sort();
     // A has no shift, so is on the first one (Day); B is usually on Night.
-    expect(await dates({ id: day!.id, employeeIds: [a!.id] })).toEqual(["2026-09-01", "2026-09-04"]);
-    expect(await dates({ id: night!.id, employeeIds: [b!.id] })).toEqual(["2026-09-02", "2026-09-03"]);
-    expect(await dates({ id: night!.id, employeeIds: [] })).toEqual(["2026-09-02"]);
-    expect((await store.listRecordsPage({ shift: { id: day!.id, employeeIds: [a!.id] }, employeeIds: [b!.id] }, 0, 50)).total).toBe(1);
+    expect(await dates({ ids: [day!.id], employeeIds: [a!.id] })).toEqual(["2026-09-01", "2026-09-04"]);
+    expect(await dates({ ids: [night!.id], employeeIds: [b!.id] })).toEqual(["2026-09-02", "2026-09-03"]);
+    expect(await dates({ ids: [night!.id], employeeIds: [] })).toEqual(["2026-09-02"]);
+    expect(await dates({ ids: [day!.id, night!.id], employeeIds: [a!.id, b!.id] })).toHaveLength(4);
+    expect(await dates({ ids: [], employeeIds: [] })).toEqual([]);
+    expect((await store.listRecordsPage({ shifts: { ids: [day!.id], employeeIds: [a!.id] }, employeeIds: [b!.id] }, 0, 50)).total).toBe(1);
   });
 });
 

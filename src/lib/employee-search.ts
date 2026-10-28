@@ -3,6 +3,7 @@ import type { Employee } from "@/lib/payroll";
 // One search used everywhere an employee is looked up. Every word typed must
 // appear somewhere in the employee's details, so "ware lead" finds a Lead in
 // the Warehouse department, and "okafor" or "E100" find people directly.
+// A word starting with "-" leaves out anyone it appears for: "ware -temp".
 
 const haystacks = new WeakMap<Employee, string>();
 
@@ -21,37 +22,64 @@ function haystack(e: Employee): string {
 }
 
 const words = (q: string) => q.toLowerCase().split(/\s+/).filter(Boolean);
+/** The typed words to find, and the "-word"s to leave out (a lone "-" is neither). */
+const terms = (q: string) => {
+  const all = words(q);
+  return { want: all.filter((w) => !w.startsWith("-")), not: all.filter((w) => w.startsWith("-") && w.length > 1).map((w) => w.slice(1)) };
+};
 const norm = (v: string | null | undefined) => (v ?? "").trim().toLowerCase();
 
-/** Typed text plus optional exact department and position (job title). Empty means "any". */
-export type EmployeeFilter = { text: string; department: string; position: string };
-export const NO_FILTER: EmployeeFilter = { text: "", department: "", position: "" };
+/** Ticked values (match any of them; none ticked means any) and excluded ones (match none of them). */
+export type Facet = { include: string[]; exclude: string[] };
+export const ANY: Facet = { include: [], exclude: [] };
+export const facetActive = (f: Facet) => f.include.length > 0 || f.exclude.length > 0;
+/** Whether a value passes the facet, ignoring case and surrounding spaces. */
+export function facetAllows(f: Facet, value: string | null | undefined) {
+  const v = norm(value);
+  if (f.include.length && !f.include.some((x) => norm(x) === v)) return false;
+  return !f.exclude.some((x) => norm(x) === v);
+}
+/** "Warehouse or Sales, not Temp" */
+export function describeFacet(f: Facet, names: (v: string) => string = (v) => v) {
+  const or = (xs: string[]) => { const n = xs.map(names); return n.length > 1 ? `${n.slice(0, -1).join(", ")} or ${n[n.length - 1]}` : n[0] ?? ""; };
+  return [f.include.length ? or(f.include) : "", f.exclude.length ? `not ${or(f.exclude)}` : ""].filter(Boolean).join(", ");
+}
+
+/** Typed text plus department and position (job title) checklists. Empty means "any". */
+export type EmployeeFilter = { text: string; department: Facet; position: Facet };
+export const NO_FILTER: EmployeeFilter = { text: "", department: ANY, position: ANY };
 /** Plain text is the same as a filter with only text. */
 export type EmployeeQuery = string | EmployeeFilter;
 const asFilter = (q: EmployeeQuery): EmployeeFilter => (typeof q === "string" ? { ...NO_FILTER, text: q } : q);
 
-export const isFiltering = (q: EmployeeQuery) => { const f = asFilter(q); return !!(f.text.trim() || f.department || f.position); };
+const hasTerms = (text: string) => { const t = terms(text); return t.want.length + t.not.length > 0; };
+export const isFiltering = (q: EmployeeQuery) => { const f = asFilter(q); return hasTerms(f.text) || facetActive(f.department) || facetActive(f.position); };
 
-/** "“ada” in Warehouse as Lead", for messages like "No employee matches …". */
+/** "“ada” in Warehouse as Lead, not Driver", for messages like "No employee matches …". */
 export function describeEmployeeFilter(q: EmployeeQuery) {
   const f = asFilter(q);
-  return [f.text.trim() && `“${f.text.trim()}”`, f.department && `in ${f.department}`, f.position && `as ${f.position}`].filter(Boolean).join(" ");
+  const facet = (x: Facet, word: string) => {
+    const inc = x.include.length ? `${word} ${describeFacet({ include: x.include, exclude: [] })}` : "";
+    const exc = x.exclude.length ? `not ${word} ${describeFacet({ include: x.exclude, exclude: [] })}` : "";
+    return [inc, exc].filter(Boolean).join(", ");
+  };
+  return [f.text.trim() && `“${f.text.trim()}”`, facet(f.department, "in"), facet(f.position, "as")].filter(Boolean).join(" ");
 }
 
 export function matchesEmployee(e: Employee, query: EmployeeQuery): boolean {
   const f = asFilter(query);
-  if (f.department && norm(e.department) !== norm(f.department)) return false;
-  if (f.position && norm(e.job_title) !== norm(f.position)) return false;
-  const ws = words(f.text);
-  if (!ws.length) return true;
+  if (!facetAllows(f.department, e.department)) return false;
+  if (!facetAllows(f.position, e.job_title)) return false;
+  const { want, not } = terms(f.text);
+  if (!want.length && !not.length) return true;
   const h = haystack(e);
-  return ws.every((w) => h.includes(w));
+  return want.every((w) => h.includes(w)) && !not.some((w) => h.includes(w));
 }
 
 /** Matching employees, best first: exact ID, then name starting with the query, then the rest by name. */
 export function searchEmployees<T extends Employee>(list: T[], query: EmployeeQuery): T[] {
   const f = asFilter(query);
-  const q = f.text.trim().toLowerCase();
+  const q = terms(f.text).want.join(" ");
   const hits = isFiltering(f) ? list.filter((e) => matchesEmployee(e, f)) : [...list];
   if (!q) return hits;
   const rank = (e: Employee) =>
@@ -71,4 +99,4 @@ export function employeeFacets(list: Employee[]) {
   return { departments: unique(list.map((e) => e.department)), positions: unique(list.map((e) => e.job_title)) };
 }
 
-export const SEARCH_HINT = "Search name, ID, position, department, email, phone…";
+export const SEARCH_HINT = "Search name, ID, position, department, email, phone… (-word leaves out)";

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Employee } from "@/lib/payroll";
-import { describeEmployeeFilter, employeeFacets, isFiltering, matchesEmployee, NO_FILTER, searchEmployees, type EmployeeFilter } from "./employee-search";
+import { ANY, describeEmployeeFilter, employeeFacets, isFiltering, matchesEmployee, NO_FILTER, searchEmployees, type EmployeeFilter } from "./employee-search";
+
+const only = (v: string) => ({ include: [v], exclude: [] });
 
 const e = (o: Partial<Employee>) => ({ first_name: "", last_name: "", employee_code: "", active: true, custom_fields: {}, ...o }) as Employee;
 const staff = [
@@ -38,16 +40,31 @@ describe("department and position filters", () => {
   const f = (o: Partial<EmployeeFilter>) => searchEmployees(staff, { ...NO_FILTER, ...o }).map((x) => x.id);
 
   it("narrows to an exact department or position, ignoring case, alongside the typed text", () => {
-    expect(f({ department: "warehouse" })).toEqual(["1", "2"]);
-    expect(f({ department: "Warehouse", position: "Picker" })).toEqual(["2"]);
-    expect(f({ position: "Lead" })).toEqual([]);
-    expect(f({ department: "Warehouse", text: "nadia" })).toEqual(["1"]);
-    expect(f({ department: "Logistics", text: "nadia" })).toEqual([]);
+    expect(f({ department: only("warehouse") })).toEqual(["1", "2"]);
+    expect(f({ department: only("Warehouse"), position: only("Picker") })).toEqual(["2"]);
+    expect(f({ position: only("Lead") })).toEqual([]);
+    expect(f({ department: only("Warehouse"), text: "nadia" })).toEqual(["1"]);
+    expect(f({ department: only("Logistics"), text: "nadia" })).toEqual([]);
+  });
+
+  it("matches any ticked value and none of the excluded ones", () => {
+    const all = f({}).sort();
+    expect(f({ position: { include: ["Picker", "driver"], exclude: [] } }).sort()).toEqual(staff.filter((x) => ["Picker", "Driver"].includes(x.job_title ?? "")).map((x) => x.id).sort());
+    expect(f({ department: { include: [], exclude: ["Warehouse"] } }).sort()).toEqual(all.filter((id) => !["1", "2"].includes(id)));
+    expect(f({ department: { include: ["Warehouse"], exclude: ["warehouse"] } })).toEqual([]);
+    expect(describeEmployeeFilter({ text: "", department: { include: ["A", "B", "C"], exclude: [] }, position: { include: [], exclude: ["Driver"] } })).toBe("in A, B or C not as Driver");
+  });
+
+  it("leaves out anyone a -word appears for", () => {
+    expect(ids("-warehouse").sort()).toEqual(f({ department: { include: [], exclude: ["Warehouse"] } }).sort());
+    expect(ids("warehouse -nadia")).toEqual(["2"]);
+    expect(isFiltering("-")).toBe(false);
+    expect(ids("-").length).toBe(staff.length);
   });
 
   it("lists the departments and positions in use, and describes the filter", () => {
     expect(employeeFacets([...staff, e({ department: "warehouse " })])).toEqual({ departments: ["Logistics", "Warehouse"], positions: ["Driver", "Picker", "Shift Lead"] });
-    expect(describeEmployeeFilter({ text: " ada ", department: "Warehouse", position: "" })).toBe("“ada” in Warehouse");
+    expect(describeEmployeeFilter({ text: " ada ", department: only("Warehouse"), position: ANY })).toBe("“ada” in Warehouse");
     expect(isFiltering(NO_FILTER)).toBe(false);
   });
 });
