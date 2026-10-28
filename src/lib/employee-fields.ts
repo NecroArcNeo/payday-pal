@@ -1,7 +1,7 @@
 import type { Employee, FieldDef } from "@/lib/payroll";
 
 // The built-in employee details, grouped as the profile page shows them. Shared by the profile and the timesheet.
-/** `sensitive` fields (ID numbers) stay on the profile and are left off printed timesheets and payroll exports. */
+/** `sensitive` fields (everything under Personal) stay on the profile, and are left off timesheets and the payroll table and its exports. */
 export type EmployeeField = { k: string; label: string; type?: string; span?: boolean; suggest?: boolean; sensitive?: boolean };
 export const EMPLOYEE_SECTIONS: { title: string; fields: EmployeeField[] }[] = [
   { title: "Payroll", fields: [
@@ -9,8 +9,8 @@ export const EMPLOYEE_SECTIONS: { title: string; fields: EmployeeField[] }[] = [
     { k: "hourly_rate", label: "Hourly rate", type: "number" }, { k: "department", label: "Department" }, { k: "job_title", label: "Job title" },
   ] },
   { title: "Personal", fields: [
-    { k: "date_of_birth", label: "Date of birth", type: "date" }, { k: "gender", label: "Gender", suggest: true }, { k: "nationality", label: "Nationality", suggest: true },
-    { k: "passport_no", label: "Passport no.", sensitive: true }, { k: "ssn", label: "Social security no.", sensitive: true }, { k: "residential_status", label: "Residential status", suggest: true },
+    { k: "date_of_birth", label: "Date of birth", type: "date", sensitive: true }, { k: "gender", label: "Gender", suggest: true, sensitive: true }, { k: "nationality", label: "Nationality", suggest: true, sensitive: true },
+    { k: "passport_no", label: "Passport no.", sensitive: true }, { k: "ssn", label: "Social security no.", sensitive: true }, { k: "residential_status", label: "Residential status", suggest: true, sensitive: true },
   ] },
   { title: "Contact", fields: [
     { k: "email", label: "Email", type: "email" }, { k: "phone", label: "Phone", type: "tel" }, { k: "hire_date", label: "Hire date", type: "date" },

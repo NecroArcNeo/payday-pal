@@ -22,8 +22,10 @@ import { Printer } from "lucide-react";
 
 /** Shown in the sheet's heading, so not repeated in the details grid. */
 const IN_HEADER = ["first_name", "last_name", "employee_code"];
-/** ID numbers stay on the profile, off timesheets that get printed and handed around. */
+/** Personal details stay on the profile, off timesheets that get printed and handed around. */
 const onSheet = (f: { k: string; sensitive?: boolean }) => !IN_HEADER.includes(f.k) && !f.sensitive;
+/** Categories the user put under Personal are personal details too. */
+const PERSONAL = "Personal";
 
 type Search = { employee?: string | undefined; from?: string | undefined; to?: string | undefined };
 const isDate = (d: unknown): d is string => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d);
@@ -198,7 +200,7 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
             <Link to="/employees/$id" params={{ id: emp.id }} className={`${btnGhost} print:hidden`}>Edit profile</Link>
           </div>
         </div>
-        {profileSections(defs).filter((s) => s.fields.some(onSheet) || s.defs.length).map((s) => (
+        {profileSections(defs).map((s) => (s.title === PERSONAL ? { ...s, defs: [] } : s)).filter((s) => s.fields.some(onSheet) || s.defs.length).map((s) => (
           <div key={s.title}>
             <div className="mb-2 text-xs font-semibold text-muted-foreground">{s.custom ? s.title : <EditableLabel k={`section:${s.title}`} name={s.title} />}</div>
             <div className="grid grid-cols-2 gap-x-6 gap-y-3 md:grid-cols-4">

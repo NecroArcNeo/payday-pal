@@ -14,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { PGlite, types } from "@electric-sql/pglite";
+import { DURABLE_START_PARAMS, DurableNodeFS } from "./durable-fs.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const CLIENT_DIR = path.join(here, "..", "dist", "client");
@@ -49,7 +50,11 @@ protocol.registerSchemesAsPrivileged([
 let dbPromise;
 function database() {
   dbPromise ??= (async () => {
-    const db = new PGlite(DATA_DIR, {
+    const db = new PGlite({
+      // Every commit is flushed to the disk before the app reports it saved (durable-fs.mjs), so a power cut
+      // or system crash can't lose it or leave the database half-written.
+      fs: new DurableNodeFS(DATA_DIR),
+      startParams: DURABLE_START_PARAMS,
       // Match what Supabase/PostgREST returns (and the browser build): numbers for numeric, strings for dates and times.
       parsers: {
         [types.NUMERIC]: (v) => Number(v),

@@ -7,7 +7,7 @@ import { AppShell, btnGhost, btnPrimary } from "@/components/AppShell";
 import { useFieldDefs, usePrivateFields, useSession } from "@/lib/payroll";
 import { EMPLOYEE_SECTIONS } from "@/lib/employee-fields";
 import { useLabels } from "@/lib/labels";
-import { ALWAYS_SYNCED, confirmPrivateFields, customKey, DEFAULT_SHARED, getPrivateFields, ID_NUMBERS, PRIVATE_COLUMNS, privateFieldsConfirmed } from "@/lib/db/privacy";
+import { ALWAYS_SYNCED, confirmPrivateFields, customKey, DEFAULT_SHARED, getPrivateFields, PERSONAL_DETAILS, PRIVATE_COLUMNS, privateFieldsConfirmed } from "@/lib/db/privacy";
 import { cloudConfigured, setDataMode, useDataMode } from "@/lib/db/mode";
 import { localDb, requestPersistentStorage } from "@/lib/db/local";
 import { desktop } from "@/lib/desktop";
@@ -369,7 +369,7 @@ function PrivateFields({ busy, onChange }: { busy: boolean; onChange: (keys: str
       <div className="flex flex-wrap gap-1.5">
         <button type="button" className={preset} disabled={busy} onClick={() => onChange(everything.filter((k) => !DEFAULT_SHARED.includes(k)))}>Recommended: only work details sync</button>
         <button type="button" className={preset} disabled={busy} onClick={() => onChange(everything)}>Every detail</button>
-        <button type="button" className={preset} disabled={busy} onClick={() => onChange(ID_NUMBERS)}>Only ID numbers</button>
+        <button type="button" className={preset} disabled={busy} onClick={() => onChange(PERSONAL_DETAILS)}>Only personal details</button>
         <button type="button" className={preset} disabled={busy} onClick={() => onChange([])}>Sync everything</button>
       </div>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

@@ -49,4 +49,5 @@
 - [x] Time records: bolder column headers that stay at the top while scrolling
 - [x] Time records: newest first / oldest first
 - [x] Timesheet export: plain Excel or CSV, or the user's own Excel template (upload it, click where each value goes; the file's look is kept). Templates are kept on this device only
-- [ ] Look into whether a sudden shutdown can damage the desktop database (a test copy hard-killed ~30 times failed to open)
+- [x] Sudden shutdowns: 135 force-kills in stress tests never damaged the database or lost a commit. Found and fixed a real gap for power cuts: PGlite never flushed writes to the disk (fsync off, and no fsync in its file layer); now every commit is flushed. The one damaged test copy (a missing internal Postgres file) couldn't be reproduced
+- [x] Everything under Personal on profiles is treated like ID numbers: off timesheets and the payroll table

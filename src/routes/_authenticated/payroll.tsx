@@ -35,9 +35,6 @@ const builtInCols: { key: string; label: string; get: (e: Employee) => string; a
   { key: "department", label: "Department", get: (e) => e.department ?? "" },
   { key: "email", label: "Email", get: (e) => e.email ?? "" },
   { key: "phone", label: "Phone", get: (e) => e.phone ?? "" },
-  { key: "gender", label: "Gender", get: (e) => e.gender ?? "" },
-  { key: "nationality", label: "Nationality", get: (e) => e.nationality ?? "" },
-  { key: "residential_status", label: "Residential status", get: (e) => e.residential_status ?? "" },
   { key: "hire_date", label: "Hire date", get: (e) => e.hire_date ?? "" },
 ];
 
@@ -63,9 +60,11 @@ function PayrollPage() {
   const rules = { threshold, otMultiplier: mult, weekendOvertime: weekendOt };
   const visible = settings?.visible_columns ?? [];
 
+  // Categories under Personal are personal details, which stay off payroll.
+  const shownDefs = defs.filter((d) => d.section !== "Personal");
   const infoCols = [
     ...builtInCols,
-    ...defs.map((d) => ({ key: d.id, alias: customKey(d.id), label: d.label, get: (e: Employee) => formatValue(d.field_type, String(((e.custom_fields ?? {}) as Record<string, unknown>)[d.id] ?? "")) })),
+    ...shownDefs.map((d) => ({ key: d.id, alias: customKey(d.id), label: d.label, get: (e: Employee) => formatValue(d.field_type, String(((e.custom_fields ?? {}) as Record<string, unknown>)[d.id] ?? "")) })),
   ].filter((c) => visible.includes(c.key));
   const aliasKey = (c: { key: string; alias?: string }) => c.alias ?? c.key;
   const { label } = useLabels();
@@ -133,7 +132,7 @@ function PayrollPage() {
       {showSettings && settings && (
         <>
           <SettingsPanel settings={settings} cols={[...builtInCols.map((c) => ({ key: c.key, label: label(c.key, c.label) })), { key: "shift", label: label("shift", "Shift") }, { key: "days", label: label("days", "Days") },
-            { key: "rate", label: label("hourly_rate", "Rate") }, ...defs.map((d) => ({ key: d.id, label: label(customKey(d.id), d.label) }))]}
+            { key: "rate", label: label("hourly_rate", "Rate") }, ...shownDefs.map((d) => ({ key: d.id, label: label(customKey(d.id), d.label) }))]}
             onSaved={() => qc.invalidateQueries({ queryKey: ["payroll-settings"] })} />
           <ShiftsPanel shifts={shifts} employees={employees} onChange={() => qc.invalidateQueries({ queryKey: ["shifts"] })} />
         </>

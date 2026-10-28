@@ -14,7 +14,8 @@ export const ALWAYS_SYNCED = ["employee_code", "first_name", "last_name", "hourl
 export const PRIVATE_COLUMNS = [...EMPLOYEE_SECTIONS.flatMap((s) => s.fields.map((f) => f.k)).filter((k) => !ALWAYS_SYNCED.includes(k)), "notes"];
 /** Work details that sync until the user chooses otherwise. Every other detail, and every custom category, starts private. */
 export const DEFAULT_SHARED = ["department", "job_title", "hire_date"];
-export const ID_NUMBERS = EMPLOYEE_SECTIONS.flatMap((s) => s.fields).filter((f) => f.sensitive).map((f) => f.k);
+/** The Personal section's details: date of birth, gender, nationality, ID numbers, residential status. */
+export const PERSONAL_DETAILS = EMPLOYEE_SECTIONS.flatMap((s) => s.fields).filter((f) => f.sensitive).map((f) => f.k);
 
 const SHARED = "shared_fields";
 /** Before shared_fields: the private list itself. Converted on first read. */

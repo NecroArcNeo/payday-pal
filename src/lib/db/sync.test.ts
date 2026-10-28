@@ -10,7 +10,7 @@ import { createLocalStore } from "./store";
 import { deviceIdentity, maybeAutoBackup, pull, push, restoreSnapshot, setDeviceName, setPrivateFields, SyncConflictError, type CloudSync, type SyncDeps } from "./sync";
 import { payByRecord } from "../pay";
 import { planRateChange, SINCE_START } from "../pay-rates";
-import { customKey, getPrivateFields, ID_NUMBERS, privateFieldsConfirmed, redactSnapshot, stripPrivate } from "./privacy";
+import { customKey, getPrivateFields, PERSONAL_DETAILS, privateFieldsConfirmed, redactSnapshot, stripPrivate } from "./privacy";
 
 const parsers = { [types.NUMERIC]: (v: string) => Number(v), [types.DATE]: (v: string) => v, [types.TIMESTAMPTZ]: (v: string) => v };
 const migration = (name: string) => readFileSync(path.resolve(__dirname, "../../../drizzle/migrations", name), "utf8");
@@ -875,7 +875,7 @@ describe("private fields", () => {
 
   it("never makes a field less private by restoring a backup, even onto a fresh install", async () => {
     const { laptop } = await privateLaptop();
-    await setPrivateFields(laptop, [...ID_NUMBERS, "job_title"]);
+    await setPrivateFields(laptop, [...PERSONAL_DETAILS, "job_title"]);
     const backup = await exportSnapshot(laptop);
     expect(backup.private_fields).toEqual(expect.arrayContaining(["job_title", "ssn"]));
 
@@ -897,7 +897,7 @@ describe("private fields", () => {
   it("asks before the first push until the private fields are confirmed or saved", async () => {
     const db = await newLocal();
     expect(await privateFieldsConfirmed(db)).toBe(false);
-    await setPrivateFields(db, ID_NUMBERS);
+    await setPrivateFields(db, PERSONAL_DETAILS);
     expect(await privateFieldsConfirmed(db)).toBe(true);
     // Restoring a backup doesn't count as looking at them on this device.
     const fresh = await newLocal();
@@ -930,7 +930,7 @@ describe("private fields", () => {
 
   it("marks the device as needing a push when a field becomes private, so the cloud copy gets cleaned", async () => {
     const { laptop } = await privateLaptop();
-    await setPrivateFields(laptop, ID_NUMBERS);
+    await setPrivateFields(laptop, PERSONAL_DETAILS);
     await push(deps(laptop, cloudAs(cloud, A), A).d);
     expect((await cloudEmployee())["email"]).toBe("ada@example.com");
     await setPrivateFields(laptop, ["email"]);
