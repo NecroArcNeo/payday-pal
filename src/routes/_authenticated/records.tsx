@@ -23,6 +23,7 @@ import { describeTimes, usualTimes, usualTimesFor, type UsualTimes } from "@/lib
 import { ArrowDown, ArrowUp, Check, Lock, LockOpen, Pencil, Plus, Trash2, X } from "lucide-react";
 import { usePref } from "@/lib/prefs";
 import { PayLock } from "@/components/PayLock";
+import { setRecordsLocked } from "@/lib/pay-freeze";
 
 /** One shift's times for "Add each shift's usual hours", as typed (break in minutes). */
 type GroupTimes = { clock_in: string; clock_out: string; lunch_minutes: string; hours: string };
@@ -242,9 +243,11 @@ function RecordsPage() {
   const stillLocked = onLockedDay.filter((r) => !r.unlocked);
   const reopened = onLockedDay.filter((r) => r.unlocked);
   const setUnlocked = async (rs: typeof pickedRows, unlocked: boolean) => {
-    const { error } = await db().setRecordsUnlocked(rs.map((r) => r.id), unlocked);
+    const { error } = await setRecordsLocked(db(), rs, !unlocked);
     if (error) { toast.error(error.message); return; }
-    toast.success(`${unlocked ? "Unlocked" : "Locked again"}: ${rs.length} record${rs.length === 1 ? "" : "s"}`);
+    toast.success(unlocked
+      ? `Unlocked ${rs.length} record${rs.length === 1 ? "" : "s"}: paid by the current rules until locked again. Ctrl+Z puts their locked pay back.`
+      : `Locked ${rs.length} record${rs.length === 1 ? "" : "s"} again, with pay saved as it is now`);
     refresh();
   };
 

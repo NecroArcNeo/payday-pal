@@ -2,6 +2,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Check, Lock, LockOpen, Pencil, Trash2, X } from "lucide-react";
 import { db } from "@/lib/db/mode";
+import { setRecordsLocked } from "@/lib/pay-freeze";
 import { btnGhost, inputCls } from "@/components/AppShell";
 import { EmployeePicker } from "@/components/EmployeeSearch";
 import { RECORD_PAY_COLUMNS, RecordPayCells, RecordPayHeaders, RecordShiftCell, RecordShiftSelect } from "@/components/RecordPay";
@@ -29,9 +30,11 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
   // Days locked as paid can't change (the database refuses), so their rows offer no edit or delete, only unlocking that one.
   const lockedThrough = usePayrollSettings().data?.locked_through ?? null;
   const setUnlocked = async (id: string, unlocked: boolean) => {
-    const { error } = await db().setRecordsUnlocked([id], unlocked);
+    const r = rows.find((x) => x.id === id);
+    if (!r) return;
+    const { error } = await setRecordsLocked(db(), [r], !unlocked);
     if (error) { toast.error(error.message); return; }
-    toast.success(unlocked ? "Unlocked this record. It can be changed until you lock it again." : "Locked again");
+    toast.success(unlocked ? "Unlocked: it can be changed, and is paid by the current rules until you lock it again. Ctrl+Z puts its locked pay back." : "Locked again, with its pay saved as it is now");
     onChanged();
   };
   const { data: shifts = [] } = useShifts();

@@ -2,7 +2,7 @@
 // drizzle/migrations minus auth/RLS/owner columns, so a snapshot moves between
 // the two without translation. Bump SCHEMA_VERSION (here and in the cloud
 // sync functions) whenever a table's columns change.
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 
 /** Tables in foreign-key order: parents first. Deletes run in reverse. */
 export const TABLES = ["employee_field_defs", "shifts", "employees", "pay_rates", "time_records", "pay_adjustments", "payroll_settings"] as const;
@@ -289,5 +289,25 @@ export const LOCAL_MIGRATIONS: string[] = [
   create trigger time_records_undo after insert or update or delete on time_records for each row execute function log_undo();
   create trigger pay_adjustments_undo after insert or update or delete on pay_adjustments for each row execute function log_undo();
   create trigger payroll_settings_undo after insert or update or delete on payroll_settings for each row execute function log_undo();
+  `,
+  /* 12 — a locked record keeps the pay it had when locked */ `
+  -- The record's pay line as worked out when it was locked (regular/overtime hours and pay), so changing overtime
+  -- rules, shift multipliers or rates later doesn't change what a paid day paid. Null while unlocked: then the
+  -- current rules apply. The app saves it on locking and clears it on unlocking (src/lib/pay-freeze.ts).
+  alter table time_records add column frozen_pay jsonb;
+
+  -- As before, plus: the app may always save or clear a record's frozen pay, and switch its unlocked flag.
+  create or replace function refuse_locked() returns trigger language plpgsql as $$
+  declare
+    lim date := (select locked_through from payroll_settings limit 1);
+  begin
+    if lim is null or coalesce(current_setting('meridian.bypass_lock', true), '') = 'on' then return null; end if;
+    if tg_op = 'UPDATE' and (to_jsonb(new) - 'unlocked' - 'frozen_pay') = (to_jsonb(old) - 'unlocked' - 'frozen_pay') then return null; end if;
+    if (tg_op <> 'INSERT' and (to_jsonb(old)->>tg_argv[0])::date <= lim and not coalesce((to_jsonb(old)->>'unlocked')::boolean, false))
+       or (tg_op <> 'DELETE' and (to_jsonb(new)->>tg_argv[0])::date <= lim and not coalesce((to_jsonb(new)->>'unlocked')::boolean, false)) then
+      raise exception 'Days up to % are locked as paid. Unlock them on the Payroll or Time records page to change them.', to_char(lim, 'Dy YYYY-MM-DD');
+    end if;
+    return null;
+  end $$;
   `,
 ];

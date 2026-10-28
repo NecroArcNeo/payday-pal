@@ -167,6 +167,8 @@ function upgrade(s: Partial<Snapshot>): Partial<Snapshot> {
   if (s.schema_version === 9) s = { ...s, schema_version: 10 };
   // 11 only added time_records.unlocked, which restores as its default (locked like its day).
   if (s.schema_version === 10) s = { ...s, schema_version: 11 };
+  // 12 only added time_records.frozen_pay, which restores empty (the day pays by the current rules until locked again).
+  if (s.schema_version === 11) s = { ...s, schema_version: 12 };
   return s;
 }
 

@@ -4,6 +4,7 @@ import { localDb } from "./local";
 import { getPrivateFields, stripPrivate } from "./privacy";
 import { tableColumns, type Row, type Sql, type SqlDb } from "./snapshot";
 import type { TableName } from "./schema";
+import type { FrozenPay } from "@/lib/pay";
 import { localUndo, undoableStore } from "./undo";
 
 type Employee = Tables<"employees">;
@@ -13,6 +14,8 @@ type RecordWithEmp = Tables<"time_records"> & {
 type EditableTable = Exclude<TableName, "payroll_settings">;
 export type SettingsInput = { ot_threshold: number; ot_multiplier: number; weekend_overtime: boolean; visible_columns: string[] };
 type Result = { error: Error | null };
+/** A record's pay to save as it's locked. */
+export type FrozenRow = { id: string; pay: FrozenPay };
 /**
  * Narrows a records list. `employeeIds: []` matches nothing; leave it out to match everyone.
  * `shifts` keeps records on any of those shifts: ones set to one of `ids`, plus ones with no shift of their own whose employee is
@@ -54,10 +57,14 @@ export interface DataStore {
   saveSettings(s: SettingsInput): Promise<Result>;
   /** Replaces the default profile new employees start with. Leaves the other settings alone. */
   saveEmployeeDefaults(d: Record<string, unknown>): Promise<Result>;
-  /** Locks days up to and including `date` as paid (null unlocks everything), and locks again records unlocked one by one. Leaves the other settings alone. */
-  setLockedThrough(date: string | null): Promise<Result>;
-  /** Unlocks records on locked days one by one (or locks them again). */
-  setRecordsUnlocked(ids: string[], unlocked: boolean): Promise<Result>;
+  /**
+   * Locks days up to and including `date` as paid (null unlocks everything), all or nothing: saves `freeze` (the pay of
+   * each record being locked, worked out by src/lib/pay-freeze.ts), locks again records unlocked one by one, and clears
+   * the saved pay of records the lock no longer covers, so the current rules apply to them. Leaves the other settings alone.
+   */
+  setLockedThrough(date: string | null, freeze?: FrozenRow[]): Promise<Result>;
+  /** Unlocks records on locked days one by one, clearing their saved pay; or locks them again, saving `freeze`. */
+  setRecordsUnlocked(ids: string[], unlocked: boolean, freeze?: FrozenRow[]): Promise<Result>;
   /** How many records are unlocked one by one. */
   countUnlockedRecords(): Promise<number>;
 }
@@ -104,6 +111,14 @@ async function insertRows(sql: Sql, table: TableName, rows: Row[], conflictColum
       [JSON.stringify(group)],
     );
   }
+}
+
+async function saveFrozen(sql: Sql, rows: FrozenRow[]) {
+  if (!rows.length) return;
+  await sql.query(
+    "update time_records r set frozen_pay = f.pay from jsonb_to_recordset($1::jsonb) as f(id uuid, pay jsonb) where r.id = f.id",
+    [JSON.stringify(rows)],
+  );
 }
 
 export function createLocalStore(getDb: () => Promise<SqlDb>): DataStore {
@@ -227,20 +242,26 @@ export function createLocalStore(getDb: () => Promise<SqlDb>): DataStore {
         [JSON.stringify(d)],
       );
     }),
-    setLockedThrough: (date) => attempt(async () => {
+    setLockedThrough: (date, freeze = []) => attempt(async () => {
       const db = await getDb();
       await db.transaction(async (tx) => {
+        await saveFrozen(tx, freeze);
         await tx.query(
           `insert into payroll_settings (id, locked_through, updated_at) values (true, $1::date, now())
            on conflict (id) do update set locked_through = excluded.locked_through, updated_at = excluded.updated_at`,
           [date],
         );
         await tx.query("update time_records set unlocked = false where unlocked");
+        await tx.query("update time_records set frozen_pay = null where frozen_pay is not null and ($1::date is null or work_date > $1::date)", [date]);
       });
     }),
-    setRecordsUnlocked: (ids, unlocked) => attempt(async () => {
+    setRecordsUnlocked: (ids, unlocked, freeze = []) => attempt(async () => {
       const db = await getDb();
-      await db.query("update time_records set unlocked = $2 where id = any($1::uuid[]) and unlocked <> $2", [ids, unlocked]);
+      await db.transaction(async (tx) => {
+        if (!unlocked) await saveFrozen(tx, freeze);
+        await tx.query("update time_records set unlocked = $2 where id = any($1::uuid[]) and unlocked <> $2", [ids, unlocked]);
+        if (unlocked) await tx.query("update time_records set frozen_pay = null where id = any($1::uuid[]) and frozen_pay is not null", [ids]);
+      });
     }),
     async countUnlockedRecords() {
       const db = await getDb();
@@ -365,11 +386,29 @@ export const cloudStore: DataStore = {
   removeMany: (table, ids) => wrap(supabase.from(table as "employees").delete().in("id", ids)),
   upsertEmployeesByCode: async (rows) => wrap(supabase.from("employees").upsert((await cloudSafe("employees", rows)) as never, { onConflict: "owner_id,employee_code" })),
   saveSettings: (s) => wrap(supabase.from("payroll_settings").upsert({ ...s, updated_at: new Date().toISOString() } as never, { onConflict: "owner_id" })),
-  setLockedThrough: async (date) => {
+  // One request at a time (no transaction across requests): the pay is saved before the lock, so a failure leaves
+  // nothing locked without its pay.
+  setLockedThrough: async (date, freeze = []) => {
+    for (const f of freeze) {
+      const r = await wrap(supabase.from("time_records").update({ frozen_pay: f.pay as never }).eq("id", f.id));
+      if (r.error) return r;
+    }
     const r = await wrap(supabase.from("payroll_settings").upsert({ locked_through: date, updated_at: new Date().toISOString() } as never, { onConflict: "owner_id" }));
-    return r.error ? r : wrap(supabase.from("time_records").update({ unlocked: false }).eq("unlocked", true));
+    if (r.error) return r;
+    const flags = await wrap(supabase.from("time_records").update({ unlocked: false }).eq("unlocked", true));
+    if (flags.error) return flags;
+    let thaw = supabase.from("time_records").update({ frozen_pay: null }).not("frozen_pay", "is", null);
+    if (date) thaw = thaw.gt("work_date", date);
+    return wrap(thaw);
   },
-  setRecordsUnlocked: (ids, unlocked) => wrap(supabase.from("time_records").update({ unlocked }).in("id", ids)),
+  setRecordsUnlocked: async (ids, unlocked, freeze = []) => {
+    if (!unlocked) for (const f of freeze) {
+      const r = await wrap(supabase.from("time_records").update({ frozen_pay: f.pay as never }).eq("id", f.id));
+      if (r.error) return r;
+    }
+    const r = await wrap(supabase.from("time_records").update({ unlocked }).in("id", ids));
+    return r.error || !unlocked ? r : wrap(supabase.from("time_records").update({ frozen_pay: null }).in("id", ids));
+  },
   countUnlockedRecords: async () => {
     const { count, error } = await supabase.from("time_records").select("id", { count: "exact", head: true }).eq("unlocked", true);
     if (error) throw new Error(error.message);

@@ -4,11 +4,12 @@ import { Lock, LockOpen } from "lucide-react";
 import { btnGhost, btnPrimary } from "@/components/AppShell";
 import { db, storeFor, useDataMode } from "@/lib/db/mode";
 import { askChoice } from "@/lib/choice-prompt";
+import { lockThrough } from "@/lib/pay-freeze";
 import { isWeekend } from "@/lib/pay";
 import { addDays, isoDate, usePayrollSettings, weekday } from "@/lib/payroll";
 
 const WHAT = "Time records, extra pay and pay rates on or before that day can't be added, changed or deleted until you unlock them.";
-const STILL = "Changing overtime rules or shift multipliers would still change how those days are calculated.";
+const STILL = "Their pay is saved as it is now: changing overtime rules, shift multipliers or rates later won't change it. Unlocking pays them by the rules of the day again (Ctrl+Z undoes an unlock).";
 const RELOCK = "Records you unlocked one by one are locked again.";
 
 /** The last Sunday before today: the end of the latest whole Mon–Sun week. */
@@ -35,7 +36,7 @@ export function PayLock({ periodEnd }: { periodEnd?: string | undefined }) {
     qc.invalidateQueries({ queryKey: ["records"] });
   };
   const save = async (date: string | null, done: string) => {
-    const { error } = await db().setLockedThrough(date);
+    const { error } = await lockThrough(db(), date);
     if (error) { toast.error(error.message); return; }
     toast.success(done);
     refresh();
@@ -54,7 +55,7 @@ export function PayLock({ periodEnd }: { periodEnd?: string | undefined }) {
     const answer = await askChoice({
       title: locked ? "Change the lock" : "Lock days as paid",
       detail: locked
-        ? `Days up to ${weekday(locked)} ${locked} are locked as paid. Pick a new last locked day, or unlock everything. Unlocked days can be changed again, which changes what they pay.${unlocked ? ` ${RELOCK}` : ""}`
+        ? `Days up to ${weekday(locked)} ${locked} are locked as paid. Pick a new last locked day, or unlock everything. Days you unlock can be changed again and are paid by the current rules, not their saved pay (Ctrl+Z puts it back); days you lock get their pay saved as it is now.${unlocked ? ` ${RELOCK}` : ""}`
         : `Pick the last day to lock. ${WHAT} ${STILL}`,
       date: { label: "Locked through", value: locked ?? lastSunday(), max: isoDate(new Date()) },
       choices: [

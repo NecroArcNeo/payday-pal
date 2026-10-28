@@ -259,6 +259,7 @@ export type Database = {
           pay_override: number | null
           shift_id: string | null
           unlocked: boolean
+          frozen_pay: Json | null
           note: string | null
           work_date: string
         }
@@ -274,6 +275,7 @@ export type Database = {
           pay_override?: number | null
           shift_id?: string | null
           unlocked?: boolean
+          frozen_pay?: Json | null
           note?: string | null
           work_date: string
         }
@@ -289,6 +291,7 @@ export type Database = {
           pay_override?: number | null
           shift_id?: string | null
           unlocked?: boolean
+          frozen_pay?: Json | null
           note?: string | null
           work_date?: string
         }

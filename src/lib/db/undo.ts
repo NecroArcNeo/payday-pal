@@ -217,8 +217,8 @@ export function undoableStore(store: DataStore, history: UndoHistory): DataStore
     upsertEmployeesByCode: (rows) => r(`imported ${count("employees", rows.length)}`, () => store.upsertEmployeesByCode(rows)),
     saveSettings: (s) => r("changed the payroll settings", () => store.saveSettings(s)),
     saveEmployeeDefaults: (d) => r("changed the new-employee defaults", () => store.saveEmployeeDefaults(d)),
-    setLockedThrough: (date) => r(date ? `locked days through ${date}` : "unlocked every day", () => store.setLockedThrough(date)),
-    setRecordsUnlocked: (ids, unlocked) => r(`${unlocked ? "unlocked" : "locked again"} ${count("time_records", ids.length)}`, () => store.setRecordsUnlocked(ids, unlocked)),
+    setLockedThrough: (date, freeze) => r(date ? `locked days through ${date}` : "unlocked every day", () => store.setLockedThrough(date, freeze)),
+    setRecordsUnlocked: (ids, unlocked, freeze) => r(`${unlocked ? "unlocked" : "locked again"} ${count("time_records", ids.length)}`, () => store.setRecordsUnlocked(ids, unlocked, freeze)),
   };
 }
 

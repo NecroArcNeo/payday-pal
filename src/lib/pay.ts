@@ -17,6 +17,9 @@
 // * A day with manual pay is paid exactly that amount. Its hours still count
 //   toward the week, so they can push later days into overtime; for salaried
 //   employees it replaces that day's share of the week.
+// * A locked day pays what it paid when it was locked (`frozen_pay`, saved by
+//   src/lib/pay-freeze.ts), whatever the rules, multipliers and rates say now.
+//   Its hours still count toward the week, as they always did.
 
 import { rateOn, type RateEntry } from "@/lib/pay-rates";
 
@@ -34,6 +37,8 @@ export type PayRecord = {
   pay_override?: number | string | null;
   /** The shift this day was worked on, when it differs from the employee's. */
   shift_id?: string | null;
+  /** The pay saved when the day was locked (schema 12); null while unlocked. */
+  frozen_pay?: unknown;
 };
 
 /**
@@ -99,8 +104,31 @@ export function splitWeekly(records: PayRecord[], rules: PayRules): Map<string, 
 
 const isManual = (r: PayRecord) => r.pay_override !== null && r.pay_override !== undefined && r.pay_override !== "";
 
-/** Each record's hours and pay. Pass all of one employee's records for the weeks involved. */
+/** A pay line as saved on a locked record: everything but its id. */
+export type FrozenPay = Omit<PayLine, "id">;
+const NUMBERS = ["regular", "overtime", "regPay", "otPay", "pay"] as const;
+const FLAGS = ["weekend", "manual", "salary"] as const;
+export const toFrozen = (l: PayLine): FrozenPay => ({ regular: l.regular, overtime: l.overtime, weekend: l.weekend, manual: l.manual, salary: l.salary, regPay: l.regPay, otPay: l.otPay, pay: l.pay });
+/** The record's saved pay, or null (none, or not a pay line: then it's worked out as usual). */
+export function frozenPay(r: { frozen_pay?: unknown }): FrozenPay | null {
+  const f = r.frozen_pay as Record<string, unknown> | null | undefined;
+  if (!f || typeof f !== "object") return null;
+  if (!NUMBERS.every((k) => typeof f[k] === "number" && Number.isFinite(f[k])) || !FLAGS.every((k) => typeof f[k] === "boolean")) return null;
+  return f as FrozenPay;
+}
+
+/** Each record's hours and pay. Pass all of one employee's records for the weeks involved. Locked records pay their saved pay. */
 export function recordPay(records: PayRecord[], opts: PayOptions): Map<string, PayLine> {
+  const out = livePay(records, opts);
+  for (const r of records) {
+    const f = frozenPay(r);
+    if (f) out.set(r.id, { id: r.id, ...f });
+  }
+  return out;
+}
+
+/** Each record's hours and pay under the current rules, multipliers and rates. */
+export function livePay(records: PayRecord[], opts: PayOptions): Map<string, PayLine> {
   const multiplierOf = (r: PayRecord) => {
     const own = r.shift_id ? opts.shifts?.find((x) => x.id === r.shift_id) : undefined;
     return own ? Number(own.multiplier) : opts.shiftMultiplier;
