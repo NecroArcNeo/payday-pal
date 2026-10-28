@@ -88,7 +88,11 @@ async function prune() {
 
 /** Saves text as a download. Backup files go through saveBackupFile (src/lib/backup-file.ts), which asks for a password first. */
 export function downloadFile(text: string, name: string) {
-  const blob = new Blob([text], { type: "application/json" });
+  downloadBlob(new Blob([text], { type: "application/json" }), name);
+}
+
+/** Saves a file through the browser's (or the desktop app's) download. */
+export function downloadBlob(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;

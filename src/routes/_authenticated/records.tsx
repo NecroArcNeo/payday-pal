@@ -20,7 +20,8 @@ import { describeRecord, sameDayClashes, type Clash } from "@/lib/record-clash";
 import { addDays, computeHours, datesBetween, fullName, isoDate, useEmployees, usePayrollSettings, useShifts, weekday, type Employee, type TimeRecord } from "@/lib/payroll";
 import { shiftFor } from "@/lib/pay";
 import { describeTimes, usualTimes, usualTimesFor, type UsualTimes } from "@/lib/shift-times";
-import { Check, Lock, LockOpen, Pencil, Plus, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, Lock, LockOpen, Pencil, Plus, Trash2, X } from "lucide-react";
+import { usePref } from "@/lib/prefs";
 import { PayLock } from "@/components/PayLock";
 
 /** One shift's times for "Add each shift's usual hours", as typed (break in minutes). */
@@ -60,6 +61,7 @@ function RecordsPage() {
   const [pickQ, setPickQ] = useState<EmployeeFilter>(NO_FILTER);
   const [listQ, setListQ] = useState<EmployeeFilter>(NO_FILTER);
   const [listShifts, setListShifts] = useState<Facet>(ANY);
+  const [order, setOrder] = usePref<"newest" | "oldest">("meridian-records-order", "newest");
   // Resigned employees can't be given new hours, so they aren't offered here (their old records still list below).
   const working = useMemo(() => employees.filter((e) => e.active), [employees]);
   const resigned = employees.length - working.length;
@@ -209,10 +211,10 @@ function RecordsPage() {
   // The shifts the shift filter lets through (excluding some is keeping the rest); undefined when it isn't set.
   const shiftsShown = useMemo(() => (facetActive(listShifts) ? shifts.map((x) => x.id).filter((id) => facetAllows(listShifts, id)) : undefined), [listShifts, shifts]);
   const filter = useMemo<RecordFilter>(() => ({
-    from: from || undefined, to: to || undefined, mode: listMode,
+    from: from || undefined, to: to || undefined, mode: listMode, order,
     employeeIds: isFiltering(listQ) ? employees.filter((e) => matchesEmployee(e, listQ)).map((e) => e.id) : undefined,
     shifts: shiftsShown ? { ids: shiftsShown, employeeIds: employees.filter((e) => shiftsShown.includes(shiftFor(e.shift_id, shifts).id ?? "")).map((e) => e.id) } : undefined,
-  }), [from, to, listMode, listQ, shiftsShown, employees, shifts]);
+  }), [from, to, listMode, order, listQ, shiftsShown, employees, shifts]);
   const filterKey = JSON.stringify(filter);
   // A new filter starts again from the first page, with nothing selected.
   useEffect(() => { setLimit(PAGE); setSelected(new Set()); setBulk(null); }, [filterKey]);
@@ -469,7 +471,11 @@ function RecordsPage() {
       )}
 
       <RecordsLedger
-        title={<>{total} records{page.isFetching && <span className="ml-2 text-xs font-normal text-muted-foreground">loading…</span>}</>}
+        title={<span className="flex items-center gap-3">{total} records
+          <button type="button" onClick={() => setOrder(order === "newest" ? "oldest" : "newest")} className={`${btnGhost} !px-2.5 !py-1 text-xs font-medium`} title="Reverse the order">
+            {order === "newest" ? <ArrowDown className="mr-1 inline h-3.5 w-3.5" /> : <ArrowUp className="mr-1 inline h-3.5 w-3.5" />}{order === "newest" ? "Newest first" : "Oldest first"}
+          </button>
+          {page.isFetching && <span className="text-xs font-normal text-muted-foreground">loading…</span>}</span>}
         rows={rows} total={total} mode={listMode} onModeChange={setListMode} employees={employees}
         selected={selected} onToggle={toggleRow} onToggleAll={toggleAllRows} onChanged={refresh} onDelete={del}
         footer={

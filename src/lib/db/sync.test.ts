@@ -497,6 +497,7 @@ describe("record pages", () => {
     expect(first.total).toBe(30);
     expect(first.rows.map((r) => r.work_date)).toEqual(days.slice(20).reverse());
     expect((await store.listRecordsPage({ mode: "hours" }, 10, 10)).rows[0]!.work_date).toBe("2026-09-20");
+    expect((await store.listRecordsPage({ mode: "hours", order: "oldest" }, 0, 3)).rows.map((r) => r.work_date)).toEqual(days.slice(0, 3));
     expect((await store.listRecordsPage({ mode: "clock" }, 0, 10)).total).toBe(1);
     expect((await store.listRecordsPage({ mode: "hours", from: "2026-09-10", to: "2026-09-19" }, 0, 50)).total).toBe(10);
     expect((await store.listRecordsPage({ mode: "hours", employeeIds: [b!.id] }, 0, 50)).total).toBe(15);

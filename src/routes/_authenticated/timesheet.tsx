@@ -15,7 +15,9 @@ import {
   type Adjustment, type Employee, type FieldDef, type Shift, type TimeRecord,
 } from "@/lib/payroll";
 import { employeePay, shiftFor, weekEnd, weekStart, type PayLine } from "@/lib/pay";
-import { ratesBetween, type RateEntry } from "@/lib/pay-rates";
+import { rateOn, ratesBetween, type RateEntry } from "@/lib/pay-rates";
+import { TimesheetExport } from "@/components/TimesheetExport";
+import { timesheetData } from "@/lib/export/timesheet-export";
 import { Printer } from "lucide-react";
 
 /** Shown in the sheet's heading, so not repeated in the details grid. */
@@ -133,6 +135,10 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
     .filter((r) => r.work_date >= from && r.work_date <= to)
     .sort((a, b) => a.work_date.localeCompare(b.work_date) || (a.clock_in ?? "").localeCompare(b.clock_in ?? ""));
   const extras = adjustments.reduce((s, a) => s + Number(a.amount), 0);
+  const exportData = (per: "record" | "day") => timesheetData({
+    employee: emp, shiftName: shift.name, rates, from, to, today: isoDate(new Date()), lines: lineById, extraPay: extras,
+    records: shown.map((r) => ({ ...r, shiftName: shiftFor(r.shift_id ?? emp.shift_id, shifts).name, rate: rateOn(rateHistory, emp.hourly_rate, r.work_date) })),
+  }, per);
   const lunchHours = shown.reduce((s, r) => s + r.lunch_minutes, 0) / 60;
 
   // Group by Mon–Sun week for subtotals.
@@ -187,7 +193,10 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
               {weekday(from)} {from} – {weekday(to)} {to}
             </div>
           </div>
-          <Link to="/employees/$id" params={{ id: emp.id }} className={`${btnGhost} print:hidden`}>Edit profile</Link>
+          <div className="flex gap-2">
+            <TimesheetExport data={exportData} fileName={`timesheet ${fullName(emp)} ${from} to ${to}`} />
+            <Link to="/employees/$id" params={{ id: emp.id }} className={`${btnGhost} print:hidden`}>Edit profile</Link>
+          </div>
         </div>
         {profileSections(defs).filter((s) => s.fields.some(onSheet) || s.defs.length).map((s) => (
           <div key={s.title}>

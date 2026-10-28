@@ -19,7 +19,9 @@ type Result = { error: Error | null };
  * usually on one (`employeeIds`, worked out by the caller with `shiftFor`, since an employee with no shift is on the first one).
  * Excluding shifts is the same as keeping the rest, so the caller passes the shifts left.
  */
-export type RecordFilter = { from?: string | undefined; to?: string | undefined; mode?: "clock" | "hours" | undefined; employeeIds?: string[] | undefined; shifts?: { ids: string[]; employeeIds: string[] } | undefined };
+export type RecordFilter = { from?: string | undefined; to?: string | undefined; mode?: "clock" | "hours" | undefined; employeeIds?: string[] | undefined; shifts?: { ids: string[]; employeeIds: string[] } | undefined;
+  /** Which records a page starts with (listRecordsPage only). Newest by default. */
+  order?: "newest" | "oldest" | undefined };
 export type RecordKey = Pick<Tables<"time_records">, "employee_id" | "work_date" | "entry_mode" | "clock_in" | "clock_out" | "hours">;
 const RECORD_KEY_COLUMNS = "employee_id, work_date, entry_mode, clock_in, clock_out, hours";
 
@@ -33,7 +35,7 @@ export interface DataStore {
   listAdjustments(from?: string, to?: string): Promise<Tables<"pay_adjustments">[]>;
   /** Every employee's pay rate history, oldest first. */
   listPayRates(): Promise<Tables<"pay_rates">[]>;
-  /** One page of records matching the filter, newest first, plus how many match in total. */
+  /** One page of records matching the filter, newest first (or oldest, per `filter.order`), plus how many match in total. */
   listRecordsPage(filter: RecordFilter, offset: number, limit: number): Promise<{ rows: RecordWithEmp[]; total: number }>;
   /** Every record matching the filter (no cap), for "edit all". */
   listRecordsMatching(filter: RecordFilter): Promise<Tables<"time_records">[]>;
@@ -125,12 +127,13 @@ export function createLocalStore(getDb: () => Promise<SqlDb>): DataStore {
     },
     async listRecordsPage(filter, offset, limit) {
       const db = await getDb();
+      const dir = filter.order === "oldest" ? "asc" : "desc";
       return db.transaction(async (tx) => {
         const { rows } = await tx.query<RecordWithEmp>(
           `select r.*, case when e.id is null then null else jsonb_build_object(
               'first_name', e.first_name, 'last_name', e.last_name, 'employee_code', e.employee_code, 'hourly_rate', e.hourly_rate) end as employees
            from time_records r left join employees e on e.id = r.employee_id
-           where ${RECORD_WHERE} order by r.work_date desc, r.created_at desc, r.id limit $7 offset $8`,
+           where ${RECORD_WHERE} order by r.work_date ${dir}, r.created_at ${dir}, r.id limit $7 offset $8`,
           [...recordParams(filter), limit, offset],
         );
         const { rows: n } = await tx.query<{ n: number }>(`select count(*)::int as n from time_records r where ${RECORD_WHERE}`, recordParams(filter));
@@ -301,7 +304,8 @@ export const cloudStore: DataStore = {
   },
   async listRecordsPage(filter, offset, limit) {
     const q = filterRecords(supabase.from("time_records").select("*, employees(first_name,last_name,employee_code,hourly_rate)", { count: "exact" }), filter);
-    const { data, error, count } = await q.order("work_date", { ascending: false }).order("created_at", { ascending: false }).order("id").range(offset, offset + limit - 1);
+    const ascending = filter.order === "oldest";
+    const { data, error, count } = await q.order("work_date", { ascending }).order("created_at", { ascending }).order("id").range(offset, offset + limit - 1);
     if (error) throw new Error(error.message);
     return { rows: (data ?? []) as RecordWithEmp[], total: count ?? 0 };
   },

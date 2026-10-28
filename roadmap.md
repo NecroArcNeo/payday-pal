@@ -26,7 +26,7 @@
 - [ ] Optional: auto-update for the desktop app (GitHub Releases); code signing only if handing it to people outside a trusted circle
 - [ ] Optional: app password/lock; payroll CSV exports are plain files (no ID numbers, but names and pay)
 - [ ] Optional: speed — memoize table rows (opening an edit with 500 rows is slow on old PCs); check PGlite updates (0.5.12+)
-- [ ] Timesheet export with selectable templates (started, interrupted)
+- [x] Timesheet export with selectable templates (done Oct 28, 2026: your own Excel templates)
 
 ## Shifts (Oct 27, 2026)
 - [x] Shifts have optional usual hours (start, end, break) on Payroll → Customize → Shifts (schema 8; cloud migration `0011_shift_default_times.sql`)
@@ -43,3 +43,10 @@
 - [x] Lock paid periods (schema 10, cloud migration `0013_lock_paid_days.sql`): Payroll page → "Lock through <period end>"; records, extra pay and pay rates on or before it can't be added, changed or deleted (the database refuses) until "Change lock…" moves or removes it. Overtime rules and shift multipliers aren't frozen (noted in the dialog); a later idea: store each paid period's totals
 - [x] Undo / redo (Ctrl+Z, Ctrl+Shift+Z / Ctrl+Y, and buttons in the header): every change to this device's data this session, each action as one step
 - [x] Lock bar on the Time records page too; click a locked record to unlock just it, or select several and unlock them (schema 11, cloud migration `0014_unlock_records.sql`); moving the lock locks them again
+
+## Requested Oct 28, 2026
+- [x] Time records: undo/redo, unlock single records, lock bar (see above)
+- [x] Time records: bolder column headers that stay at the top while scrolling
+- [x] Time records: newest first / oldest first
+- [x] Timesheet export: plain Excel or CSV, or the user's own Excel template (upload it, click where each value goes; the file's look is kept). Templates are kept on this device only
+- [ ] Look into whether a sudden shutdown can damage the desktop database (a test copy hard-killed ~30 times failed to open)
