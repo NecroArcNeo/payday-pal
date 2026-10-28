@@ -11,10 +11,11 @@ import { customKey } from "@/lib/db/privacy";
 import { formatBreak, useBreakUnit, type BreakUnit } from "@/lib/breaks";
 import { profileSections } from "@/lib/employee-fields";
 import {
-  addDays, currentWeek, fullName, isoDate, money, useAdjustments, useAllRecords, useEmployees, useFieldDefs, usePayrollSettings, useShifts, weekday,
+  addDays, currentWeek, fullName, isoDate, money, useAdjustments, useAllRecords, useEmployees, useFieldDefs, usePayRates, usePayrollSettings, useShifts, weekday,
   type Adjustment, type Employee, type FieldDef, type Shift, type TimeRecord,
 } from "@/lib/payroll";
 import { employeePay, shiftFor, weekEnd, weekStart, type PayLine } from "@/lib/pay";
+import { ratesBetween, type RateEntry } from "@/lib/pay-rates";
 import { Printer } from "lucide-react";
 
 /** Shown in the sheet's heading, so not repeated in the details grid. */
@@ -61,6 +62,7 @@ function TimesheetPage() {
   const set = (patch: Search) => navigate({ search: (s) => ({ ...s, ...patch }), replace: true });
 
   const { data: employees = [] } = useEmployees();
+  const { data: rateHistory } = usePayRates();
   const { data: shifts = [] } = useShifts();
   const { data: defs = [] } = useFieldDefs();
   const { data: settings } = usePayrollSettings();
@@ -107,23 +109,25 @@ function TimesheetPage() {
         <Sheet emp={emp} from={from} to={to} loading={isLoading}
           records={records.filter((r) => r.employee_id === emp.id)}
           adjustments={adjustments.filter((a) => a.employee_id === emp.id)}
-          shifts={shifts} defs={defs}
+          shifts={shifts} defs={defs} rateHistory={rateHistory?.get(emp.id)}
           rules={{ threshold: settings?.ot_threshold ?? 40, otMultiplier: settings?.ot_multiplier ?? 1.5, weekendOvertime: settings?.weekend_overtime ?? true }} />
       )}
     </AppShell>
   );
 }
 
-function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loading }: {
-  emp: Employee; from: string; to: string; records: TimeRecord[]; loading: boolean;
+function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loading, rateHistory }: {
+  emp: Employee; from: string; to: string; records: TimeRecord[]; loading: boolean; rateHistory: RateEntry[] | undefined;
   adjustments: Adjustment[]; shifts: Shift[]; defs: FieldDef[];
   rules: { threshold: number; otMultiplier: number; weekendOvertime: boolean };
 }) {
   const shift = shiftFor(emp.shift_id, shifts);
   const [breakUnit] = useBreakUnit();
-  const rate = Number(emp.hourly_rate);
+  // Every rate paid in the period, oldest first; the latest for the shift and salary notes.
+  const rates = ratesBetween(rateHistory, emp.hourly_rate, from, to);
+  const rate = rates.at(-1)!;
   const salary = emp.pay_type === "salary";
-  const pay = employeePay(records, { rate, shiftMultiplier: shift.multiplier, rules, payType: emp.pay_type, shifts, from, to });
+  const pay = employeePay(records, { rate: Number(emp.hourly_rate), rates: rateHistory, shiftMultiplier: shift.multiplier, rules, payType: emp.pay_type, shifts, from, to });
   const lineById = new Map(pay.lines.map((l) => [l.id, l]));
   const shown = records
     .filter((r) => r.work_date >= from && r.work_date <= to)
@@ -154,7 +158,7 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
   const fieldValue = (k: string, type?: string) => {
     const v = (emp as Record<string, unknown>)[k];
     if (v === null || v === undefined || v === "") return "";
-    return type === "number" && k === "hourly_rate" ? money(Number(v)) : String(v);
+    return type === "number" && k === "hourly_rate" ? rates.map(money).join(" → ") : String(v);
   };
 
   const th = "px-3 py-3 font-medium whitespace-nowrap";

@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell, StatCard, btnPrimary } from "@/components/AppShell";
 import { RecordsTable } from "@/components/RecordsTable";
-import { currentWeek, fullName, money, useAllRecords, useEmployees, usePayrollSettings, useRecords, useShifts } from "@/lib/payroll";
+import { currentWeek, fullName, money, useAllRecords, useEmployees, usePayRates, usePayrollSettings, useRecords, useShifts } from "@/lib/payroll";
 import { employeePay, shiftFor } from "@/lib/pay";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
@@ -12,6 +12,7 @@ export const Route = createFileRoute("/_authenticated/dashboard")({
 function Dashboard() {
   const week = currentWeek();
   const { data: employees = [] } = useEmployees();
+  const { data: rateHistory } = usePayRates();
   const { data: records = [] } = useRecords(week.from, week.to);
   const { data: all = [] } = useAllRecords(week.from, week.to);
   const { data: shifts = [] } = useShifts();
@@ -26,7 +27,7 @@ function Dashboard() {
   for (const e of employees) {
     const recs = all.filter((r) => r.employee_id === e.id);
     if (!recs.length) continue;
-    const p = employeePay(recs, { rate: Number(e.hourly_rate), shiftMultiplier: shiftFor(e.shift_id, shifts).multiplier, rules, payType: e.pay_type, shifts, from: week.from, to: week.to });
+    const p = employeePay(recs, { rate: Number(e.hourly_rate), rates: rateHistory?.get(e.id), shiftMultiplier: shiftFor(e.shift_id, shifts).multiplier, rules, payType: e.pay_type, shifts, from: week.from, to: week.to });
     byEmp.set(e.id, { name: fullName(e), hours: p.regular + p.overtime, pay: p.total });
   }
   const gross = [...byEmp.values()].reduce((s, x) => s + x.pay, 0);

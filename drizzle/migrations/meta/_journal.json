@@ -85,6 +85,13 @@
       "when": 1793558400000,
       "tag": "0011_shift_default_times",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1793644800000,
+      "tag": "0012_pay_rates",
+      "breakpoints": true
     }
   ]
 }

@@ -5,9 +5,11 @@ import { PGlite, types } from "@electric-sql/pglite";
 import { beforeEach, describe, expect, it } from "vitest";
 import { migrate } from "./local";
 import { LOCAL_MIGRATIONS, SCHEMA_VERSION } from "./schema";
-import { countRows, describeDiff, diffCounts, exportSnapshot, replaceWithSnapshot, validateSnapshot, type Snapshot } from "./snapshot";
+import { countRows, describeDiff, diffCounts, exportSnapshot, isEmpty, replaceWithSnapshot, validateSnapshot, type Snapshot } from "./snapshot";
 import { createLocalStore } from "./store";
 import { deviceIdentity, maybeAutoBackup, pull, push, restoreSnapshot, setDeviceName, setPrivateFields, SyncConflictError, type CloudSync, type SyncDeps } from "./sync";
+import { payByRecord } from "../pay";
+import { SINCE_START } from "../pay-rates";
 import { customKey, getPrivateFields, ID_NUMBERS, privateFieldsConfirmed, redactSnapshot, stripPrivate } from "./privacy";
 
 const parsers = { [types.NUMERIC]: (v: string) => Number(v), [types.DATE]: (v: string) => v, [types.TIMESTAMPTZ]: (v: string) => v };
@@ -41,6 +43,7 @@ const applySyncMigration = async (cloud: PGlite) => {
   await cloud.exec(migration("0009_record_shift.sql"));
   await cloud.exec(migration("0010_push_device.sql"));
   await cloud.exec(migration("0011_shift_default_times.sql"));
+  await cloud.exec(migration("0012_pay_rates.sql"));
 };
 
 function cloudAs(db: PGlite, uid: string): CloudSync {
@@ -307,6 +310,86 @@ describe("shift default times (schema 8)", () => {
     const fresh = await newLocal();
     await replaceWithSnapshot(fresh, validateSnapshot(v7));
     expect((await createLocalStore(async () => fresh).listShifts()).map((x) => x.default_clock_in)).toEqual([null, null]);
+  });
+});
+
+describe("pay rate history (schema 9)", () => {
+  const ratesOf = async (db: PGlite, id: string) =>
+    (await db.query<{ effective_from: string; hourly_rate: number }>("select effective_from::text, hourly_rate::float8 as hourly_rate from pay_rates where employee_id = $1 order by effective_from", [id])).rows;
+  const today = async (db: PGlite) => (await db.query<{ d: string }>("select current_date::text as d")).rows[0]!.d;
+
+  it("keeps the old rate for earlier days whenever a rate changes, however it's changed", async () => {
+    const db = await newLocal();
+    const { store, emp } = await seed(db, "E1");
+    expect(await ratesOf(db, emp.id)).toEqual([]);
+    // Saving a profile without changing the rate adds nothing.
+    expect((await store.update("employees", emp.id, { first_name: "Ada" })).error).toBeNull();
+    expect(await ratesOf(db, emp.id)).toEqual([]);
+    // A plain rate change (as bulk edit or an import makes) keeps 20 for every earlier day and starts 25 today.
+    expect((await store.update("employees", emp.id, { hourly_rate: 25 })).error).toBeNull();
+    const d = await today(db);
+    expect(await ratesOf(db, emp.id)).toEqual([{ effective_from: SINCE_START, hourly_rate: 20 }, { effective_from: d, hourly_rate: 25 }]);
+    // Changing it again the same day replaces today's entry.
+    expect((await store.updateMany("employees", [{ id: emp.id, patch: { hourly_rate: 26 } }] as never)).error).toBeNull();
+    expect(await ratesOf(db, emp.id)).toEqual([{ effective_from: SINCE_START, hourly_rate: 20 }, { effective_from: d, hourly_rate: 26 }]);
+  });
+
+  it("leaves a change the app already dated alone", async () => {
+    const db = await newLocal();
+    const { store, emp } = await seed(db, "E1");
+    // What the profile does for "from Oct 20": keep the old rate, add the dated one, then set the current rate.
+    expect((await store.insert("pay_rates", [{ employee_id: emp.id, effective_from: SINCE_START, hourly_rate: 20 }, { employee_id: emp.id, effective_from: "2026-10-20", hourly_rate: 22 }])).error).toBeNull();
+    expect((await store.update("employees", emp.id, { hourly_rate: 22 })).error).toBeNull();
+    expect(await ratesOf(db, emp.id)).toEqual([{ effective_from: SINCE_START, hourly_rate: 20 }, { effective_from: "2026-10-20", hourly_rate: 22 }]);
+    // Each day pays its own rate: Oct 19 at 20, Oct 20 at 22.
+    const recs = await store.listRecordsMatching({ employeeIds: [emp.id] });
+    const rates = new Map([[emp.id, await store.listPayRates()]]);
+    const pay = payByRecord(recs, [{ ...emp, hourly_rate: 22 }], await store.listShifts(), { threshold: 40, otMultiplier: 1.5, weekendOvertime: true }, rates);
+    expect(recs.map((r) => [r.work_date, pay.get(r.id)!.pay]).sort()).toEqual([["2026-10-19", 8 * 20], ["2026-10-20", 6.5 * 22]]);
+  });
+
+  it("deletes an employee's rates with them, and restores and syncs them", async () => {
+    const db = await newLocal();
+    const { store, emp } = await seed(db, "E1");
+    await store.update("employees", emp.id, { hourly_rate: 25 });
+    const snap = await exportSnapshot(db);
+    expect(snap.data.pay_rates).toHaveLength(2);
+
+    const fresh = await newLocal();
+    await replaceWithSnapshot(fresh, snap);
+    expect(await ratesOf(fresh, emp.id)).toHaveLength(2);
+
+    const cloud = await newCloud();
+    await applySyncMigration(cloud);
+    const remote = cloudAs(cloud, A);
+    await remote.push(snap, 0, ELSEWHERE);
+    expect((await remote.pull()).snapshot.data.pay_rates).toHaveLength(2);
+
+    expect((await store.remove("employees", emp.id)).error).toBeNull();
+    expect(await ratesOf(db, emp.id)).toEqual([]);
+  });
+
+  it("keeps the old rate in the cloud too, when edited there directly", async () => {
+    const cloud = await newCloud();
+    await applySyncMigration(cloud);
+    await cloud.query("select set_config('test.uid', $1, false)", [A]);
+    await cloud.exec(`insert into auth.users (id) values ('${A}') on conflict do nothing`);
+    const { rows } = await cloud.query<{ id: string }>("insert into public.employees (owner_id, employee_code, first_name, last_name, hourly_rate) values ($1, 'E1', 'Ada', 'L', 20) returning id", [A]);
+    await cloud.query("update public.employees set hourly_rate = 25 where id = $1", [rows[0]!.id]);
+    const { rows: r } = await cloud.query<{ effective_from: string; hourly_rate: number }>("select effective_from::text, hourly_rate::float8 as hourly_rate from public.pay_rates order by effective_from");
+    expect(r.map((x) => x.hourly_rate)).toEqual([20, 25]);
+    expect(r[0]!.effective_from).toBe(SINCE_START);
+  });
+
+  it("restores a schema 8 backup with no rate history", async () => {
+    const db = await newLocal();
+    await seed(db, "E1");
+    const v8 = structuredClone(await exportSnapshot(db)) as unknown as { schema_version: number; data: Record<string, unknown> };
+    v8.schema_version = 8;
+    delete v8.data["pay_rates"];
+    const fresh = await newLocal();
+    await replaceWithSnapshot(fresh, validateSnapshot(v8));
+    expect(await createLocalStore(async () => fresh).listPayRates()).toEqual([]);
   });
 });
 
@@ -823,6 +906,9 @@ describe("restore and automatic backups", () => {
     expect(saved[0]!.schema_version).toBe(1);
     expect(saved[0]!.data.employees.map((e) => e["employee_code"])).toEqual(["OLD"]);
     expect("shifts" in saved[0]!.data).toBe(false);
+    // Saving it counts tables it doesn't have yet as empty (backups.ts counts every backup's rows).
+    expect(countRows(saved[0]!)).toMatchObject({ employees: 1, shifts: 0, pay_rates: 0 });
+    expect(isEmpty(saved[0]!)).toBe(false);
     // And that backup still restores into the current version.
     const fresh = await newLocal();
     await replaceWithSnapshot(fresh, validateSnapshot(structuredClone(saved[0])));
@@ -831,6 +917,24 @@ describe("restore and automatic backups", () => {
     await migrate(db, async (s) => { saved.push(s); });
     await migrate(new PGlite({ parsers }), async (s) => { saved.push(s); });
     expect(saved).toHaveLength(1);
+  });
+
+  it("backs up a schema 8 database before adding the rate history table", async () => {
+    const db = new PGlite({ parsers });
+    await db.exec(`set time zone 'UTC'; create table _migrations (version integer primary key, applied_at timestamptz not null default now())`);
+    for (let v = 1; v <= 8; v++) await db.transaction(async (tx) => { await tx.exec(LOCAL_MIGRATIONS[v - 1]!); await tx.query("insert into _migrations (version) values ($1)", [v]); });
+    await db.exec(`insert into employees (employee_code, first_name, last_name, hourly_rate) values ('OLD', 'Old', 'Timer', 21)`);
+    const saved: Snapshot[] = [];
+    await migrate(db, async (s) => { saved.push(s); countRows(s); });
+    expect(saved[0]!.schema_version).toBe(8);
+    expect("pay_rates" in saved[0]!.data).toBe(false);
+    expect(countRows(saved[0]!).pay_rates).toBe(0);
+    // Updated, and the old rate is kept when it changes.
+    await db.exec(`update employees set hourly_rate = 25`);
+    expect((await db.query<{ n: number }>("select count(*)::int as n from pay_rates")).rows[0]!.n).toBe(2);
+    const fresh = await newLocal();
+    await replaceWithSnapshot(fresh, validateSnapshot(structuredClone(saved[0])));
+    expect((await createLocalStore(async () => fresh).listEmployees()).map((e) => e.employee_code)).toEqual(["OLD"]);
   });
 
   it("keeps the schema version equal to the number of local migrations (pre-update backups rely on it)", () => {

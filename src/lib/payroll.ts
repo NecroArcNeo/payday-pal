@@ -35,6 +35,22 @@ export function useEmployees() {
   return useQuery({ queryKey: ["employees", mode], queryFn: () => storeFor(mode).listEmployees() });
 }
 
+/**
+ * Each employee's pay rate history (src/lib/pay-rates.ts), by employee id. Keyed under "employees" because a rate
+ * change on an employee adds history (a database trigger), so refreshing employees refreshes this too.
+ */
+export function usePayRates() {
+  const mode = useDataMode();
+  return useQuery({
+    queryKey: ["employees", "rates", mode],
+    queryFn: async () => {
+      const m = new Map<string, Tables<"pay_rates">[]>();
+      for (const r of await storeFor(mode).listPayRates()) m.set(r.employee_id, [...(m.get(r.employee_id) ?? []), r]);
+      return m;
+    },
+  });
+}
+
 export function useRecords(from?: string, to?: string) {
   const mode = useDataMode();
   return useQuery({ queryKey: ["records", from, to, mode], queryFn: () => storeFor(mode).listRecords(from, to) });
@@ -149,6 +165,7 @@ export function useRecordPay(rows: Pick<TimeRecord, "work_date">[]): Map<string,
   const { data: employees } = useEmployees();
   const { data: shifts } = useShifts();
   const { data: settings } = usePayrollSettings();
+  const { data: rates } = usePayRates();
   let first = "", last = "";
   for (const r of rows) {
     if (!first || r.work_date < first) first = r.work_date;
@@ -162,8 +179,8 @@ export function useRecordPay(rows: Pick<TimeRecord, "work_date">[]): Map<string,
     placeholderData: keepPreviousData,
   });
   return useMemo(() => {
-    if (!context || !employees || !shifts || !settings) return undefined;
+    if (!context || !employees || !shifts || !settings || !rates) return undefined;
     const rules = { threshold: settings.ot_threshold, otMultiplier: settings.ot_multiplier, weekendOvertime: settings.weekend_overtime };
-    return payByRecord(context, employees, shifts, rules);
-  }, [context, employees, shifts, settings]);
+    return payByRecord(context, employees, shifts, rules, rates);
+  }, [context, employees, shifts, settings, rates]);
 }

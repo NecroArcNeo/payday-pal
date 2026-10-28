@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { fullName, money, useEmployees, useRecordPay, useShifts, weekday, type RecordWithEmp } from "@/lib/payroll";
+import { fullName, money, useEmployees, usePayRates, useRecordPay, useShifts, weekday, type RecordWithEmp } from "@/lib/payroll";
+import { rateOn } from "@/lib/pay-rates";
 import { RecordPayCells, RecordPayHeaders, RecordShiftCell } from "@/components/RecordPay";
 import { BreakHeader, BreakUnitToggle } from "@/components/BreakField";
 import { DataTable } from "./DataTable";
@@ -11,6 +12,7 @@ export function RecordsTable({ records, title = "Time records", onDelete, showNa
   const [mode, setMode] = useState<"clock" | "hours">("clock");
   const rows = records.filter((r) => r.entry_mode === mode);
   const pay = useRecordPay(records);
+  const { data: rateHistory } = usePayRates();
   const { data: shifts = [] } = useShifts();
   const [breakUnit] = useBreakUnit();
   const { data: employees = [] } = useEmployees();
@@ -62,7 +64,8 @@ export function RecordsTable({ records, title = "Time records", onDelete, showNa
               </tr>
             )}
             {rows.map((r) => {
-              const rate = Number(r.employees?.hourly_rate ?? 0);
+              // The rate in force that day, so a later raise doesn't change what an old day shows.
+              const rate = rateOn(rateHistory?.get(r.employee_id), r.employees?.hourly_rate ?? 0, r.work_date);
               return (
                 <tr key={r.id} className="border-b border-border last:border-0 hover:bg-secondary">
                   {showName && <td className="px-5 py-3 font-body">{r.employees ? fullName(r.employees) : "—"}</td>}

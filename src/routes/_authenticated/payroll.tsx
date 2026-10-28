@@ -8,10 +8,11 @@ import { EmployeePicker, SearchInput } from "@/components/EmployeeSearch";
 import { DataTable } from "@/components/DataTable";
 import { describeEmployeeFilter, isFiltering, matchesEmployee, NO_FILTER, type EmployeeFilter } from "@/lib/employee-search";
 import {
-  currentWeek, fullName, money, useAdjustments, useAllRecords, useEmployees, useFieldDefs, usePayrollSettings, useShifts,
+  currentWeek, fullName, money, useAdjustments, useAllRecords, useEmployees, useFieldDefs, usePayRates, usePayrollSettings, useShifts,
   type Employee, type Shift,
 } from "@/lib/payroll";
 import { employeePay, shiftFor, weekEnd, weekStart } from "@/lib/pay";
+import { ratesBetween } from "@/lib/pay-rates";
 import { formatValue } from "@/lib/field-types";
 import { labelOf, useLabels } from "@/lib/labels";
 import { customKey } from "@/lib/db/privacy";
@@ -51,6 +52,7 @@ function PayrollPage() {
   const { data: records = [] } = useAllRecords(isDate(from) ? weekStart(from) : from, isDate(to) ? weekEnd(to) : to);
   const { data: shifts = [] } = useShifts();
   const { data: employees = [] } = useEmployees();
+  const { data: rateHistory } = usePayRates();
   const { data: adjustments = [] } = useAdjustments(from, to);
   const { data: defs = [] } = useFieldDefs();
   const { data: settings } = usePayrollSettings();
@@ -78,13 +80,16 @@ function PayrollPage() {
   const list = employees
     .filter((e) => empIds.has(e.id))
     .map((e) => {
-      const rate = Number(e.hourly_rate);
+      const history = rateHistory?.get(e.id);
+      // Every rate paid in the period, oldest first (more than one when it changed partway through).
+      const rates = ratesBetween(history, e.hourly_rate, from, to);
+      const rate = rates.at(-1)!;
       const shift = shiftFor(e.shift_id, shifts);
-      const p = employeePay(byEmp.get(e.id) ?? [], { rate, shiftMultiplier: shift.multiplier, rules, payType: e.pay_type, shifts, from, to });
+      const p = employeePay(byEmp.get(e.id) ?? [], { rate: Number(e.hourly_rate), rates: history, shiftMultiplier: shift.multiplier, rules, payType: e.pay_type, shifts, from, to });
       const extras: Record<string, number> = {};
       for (const a of adjustments) if (a.employee_id === e.id) extras[a.category] = (extras[a.category] ?? 0) + Number(a.amount);
       const extraTotal = Object.values(extras).reduce((s, n) => s + n, 0);
-      return { e, shift, rate, ...p, extras, gross: p.total + extraTotal };
+      return { e, shift, rate, rates, ...p, extras, gross: p.total + extraTotal };
     })
     .sort((a, b) => fullName(a.e).localeCompare(fullName(b.e)));
 
@@ -98,7 +103,7 @@ function PayrollPage() {
       ...(showDays ? [labelOf("days", "Days")] : []), ...(showRate ? [labelOf("hourly_rate", "Rate")] : []),
       labelOf("reg_hrs", "Regular hours"), labelOf("ot_hrs", "Overtime hours"), "Weekend hours", labelOf("reg_pay", "Regular pay"), labelOf("ot_pay", "Overtime pay"),
       labelOf("manual_pay", "Manual day pay"), ...categories.map((c) => labelOf(`extra:${c}`, c)), labelOf("gross_pay", "Gross pay")];
-    const body = list.map((r) => [fullName(r.e), ...infoCols.map((c) => c.get(r.e)), r.e.pay_type === "salary" ? "Salary" : "Hourly", r.shift.name, r.shift.multiplier, ...(showDays ? [r.days] : []), ...(showRate ? [r.rate.toFixed(2)] : []),
+    const body = list.map((r) => [fullName(r.e), ...infoCols.map((c) => c.get(r.e)), r.e.pay_type === "salary" ? "Salary" : "Hourly", r.shift.name, r.shift.multiplier, ...(showDays ? [r.days] : []), ...(showRate ? [r.rates.map((x) => x.toFixed(2)).join(" → ")] : []),
       r.regular.toFixed(2), r.overtime.toFixed(2), r.weekendHours.toFixed(2), r.regPay.toFixed(2), r.otPay.toFixed(2), r.manualPay.toFixed(2),
       ...categories.map((c) => (r.extras[c] ?? 0).toFixed(2)), r.gross.toFixed(2)]);
     const csv = [head, ...body].map((l) => l.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
@@ -175,7 +180,7 @@ function PayrollPage() {
                   {infoCols.map((c) => <td key={c.key} className="px-3 py-3 font-body">{c.get(r.e) || "—"}</td>)}
                   {showDays && <td className="px-3 py-3 text-right">{r.days}</td>}
                   {showShift && <td className="px-3 py-3 font-body">{r.shift.name}{r.shift.multiplier !== 1 && <span className="text-muted-foreground"> ×{r.shift.multiplier}</span>}</td>}
-                  {showRate && <td className="px-3 py-3 text-right">{money(r.rate)}{r.shift.multiplier !== 1 && <div className="text-[11px] text-muted-foreground">{money(r.rate * r.shift.multiplier)} on shift</div>}</td>}
+                  {showRate && <td className="px-3 py-3 text-right" title={r.rates.length > 1 ? "The rate changed during this period; each day is paid at the rate in force that day." : undefined}>{r.rates.map(money).join(" → ")}{r.shift.multiplier !== 1 && <div className="text-[11px] text-muted-foreground">{r.rates.map((x) => money(x * r.shift.multiplier)).join(" → ")} on shift</div>}</td>}
                   <td className="px-3 py-3 text-right">{r.regular.toFixed(2)}</td>
                   <td className="px-3 py-3 text-right">{r.overtime.toFixed(2)}</td>
                   <td className="px-3 py-3 text-right">{money(r.regPay)}</td>

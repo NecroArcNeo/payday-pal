@@ -176,8 +176,8 @@ function RecordsPage() {
           ...(all ? [] : [{ id: "skip", label: `Skip ${clashes.length === 1 ? "that one" : "those"}, add the rest`, primary: true }]),
         ],
       });
-      if (answer === null || answer === "cancel") return;
-      if (answer === "skip") {
+      if (!answer || answer.id === "cancel") return;
+      if (answer.id === "skip") {
         const clash = new Set(clashes.map((c) => `${c.employee_id}|${c.work_date}`));
         rows = rows.filter((r) => !clash.has(`${r.employee_id}|${r.work_date}`));
       }

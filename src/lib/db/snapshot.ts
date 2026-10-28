@@ -24,8 +24,9 @@ export type Snapshot = {
 
 export type SnapshotCounts = Record<TableName, number>;
 
+/** A pre-update backup (exportSnapshot with an older schema) has no rows for tables added since, so those count 0. */
 export function countRows(s: Snapshot): SnapshotCounts {
-  return Object.fromEntries(TABLES.map((t) => [t, s.data[t].length])) as SnapshotCounts;
+  return Object.fromEntries(TABLES.map((t) => [t, (s.data[t] ?? []).length])) as SnapshotCounts;
 }
 
 /** The shifts every new database starts with. On their own they aren't data anyone entered. */
@@ -35,7 +36,7 @@ const onlyDefaultShifts = (rows: Row[]) =>
 
 /** True when nothing has been entered: no rows anywhere, apart from the untouched default shifts. */
 export function isEmpty(s: Snapshot) {
-  return TABLES.every((t) => s.data[t].length === 0 || (t === "shifts" && onlyDefaultShifts(s.data[t])));
+  return TABLES.every((t) => !s.data[t]?.length || (t === "shifts" && onlyDefaultShifts(s.data[t])));
 }
 
 export function describeCounts(c: SnapshotCounts) {
@@ -72,7 +73,7 @@ export function diffCounts(a: Snapshot, b: Snapshot): SnapshotCounts {
 
 const DIFF_NAMES: Record<TableName, [string, string]> = {
   employee_field_defs: ["category", "categories"], shifts: ["shift", "shifts"], employees: ["employee", "employees"],
-  time_records: ["time record", "time records"], pay_adjustments: ["extra-pay entry", "extra-pay entries"], payroll_settings: ["", ""],
+  pay_rates: ["pay rate change", "pay rate changes"], time_records: ["time record", "time records"], pay_adjustments: ["extra-pay entry", "extra-pay entries"], payroll_settings: ["", ""],
 };
 /** "2 employees, 40 time records and the payroll settings", or null when nothing differs. */
 export function describeDiff(c: SnapshotCounts): string | null {
@@ -158,6 +159,10 @@ function upgrade(s: Partial<Snapshot>): Partial<Snapshot> {
   if (s.schema_version === 6) s = { ...s, schema_version: 7 };
   // 8 only added shifts' default times, which restore empty.
   if (s.schema_version === 7) s = { ...s, schema_version: 8 };
+  // 9 added pay rate history: none yet, so every day pays the employee's rate, as it did.
+  if (s.schema_version === 8 && s.data && typeof s.data === "object") {
+    s = { ...s, schema_version: 9, data: { ...(s.data as Record<string, unknown>), pay_rates: [] } as unknown as Snapshot["data"] };
+  }
   return s;
 }
 

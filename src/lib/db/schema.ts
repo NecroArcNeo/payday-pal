@@ -2,10 +2,10 @@
 // drizzle/migrations minus auth/RLS/owner columns, so a snapshot moves between
 // the two without translation. Bump SCHEMA_VERSION (here and in the cloud
 // sync functions) whenever a table's columns change.
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 /** Tables in foreign-key order: parents first. Deletes run in reverse. */
-export const TABLES = ["employee_field_defs", "shifts", "employees", "time_records", "pay_adjustments", "payroll_settings"] as const;
+export const TABLES = ["employee_field_defs", "shifts", "employees", "pay_rates", "time_records", "pay_adjustments", "payroll_settings"] as const;
 export type TableName = (typeof TABLES)[number];
 
 /** Each entry runs once, in order, inside a transaction. Never edit a shipped entry — append a new one. */
@@ -151,5 +151,35 @@ export const LOCAL_MIGRATIONS: string[] = [
     add column default_clock_in time,
     add column default_clock_out time,
     add column default_lunch_minutes integer check (default_lunch_minutes between 0 and 600);
+  `,
+  /* 9 — pay rate history, so a raise doesn't change what past days paid */ `
+  -- "From this day, this rate." A day is paid at the latest rate starting on or before it; days before the first entry
+  -- at the first entry's rate. An employee with no entries is paid employees.hourly_rate every day, which is also
+  -- always the latest entry's rate (entries can't start after today).
+  create table pay_rates (
+    id uuid primary key default gen_random_uuid(),
+    employee_id uuid not null references employees(id) on delete cascade,
+    effective_from date not null,
+    hourly_rate numeric(10,2) not null check (hourly_rate >= 0),
+    created_at timestamptz not null default now(),
+    unique (employee_id, effective_from)
+  );
+  create trigger pay_rates_seq after insert or update or delete on pay_rates for each statement execute function bump_change_seq();
+
+  -- However a rate is changed (profile, bulk edit, import), the old one is kept for the days before: the first
+  -- change keeps the old rate for every earlier day, and a change the app didn't already date starts today.
+  create function record_rate_change() returns trigger language plpgsql as $$
+  begin
+    if new.hourly_rate is not distinct from old.hourly_rate then return null; end if;
+    insert into pay_rates (employee_id, effective_from, hourly_rate)
+      select old.id, date '0001-01-01', old.hourly_rate
+      where not exists (select 1 from pay_rates where employee_id = old.id);
+    if (select hourly_rate from pay_rates where employee_id = new.id order by effective_from desc limit 1) is distinct from new.hourly_rate then
+      insert into pay_rates (employee_id, effective_from, hourly_rate) values (new.id, current_date, new.hourly_rate)
+        on conflict (employee_id, effective_from) do update set hourly_rate = excluded.hourly_rate;
+    end if;
+    return null;
+  end $$;
+  create trigger employees_rate_history after update of hourly_rate on employees for each row execute function record_rate_change();
   `,
 ];

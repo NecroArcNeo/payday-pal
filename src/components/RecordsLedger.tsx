@@ -5,7 +5,8 @@ import { db } from "@/lib/db/mode";
 import { btnGhost, inputCls } from "@/components/AppShell";
 import { EmployeePicker } from "@/components/EmployeeSearch";
 import { RECORD_PAY_COLUMNS, RecordPayCells, RecordPayHeaders, RecordShiftCell, RecordShiftSelect } from "@/components/RecordPay";
-import { computeHours, fullName, money, useRecordPay, useShifts, weekday, type Employee, type RecordWithEmp, type Shift } from "@/lib/payroll";
+import { computeHours, fullName, money, usePayRates, useRecordPay, useShifts, weekday, type Employee, type RecordWithEmp, type Shift } from "@/lib/payroll";
+import { rateOn } from "@/lib/pay-rates";
 import { shiftFor } from "@/lib/pay";
 import { BreakHeader, BreakInput, BreakUnitToggle } from "@/components/BreakField";
 import { DataTable } from "./DataTable";
@@ -24,6 +25,7 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
   const allPicked = rows.length > 0 && rows.every((r) => selected.has(r.id));
   const cols = (mode === "clock" ? 11 : 8) + RECORD_PAY_COLUMNS;
   const pay = useRecordPay(rows);
+  const { data: rateHistory } = usePayRates();
   const { data: shifts = [] } = useShifts();
   const [breakUnit] = useBreakUnit();
   const empById = new Map(employees.map((e) => [e.id, e]));
@@ -88,7 +90,7 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
                   </>
                 )}
                 <td className="px-3 py-3 text-right">{Number(r.hours).toFixed(2)}</td>
-                <td className="px-3 py-3 text-right">{money(Number(r.employees?.hourly_rate ?? 0))}</td>
+                <td className="px-3 py-3 text-right">{money(rateOn(rateHistory?.get(r.employee_id), r.employees?.hourly_rate ?? 0, r.work_date))}</td>
                 <RecordPayCells line={pay?.get(r.id)} />
                 <td className="px-3 py-3 font-body text-xs text-muted-foreground">{r.note}</td>
                 <td className="pl-3 pr-6">

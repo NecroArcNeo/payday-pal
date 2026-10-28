@@ -12,7 +12,9 @@ import { DataTable } from "@/components/DataTable";
 import { EmailLink } from "@/components/EmailLink";
 import { CategoryInput } from "@/components/ProfileCategories";
 import { codeTakenMessage, employeeWithCode, friendlySaveError } from "@/lib/employee-code";
-import { fullName, money, useEmployeeDefaults, useEmployees, useFieldDefs, usePrivateFields, useShifts, type Employee, type FieldDef, type Shift } from "@/lib/payroll";
+import { planRateChange, type RatePlan } from "@/lib/pay-rates";
+import { askRateDate, writeRateHistory } from "@/lib/rate-change";
+import { fullName, money, useEmployeeDefaults, useEmployees, useFieldDefs, usePayRates, usePrivateFields, useShifts, type Employee, type FieldDef, type Shift } from "@/lib/payroll";
 import { NO_DEFAULTS, withDefaults } from "@/lib/employee-fields";
 import { PAY_TYPES, shiftFor } from "@/lib/pay";
 import { describeEmployeeFilter, isFiltering, NO_FILTER, searchEmployees, type EmployeeFilter } from "@/lib/employee-search";
@@ -253,6 +255,7 @@ function BulkEditPanel({ employees, defs, shifts, onClose, onDone }: { employees
   const [on, setOn] = useState<Record<string, boolean>>({});
   const [vals, setVals] = useState<Record<string, string>>({});
   const [rateMode, setRateMode] = useState<RateMode>("set");
+  const { data: rateHistory } = usePayRates();
   const [active, setActive] = useState(true);
   const [shiftId, setShiftId] = useState(shifts[0]?.id ?? "");
   const [payType, setPayType] = useState("hourly");
@@ -285,10 +288,20 @@ function BulkEditPanel({ employees, defs, shifts, onClose, onDone }: { employees
       const bad = employees.find((e) => newRate(e) < 0 || newRate(e) > 10000);
       if (bad) { toast.error(`That would make ${fullName(bad)}'s rate ${money(newRate(bad))}. Rates must be between $0 and $10,000.`); return; }
     }
+    // New rates: ask from which day, and keep everyone's old rate for the days before.
+    const ratePlans = new Map<string, RatePlan>();
+    if (on["rate"]) {
+      const changed = employees.filter((e) => newRate(e) !== Number(e.hourly_rate));
+      if (changed.length) {
+        const when = await askRateDate(`New hourly rate for ${changed.length} employee${changed.length === 1 ? "" : "s"}`, "their current rates", null);
+        if (!when) return;
+        for (const e of changed) ratePlans.set(e.id, planRateChange(rateHistory?.get(e.id) ?? [], Number(e.hourly_rate), newRate(e), when));
+      }
+    }
     const rows = employees.map((e) => {
       const patch: Record<string, unknown> = {};
       for (const f of fields) if (on[f.key]) patch[f.key] = val(f.key).trim().slice(0, f.max) || null;
-      if (on["rate"]) patch["hourly_rate"] = newRate(e);
+      if (on["rate"]) patch["hourly_rate"] = ratePlans.get(e.id)?.current ?? newRate(e);
       if (on["active"]) patch["active"] = active;
       if (on["shift"]) patch["shift_id"] = shiftId;
       if (on["pay_type"]) patch["pay_type"] = payType;
@@ -307,6 +320,10 @@ function BulkEditPanel({ employees, defs, shifts, onClose, onDone }: { employees
     setBusy(true);
     try {
       await backupBefore("bulk-edit");
+      for (const [id, plan] of ratePlans) {
+        const err = await writeRateHistory(id, plan);
+        if (err) { toast.error(`Stopped partway: ${err}. A backup was saved in Sync & backup.`); onDone(); return; }
+      }
       const { error, updated } = await db().updateMany("employees", rows as never);
       if (error) { toast.error(error.message); if (updated) onDone(); return; }
       toast.success(`Updated ${updated} employee${updated === 1 ? "" : "s"}. A backup was saved in Sync & backup.`);

@@ -181,6 +181,38 @@ export type Database = {
           },
         ]
       }
+      pay_rates: {
+        Row: {
+          created_at: string
+          effective_from: string
+          employee_id: string
+          hourly_rate: number
+          id: string
+        }
+        Insert: {
+          created_at?: string
+          effective_from: string
+          employee_id: string
+          hourly_rate: number
+          id?: string
+        }
+        Update: {
+          created_at?: string
+          effective_from?: string
+          employee_id?: string
+          hourly_rate?: number
+          id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pay_rates_employee_id_fkey"
+            columns: ["employee_id"]
+            isOneToOne: false
+            referencedRelation: "employees"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       payroll_settings: {
         Row: {
           employee_defaults: Json

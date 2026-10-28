@@ -35,3 +35,10 @@
 - [x] Time records list can be filtered by shift (records set to it, plus ones on the employee's usual shift)
 - [x] Department, position and shift filters are checklists: tick several to include any of them, or press Exclude to leave some out; typing `-word` in a search leaves out anyone it matches
 - [x] Each shift's times in "Add each shift's usual hours" can be changed before adding (for an unusual day); "Back to usual" undoes it, and they reset after Add
+
+## Requested Oct 27, 2026 (evening)
+- [x] Employee IDs can't repeat (any upper/lower case); the add form says who already has it as you type
+- [x] Adding a record for someone who already has one that day asks first: Cancel / Add anyway / Skip those, add the rest
+- [x] Pay rate history (schema 9, cloud migration `0012_pay_rates.sql`): changing a rate asks "from which day" (or "fix a typo"); earlier days keep the old rate on Payroll, Timesheet, Dashboard and record tables; history listed on the profile. A database trigger keeps old rates even for bulk edits, imports and cloud edits (those start "today")
+- [ ] Lock paid periods (records before a date can't be changed until unlocked)
+- [ ] Undo / redo (Ctrl+Z, Ctrl+Shift+Z / Ctrl+Y)

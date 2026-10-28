@@ -30,6 +30,8 @@ export interface DataStore {
   listFieldDefs(): Promise<Tables<"employee_field_defs">[]>;
   listShifts(): Promise<Tables<"shifts">[]>;
   listAdjustments(from?: string, to?: string): Promise<Tables<"pay_adjustments">[]>;
+  /** Every employee's pay rate history, oldest first. */
+  listPayRates(): Promise<Tables<"pay_rates">[]>;
   /** One page of records matching the filter, newest first, plus how many match in total. */
   listRecordsPage(filter: RecordFilter, offset: number, limit: number): Promise<{ rows: RecordWithEmp[]; total: number }>;
   /** Every record matching the filter (no cap), for "edit all". */
@@ -147,6 +149,10 @@ export function createLocalStore(getDb: () => Promise<SqlDb>): DataStore {
          order by pay_date desc`,
         [from ?? null, to ?? null],
       )).rows;
+    },
+    async listPayRates() {
+      const db = await getDb();
+      return (await db.query<Tables<"pay_rates">>("select * from pay_rates order by employee_id, effective_from")).rows;
     },
     async listRecordKeys(from, to) {
       const db = await getDb();
@@ -292,6 +298,14 @@ export const cloudStore: DataStore = {
     if (from) q = q.gte("pay_date", from);
     if (to) q = q.lte("pay_date", to);
     return check(await q);
+  },
+  async listPayRates() {
+    const out: Tables<"pay_rates">[] = [];
+    for (let start = 0; ; start += 1000) {
+      const page = check(await supabase.from("pay_rates").select("*").order("employee_id").order("effective_from").range(start, start + 999)) as Tables<"pay_rates">[];
+      out.push(...page);
+      if (page.length < 1000) return out;
+    }
   },
   async listRecordKeys(from, to) {
     // The API returns at most 1000 rows per request, so page through.
