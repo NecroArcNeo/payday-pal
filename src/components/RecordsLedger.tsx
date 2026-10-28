@@ -55,9 +55,9 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
         </div>
       </div>
       <div className="overflow-x-auto">
-        <DataTable id="records" className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
+        <DataTable id="records" className="w-full text-sm" stickyHeader>
+          <thead className="grid-head">
+            <tr className="font-mono text-[11px] uppercase tracking-[0.12em]">
               <th className="w-10 pl-5"><input type="checkbox" aria-label="Select all loaded" checked={allPicked} onChange={onToggleAll} disabled={!rows.length} /></th>
               <th className="px-3 py-3 text-left font-medium"><EditableLabel k="employee" name="Employee" /></th>
               <th className="px-3 py-3 text-left font-medium"><EditableLabel k="date" name="Date" /></th>

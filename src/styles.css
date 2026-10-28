@@ -149,6 +149,15 @@
     border-right: 1px solid color-mix(in oklab, var(--muted-foreground) 22%, transparent);
   }
   .data-grid.is-sized { table-layout: fixed; }
+  /* A header that stands out: opaque (so it can float over rows), tinted, darker text, a firm line under it. */
+  .grid-head { position: relative; z-index: 1; }
+  .grid-head th {
+    background: color-mix(in oklab, var(--primary) 13%, var(--background));
+    color: var(--foreground);
+    font-weight: 600;
+    border-bottom: 2px solid color-mix(in oklab, var(--primary) 50%, transparent);
+  }
+  .grid-head.is-floating th { box-shadow: 0 8px 14px -8px rgb(0 0 0 / 0.45); }
   .data-grid.is-sized th,
   .data-grid.is-sized td { overflow: hidden; text-overflow: ellipsis; }
 }

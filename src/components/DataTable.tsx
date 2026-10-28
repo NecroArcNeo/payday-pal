@@ -14,6 +14,8 @@ import { getPref, setPref } from "@/lib/prefs";
 // Only dragged widths are saved; space left over in the panel goes to the last column.
 // Dragged widths are remembered on this device per table (keyed by a header's
 // data-col, its label's alias key, or its text); row heights last until the rows change.
+// With `stickyHeader`, the header row follows the page down while the table is in view (moved with a
+// transform, since the panel's horizontal scrolling rules out position: sticky), stopping at the top of the window.
 
 const EDGE = 5;
 const MIN_W = 36;
@@ -65,7 +67,7 @@ function contentWidth(cell: HTMLTableCellElement) {
   return Math.ceil(right - left + parseFloat(s.paddingLeft) + parseFloat(s.paddingRight) + parseFloat(s.borderRightWidth));
 }
 
-export function DataTable({ id, className = "", children }: { id: string; className?: string; children: ReactNode }) {
+export function DataTable({ id, className = "", stickyHeader = false, children }: { id: string; className?: string; stickyHeader?: boolean; children: ReactNode }) {
   const ref = useRef<HTMLTableElement>(null);
   // v2: widths saved before autofit stopped saving its own growth are dropped.
   const prefKey = `meridian-col-widths:v2:${id}`;
@@ -207,8 +209,29 @@ export function DataTable({ id, className = "", children }: { id: string; classN
       setPref(prefKey, saved);
       apply();
     };
+    // Keeps the header row in sight: just under the app's (sticky) header, never past the table's last row.
+    let frame = 0;
+    const float = () => {
+      frame = 0;
+      const head = table.tHead;
+      if (!head || !stickyHeader) return;
+      // Under the app's header while it shows, else at the top of the window.
+      const top = Math.max(0, document.querySelector("main > header")?.getBoundingClientRect().bottom ?? 0);
+      const box = table.getBoundingClientRect();
+      const shift = Math.round(Math.max(0, Math.min(top - box.top, box.height - head.getBoundingClientRect().height * 2)));
+      const t = shift ? `translateY(${shift}px)` : "";
+      if (head.style.transform !== t) head.style.transform = t;
+      head.classList.toggle("is-floating", shift > 0);
+    };
+    const onScroll = () => { if (!frame) frame = requestAnimationFrame(float); };
+    if (stickyHeader) {
+      window.addEventListener("scroll", onScroll, { capture: true, passive: true });
+      window.addEventListener("resize", onScroll);
+      float();
+    }
+
     // The leftover space given to the last column depends on the panel's width (no measuring needed).
-    const resize = new ResizeObserver(() => { if (!drag) apply(); });
+    const resize = new ResizeObserver(() => { if (!drag) apply(); onScroll(); });
     if (table.parentElement) resize.observe(table.parentElement);
 
     table.addEventListener("pointermove", onHover);
@@ -220,6 +243,9 @@ export function DataTable({ id, className = "", children }: { id: string; classN
     table.addEventListener("dblclick", onDouble);
     return () => {
       alive = false;
+      cancelAnimationFrame(frame);
+      window.removeEventListener("scroll", onScroll, { capture: true });
+      window.removeEventListener("resize", onScroll);
       changed.disconnect();
       resize.disconnect();
       table.removeEventListener("pointermove", onHover);
@@ -230,7 +256,7 @@ export function DataTable({ id, className = "", children }: { id: string; classN
       table.removeEventListener("click", onClick, true);
       table.removeEventListener("dblclick", onDouble);
     };
-  }, [prefKey]);
+  }, [prefKey, stickyHeader]);
 
   return <table ref={ref} className={`data-grid ${className}`}>{children}</table>;
 }
