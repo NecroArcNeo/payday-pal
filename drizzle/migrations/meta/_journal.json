@@ -92,6 +92,13 @@
       "when": 1793644800000,
       "tag": "0012_pay_rates",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1793731200000,
+      "tag": "0013_lock_paid_days",
+      "breakpoints": true
     }
   ]
 }

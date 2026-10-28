@@ -2,7 +2,7 @@
 // drizzle/migrations minus auth/RLS/owner columns, so a snapshot moves between
 // the two without translation. Bump SCHEMA_VERSION (here and in the cloud
 // sync functions) whenever a table's columns change.
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 /** Tables in foreign-key order: parents first. Deletes run in reverse. */
 export const TABLES = ["employee_field_defs", "shifts", "employees", "pay_rates", "time_records", "pay_adjustments", "payroll_settings"] as const;
@@ -181,5 +181,59 @@ export const LOCAL_MIGRATIONS: string[] = [
     return null;
   end $$;
   create trigger employees_rate_history after update of hourly_rate on employees for each row execute function record_rate_change();
+  `,
+  /* 10 — lock paid days: nothing on or before payroll_settings.locked_through can be added, changed or deleted */ `
+  alter table payroll_settings add column locked_through date;
+
+  -- Refuses a write touching a locked day. tg_argv[0] is the row's date column. Restores replace everything
+  -- (settings first), so they never meet a lock; the setting meridian.bypass_lock lets a trigger write what changes no paid day.
+  create function refuse_locked() returns trigger language plpgsql as $$
+  declare
+    lim date := (select locked_through from payroll_settings limit 1);
+  begin
+    if lim is null or coalesce(current_setting('meridian.bypass_lock', true), '') = 'on' then return null; end if;
+    if (tg_op <> 'INSERT' and (to_jsonb(old)->>tg_argv[0])::date <= lim) or (tg_op <> 'DELETE' and (to_jsonb(new)->>tg_argv[0])::date <= lim) then
+      raise exception 'Days up to % are locked as paid. Unlock them on the Payroll page to change them.', to_char(lim, 'Dy YYYY-MM-DD');
+    end if;
+    return null;
+  end $$;
+  create trigger time_records_lock after insert or update or delete on time_records for each row execute function refuse_locked('work_date');
+  create trigger pay_adjustments_lock after insert or update or delete on pay_adjustments for each row execute function refuse_locked('pay_date');
+
+  -- A rate entry starting on or before the lock changes what locked days paid, except the first change of a rate
+  -- keeping the current one "since the start" (rate unchanged for every locked day).
+  create function refuse_locked_rate() returns trigger language plpgsql as $$
+  declare
+    lim date := (select locked_through from payroll_settings limit 1);
+  begin
+    if lim is null or coalesce(current_setting('meridian.bypass_lock', true), '') = 'on' then return null; end if;
+    if tg_op = 'INSERT' and new.effective_from = date '0001-01-01'
+       and new.hourly_rate = (select hourly_rate from employees where id = new.employee_id)
+       and not exists (select 1 from pay_rates where employee_id = new.employee_id and id <> new.id) then return null; end if;
+    if (tg_op <> 'INSERT' and old.effective_from <= lim) or (tg_op <> 'DELETE' and new.effective_from <= lim) then
+      raise exception 'Days up to % are locked as paid, so their pay rate can''t change. Unlock them on the Payroll page first.', to_char(lim, 'Dy YYYY-MM-DD');
+    end if;
+    return null;
+  end $$;
+  create trigger pay_rates_lock after insert or update or delete on pay_rates for each row execute function refuse_locked_rate();
+
+  -- The rate trigger keeps the old rate "since the start" after the employee row already has the new one, which the
+  -- check above can't tell apart from a real change, so it writes that entry with the lock bypassed.
+  create or replace function record_rate_change() returns trigger language plpgsql as $$
+  declare
+    was text := coalesce(current_setting('meridian.bypass_lock', true), '');
+  begin
+    if new.hourly_rate is not distinct from old.hourly_rate then return null; end if;
+    perform set_config('meridian.bypass_lock', 'on', true);
+    insert into pay_rates (employee_id, effective_from, hourly_rate)
+      select old.id, date '0001-01-01', old.hourly_rate
+      where not exists (select 1 from pay_rates where employee_id = old.id);
+    perform set_config('meridian.bypass_lock', was, true);
+    if (select hourly_rate from pay_rates where employee_id = new.id order by effective_from desc limit 1) is distinct from new.hourly_rate then
+      insert into pay_rates (employee_id, effective_from, hourly_rate) values (new.id, current_date, new.hourly_rate)
+        on conflict (employee_id, effective_from) do update set hourly_rate = excluded.hourly_rate;
+    end if;
+    return null;
+  end $$;
   `,
 ];

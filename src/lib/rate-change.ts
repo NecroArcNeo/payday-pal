@@ -24,10 +24,13 @@ export async function askRateDate(summary: string, oldRates: string, history: St
   return answer.id === "correct" ? "correct" : { from: answer.date };
 }
 
-/** Writes a plan's history entries for one employee. Set the employee's rate to `plan.current` afterwards. */
+/**
+ * Writes a plan's history entries for one employee. Set the employee's rate to `plan.current` afterwards.
+ * One at a time: the lock check lets the "since the start" entry through only while it's the employee's only one.
+ */
 export async function writeRateHistory(employeeId: string, plan: RatePlan): Promise<string | null> {
-  if (plan.insert.length) {
-    const { error } = await db().insert("pay_rates", plan.insert.map((r) => ({ employee_id: employeeId, ...r })));
+  for (const r of plan.insert) {
+    const { error } = await db().insert("pay_rates", { employee_id: employeeId, ...r });
     if (error) return error.message;
   }
   for (const u of plan.update) {

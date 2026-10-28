@@ -216,6 +216,7 @@ export type Database = {
       payroll_settings: {
         Row: {
           employee_defaults: Json
+          locked_through: string | null
           id: boolean
           ot_multiplier: number
           ot_threshold: number
@@ -225,6 +226,7 @@ export type Database = {
         }
         Insert: {
           employee_defaults?: Json
+          locked_through?: string | null
           id?: boolean
           ot_multiplier?: number
           ot_threshold?: number
@@ -234,6 +236,7 @@ export type Database = {
         }
         Update: {
           employee_defaults?: Json
+          locked_through?: string | null
           id?: boolean
           ot_multiplier?: number
           ot_threshold?: number

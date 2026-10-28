@@ -118,7 +118,8 @@ export function useAdjustments(from?: string, to?: string) {
   return useQuery({ queryKey: ["adjustments", from, to, mode], queryFn: () => storeFor(mode).listAdjustments(from, to) });
 }
 
-export const defaultSettings = { ot_threshold: 40, ot_multiplier: 1.5, weekend_overtime: true, visible_columns: ["employee_code", "days"] };
+/** `locked_through`: days up to and including this date are locked as paid (null = nothing locked). */
+export const defaultSettings = { ot_threshold: 40, ot_multiplier: 1.5, weekend_overtime: true, visible_columns: ["employee_code", "days"], locked_through: null as string | null };
 
 /** The default profile new employees start with (see `withDefaults`). */
 export function useEmployeeDefaults() {
@@ -136,7 +137,7 @@ export function usePayrollSettings() {
     queryFn: async () => {
       const data = await storeFor(mode).getSettings();
       return data
-        ? { ot_threshold: Number(data.ot_threshold), ot_multiplier: Number(data.ot_multiplier), weekend_overtime: data.weekend_overtime ?? true, visible_columns: data.visible_columns }
+        ? { ot_threshold: Number(data.ot_threshold), ot_multiplier: Number(data.ot_multiplier), weekend_overtime: data.weekend_overtime ?? true, visible_columns: data.visible_columns, locked_through: data.locked_through ?? null }
         : defaultSettings;
     },
   });

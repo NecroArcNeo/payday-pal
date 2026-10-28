@@ -13,6 +13,7 @@ import {
 } from "@/lib/payroll";
 import { employeePay, shiftFor, weekEnd, weekStart } from "@/lib/pay";
 import { ratesBetween } from "@/lib/pay-rates";
+import { PayLock } from "@/components/PayLock";
 import { formatValue } from "@/lib/field-types";
 import { labelOf, useLabels } from "@/lib/labels";
 import { customKey } from "@/lib/db/privacy";
@@ -127,6 +128,7 @@ function PayrollPage() {
         <span className="text-muted-foreground">→</span>
         <input type="date" className={`${inputCls} max-w-[11rem]`} value={to} onChange={(e) => setTo(e.target.value)} />
       </div>
+      {to && <PayLock periodEnd={to} />}
 
       {showSettings && settings && (
         <>

@@ -51,6 +51,8 @@ export interface DataStore {
   saveSettings(s: SettingsInput): Promise<Result>;
   /** Replaces the default profile new employees start with. Leaves the other settings alone. */
   saveEmployeeDefaults(d: Record<string, unknown>): Promise<Result>;
+  /** Locks days up to and including `date` as paid (null unlocks everything). Leaves the other settings alone. */
+  setLockedThrough(date: string | null): Promise<Result>;
 }
 
 /** The cap the pages have always used for record lists. */
@@ -217,6 +219,14 @@ export function createLocalStore(getDb: () => Promise<SqlDb>): DataStore {
         [JSON.stringify(d)],
       );
     }),
+    setLockedThrough: (date) => attempt(async () => {
+      const db = await getDb();
+      await db.query(
+        `insert into payroll_settings (id, locked_through, updated_at) values (true, $1::date, now())
+         on conflict (id) do update set locked_through = excluded.locked_through, updated_at = excluded.updated_at`,
+        [date],
+      );
+    }),
   };
 }
 
@@ -335,5 +345,6 @@ export const cloudStore: DataStore = {
   removeMany: (table, ids) => wrap(supabase.from(table as "employees").delete().in("id", ids)),
   upsertEmployeesByCode: async (rows) => wrap(supabase.from("employees").upsert((await cloudSafe("employees", rows)) as never, { onConflict: "owner_id,employee_code" })),
   saveSettings: (s) => wrap(supabase.from("payroll_settings").upsert({ ...s, updated_at: new Date().toISOString() } as never, { onConflict: "owner_id" })),
+  setLockedThrough: (date) => wrap(supabase.from("payroll_settings").upsert({ locked_through: date, updated_at: new Date().toISOString() } as never, { onConflict: "owner_id" })),
   saveEmployeeDefaults: async (d) => wrap(supabase.from("payroll_settings").upsert({ employee_defaults: stripPrivate(d as Row, await getPrivateFields(await localDb()), "delete"), updated_at: new Date().toISOString() } as never, { onConflict: "owner_id" })),
 };

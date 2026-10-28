@@ -163,6 +163,8 @@ function upgrade(s: Partial<Snapshot>): Partial<Snapshot> {
   if (s.schema_version === 8 && s.data && typeof s.data === "object") {
     s = { ...s, schema_version: 9, data: { ...(s.data as Record<string, unknown>), pay_rates: [] } as unknown as Snapshot["data"] };
   }
+  // 10 only added payroll_settings.locked_through, which restores empty (nothing locked).
+  if (s.schema_version === 9) s = { ...s, schema_version: 10 };
   return s;
 }
 

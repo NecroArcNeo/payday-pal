@@ -17,7 +17,7 @@ import { ANY, describeEmployeeFilter, describeFacet, facetActive, facetAllows, i
 import { FacetFilter } from "@/components/FacetFilter";
 import { askChoice } from "@/lib/choice-prompt";
 import { describeRecord, sameDayClashes, type Clash } from "@/lib/record-clash";
-import { addDays, computeHours, datesBetween, fullName, isoDate, useEmployees, useShifts, weekday, type Employee, type TimeRecord } from "@/lib/payroll";
+import { addDays, computeHours, datesBetween, fullName, isoDate, useEmployees, usePayrollSettings, useShifts, weekday, type Employee, type TimeRecord } from "@/lib/payroll";
 import { shiftFor } from "@/lib/pay";
 import { describeTimes, usualTimes, usualTimesFor, type UsualTimes } from "@/lib/shift-times";
 import { Check, Pencil, Plus, Trash2, X } from "lucide-react";
@@ -49,6 +49,7 @@ function RecordsPage() {
 
   const [mode, setMode] = useState<"clock" | "hours">("clock");
   const { data: shifts = [] } = useShifts();
+  const { data: settings } = usePayrollSettings();
   const [f, setF] = useState({ work_date: isoDate(new Date()), until: "", skip_weekends: false, clock_in: "09:00", clock_out: "17:00", lunch_minutes: "30", hours: "8", pay: "", shift_id: "" });
   const [breakUnit] = useBreakUnit();
   // An optional end date adds the same entry for every day in the range.
@@ -133,6 +134,8 @@ function RecordsPage() {
     if (rangeBad) { toast.error("The end date is before the start date"); return; }
     if (days.length === 0) { toast.error(f.skip_weekends ? "That range only has weekend days" : "Pick a date"); return; }
     if (days.length > 366) { toast.error("Pick a range of at most a year"); return; }
+    const lockedThrough = settings?.locked_through;
+    if (lockedThrough && days[0]! <= lockedThrough) { toast.error(`Days up to ${weekday(lockedThrough)} ${lockedThrough} are locked as paid. Pick a later date, or unlock them on the Payroll page.`); return; }
     const lunch = Number(f.lunch_minutes);
     const hours = Number(f.hours);
     // With each shift's hours, the times come from the list below the form instead of the form's cells.

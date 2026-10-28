@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { toast } from "sonner";
-import { Check, Pencil, Trash2, X } from "lucide-react";
+import { Check, Lock, Pencil, Trash2, X } from "lucide-react";
 import { db } from "@/lib/db/mode";
 import { btnGhost, inputCls } from "@/components/AppShell";
 import { EmployeePicker } from "@/components/EmployeeSearch";
 import { RECORD_PAY_COLUMNS, RecordPayCells, RecordPayHeaders, RecordShiftCell, RecordShiftSelect } from "@/components/RecordPay";
-import { computeHours, fullName, money, usePayRates, useRecordPay, useShifts, weekday, type Employee, type RecordWithEmp, type Shift } from "@/lib/payroll";
+import { computeHours, fullName, money, usePayRates, usePayrollSettings, useRecordPay, useShifts, weekday, type Employee, type RecordWithEmp, type Shift } from "@/lib/payroll";
 import { rateOn } from "@/lib/pay-rates";
 import { shiftFor } from "@/lib/pay";
 import { BreakHeader, BreakInput, BreakUnitToggle } from "@/components/BreakField";
@@ -26,6 +26,8 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
   const cols = (mode === "clock" ? 11 : 8) + RECORD_PAY_COLUMNS;
   const pay = useRecordPay(rows);
   const { data: rateHistory } = usePayRates();
+  // Days locked as paid can't change (the database refuses), so their rows offer no edit or delete.
+  const lockedThrough = usePayrollSettings().data?.locked_through ?? null;
   const { data: shifts = [] } = useShifts();
   const [breakUnit] = useBreakUnit();
   const empById = new Map(employees.map((e) => [e.id, e]));
@@ -95,8 +97,14 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
                 <td className="px-3 py-3 font-body text-xs text-muted-foreground">{r.note}</td>
                 <td className="pl-3 pr-6">
                   <div className="flex justify-end gap-3.5 text-muted-foreground">
-                    <button onClick={() => setEditing(r.id)} aria-label="Edit record"><Pencil className="h-4 w-4 hover:text-foreground" /></button>
-                    <button onClick={() => onDelete(r.id)} aria-label="Delete record"><Trash2 className="h-4 w-4 hover:text-destructive" /></button>
+                    {lockedThrough && r.work_date <= lockedThrough ? (
+                      <span title={`Locked as paid (days up to ${lockedThrough}). Unlock it on the Payroll page to change it.`} aria-label="Locked as paid"><Lock className="h-4 w-4" /></span>
+                    ) : (
+                      <>
+                        <button onClick={() => setEditing(r.id)} aria-label="Edit record"><Pencil className="h-4 w-4 hover:text-foreground" /></button>
+                        <button onClick={() => onDelete(r.id)} aria-label="Delete record"><Trash2 className="h-4 w-4 hover:text-destructive" /></button>
+                      </>
+                    )}
                   </div>
                 </td>
               </tr>

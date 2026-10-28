@@ -9,7 +9,7 @@ import { countRows, describeDiff, diffCounts, exportSnapshot, isEmpty, replaceWi
 import { createLocalStore } from "./store";
 import { deviceIdentity, maybeAutoBackup, pull, push, restoreSnapshot, setDeviceName, setPrivateFields, SyncConflictError, type CloudSync, type SyncDeps } from "./sync";
 import { payByRecord } from "../pay";
-import { SINCE_START } from "../pay-rates";
+import { planRateChange, SINCE_START } from "../pay-rates";
 import { customKey, getPrivateFields, ID_NUMBERS, privateFieldsConfirmed, redactSnapshot, stripPrivate } from "./privacy";
 
 const parsers = { [types.NUMERIC]: (v: string) => Number(v), [types.DATE]: (v: string) => v, [types.TIMESTAMPTZ]: (v: string) => v };
@@ -44,6 +44,7 @@ const applySyncMigration = async (cloud: PGlite) => {
   await cloud.exec(migration("0010_push_device.sql"));
   await cloud.exec(migration("0011_shift_default_times.sql"));
   await cloud.exec(migration("0012_pay_rates.sql"));
+  await cloud.exec(migration("0013_lock_paid_days.sql"));
 };
 
 function cloudAs(db: PGlite, uid: string): CloudSync {
@@ -390,6 +391,74 @@ describe("pay rate history (schema 9)", () => {
     const fresh = await newLocal();
     await replaceWithSnapshot(fresh, validateSnapshot(v8));
     expect(await createLocalStore(async () => fresh).listPayRates()).toEqual([]);
+  });
+});
+
+describe("locked paid days (schema 10)", () => {
+  // seed() adds records on Oct 19 and 20.
+  it("refuses adding, changing or deleting records and extra pay on or before the lock, and allows after", async () => {
+    const db = await newLocal();
+    const { store, emp } = await seed(db, "E1");
+    expect((await store.setLockedThrough("2026-10-19")).error).toBeNull();
+    const [oct20, oct19] = await store.listRecordsMatching({ employeeIds: [emp.id] });
+    expect(oct19!.work_date).toBe("2026-10-19");
+    expect((await store.update("time_records", oct19!.id, { note: "x" })).error?.message).toMatch(/locked as paid/);
+    expect((await store.remove("time_records", oct19!.id)).error?.message).toMatch(/locked/);
+    expect((await store.insert("time_records", { employee_id: emp.id, work_date: "2026-10-18", entry_mode: "hours", hours: 1 })).error?.message).toMatch(/locked/);
+    // Moving a record into the locked days is refused too.
+    expect((await store.update("time_records", oct20!.id, { work_date: "2026-10-19" })).error?.message).toMatch(/locked/);
+    expect((await store.update("time_records", oct20!.id, { note: "fine" })).error).toBeNull();
+    expect((await store.insert("pay_adjustments", { employee_id: emp.id, pay_date: "2026-10-19", category: "Bonus", amount: 5 })).error?.message).toMatch(/locked/);
+    expect((await store.insert("pay_adjustments", { employee_id: emp.id, pay_date: "2026-10-20", category: "Bonus", amount: 5 })).error).toBeNull();
+    // Deleting the employee would delete locked records.
+    expect((await store.remove("employees", emp.id)).error?.message).toMatch(/locked/);
+    // Unlocked, it all works again.
+    expect((await store.setLockedThrough(null)).error).toBeNull();
+    expect((await store.remove("time_records", oct19!.id)).error).toBeNull();
+  });
+
+  it("allows rate changes that don't touch locked days, and refuses ones that do", async () => {
+    const db = await newLocal();
+    const { store, emp } = await seed(db, "E1");
+    const other = await seed(db, "E2");
+    const third = await seed(db, "E3");
+    await store.setLockedThrough("2026-10-19");
+    // A plain change (bulk edit, import): keeps 20 since the start, 25 from today.
+    expect((await store.update("employees", emp.id, { hourly_rate: 25 })).error).toBeNull();
+    expect((await store.listPayRates()).filter((r) => r.employee_id === emp.id).map((r) => Number(r.hourly_rate))).toEqual([20, 25]);
+    // A dated change after the lock is fine; on or before it isn't.
+    expect((await store.insert("pay_rates", { employee_id: emp.id, effective_from: "2026-10-20", hourly_rate: 22 })).error).toBeNull();
+    expect((await store.insert("pay_rates", { employee_id: emp.id, effective_from: "2026-10-19", hourly_rate: 22 })).error?.message).toMatch(/locked/);
+    const since = (await store.listPayRates()).find((r) => r.employee_id === emp.id && r.effective_from === SINCE_START)!;
+    expect((await store.update("pay_rates", since.id, { hourly_rate: 21 })).error?.message).toMatch(/locked/);
+
+    // The profile's first dated change of another employee: keeps the current rate since the start (allowed), then the new one.
+    const plan = planRateChange([], 20, 30, { from: "2026-10-20" });
+    for (const r of plan.insert) expect((await store.insert("pay_rates", { employee_id: other.emp.id, ...r })).error).toBeNull();
+    // But "fix a typo for every day" would change locked days.
+    const fix = planRateChange([], 20, 21, "correct");
+    expect((await store.insert("pay_rates", fix.insert.map((r) => ({ employee_id: third.emp.id, ...r })))).error?.message).toMatch(/locked/);
+  });
+
+  it("restores and syncs a locked database", async () => {
+    const db = await newLocal();
+    await seed(db, "E1");
+    const store = createLocalStore(async () => db);
+    await store.setLockedThrough("2026-10-31");
+    const snap = await exportSnapshot(db);
+    expect(snap.data.payroll_settings[0]!["locked_through"]).toBe("2026-10-31");
+    // Restoring over itself (its own lock in place) and into a fresh database both work.
+    await replaceWithSnapshot(db, snap);
+    const fresh = await newLocal();
+    await replaceWithSnapshot(fresh, snap);
+    expect((await createLocalStore(async () => fresh).getSettings())?.locked_through).toBe("2026-10-31");
+    // Pushing twice: the second push replaces a cloud copy that's already locked.
+    const cloud = await newCloud();
+    await applySyncMigration(cloud);
+    const remote = cloudAs(cloud, A);
+    const v1 = await remote.push(snap, 0, ELSEWHERE);
+    await remote.push(snap, v1, ELSEWHERE);
+    expect((await remote.pull()).snapshot.data.time_records).toHaveLength(2);
   });
 });
 
