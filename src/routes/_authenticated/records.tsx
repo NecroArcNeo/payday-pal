@@ -15,6 +15,8 @@ import { breakRangeText, formatBreak, useBreakUnit, validBreak } from "@/lib/bre
 import { EmployeePicker, SearchInput } from "@/components/EmployeeSearch";
 import { ANY, describeEmployeeFilter, describeFacet, facetActive, facetAllows, isFiltering, matchesEmployee, NO_FILTER, searchEmployees, type EmployeeFilter, type Facet } from "@/lib/employee-search";
 import { FacetFilter } from "@/components/FacetFilter";
+import { askChoice } from "@/lib/choice-prompt";
+import { describeRecord, sameDayClashes, type Clash } from "@/lib/record-clash";
 import { addDays, computeHours, datesBetween, fullName, isoDate, useEmployees, useShifts, weekday, type Employee, type TimeRecord } from "@/lib/payroll";
 import { shiftFor } from "@/lib/pay";
 import { describeTimes, usualTimes, usualTimesFor, type UsualTimes } from "@/lib/shift-times";
@@ -149,13 +151,37 @@ function RecordsPage() {
     const shiftOf = (id: string) => (f.shift_id && f.shift_id !== shiftFor(employees.find((e) => e.id === id)?.shift_id, shifts).id ? { shift_id: f.shift_id } : {});
     // With each shift's hours, everyone gets the times set for the shift their record is on.
     const own = (id: string) => perShift.get(usualTimesFor(employees.find((e) => e.id === id)?.shift_id, f.shift_id, shifts)?.shift.id ?? "");
-    const rows: TablesInsert<"time_records">[] = days.flatMap((work_date) => picked.map((employee_id) => {
+    let rows: TablesInsert<"time_records">[] = days.flatMap((work_date) => picked.map((employee_id) => {
       const t = own(employee_id);
       return mode === "clock"
         ? { employee_id, work_date, entry_mode: "clock", clock_in: t?.clock_in ?? f.clock_in, clock_out: t?.clock_out ?? f.clock_out, lunch_minutes: t ? Number(t.lunch_minutes) : lunch, ...manual, ...shiftOf(employee_id) }
         : { employee_id, work_date, entry_mode: "hours", hours: t ? Number(t.hours) : hours, ...manual, ...shiftOf(employee_id) };
     }));
-    if (days.length > 1 && !confirm(`Add ${rows.length} records: ${picked.length} employee${picked.length === 1 ? "" : "s"} × ${days.length} days (${weekday(days[0]!)} ${days[0]} to ${weekday(days.at(-1)!)} ${days.at(-1)})?`)) return;
+    // Someone who already has a record that day is usually a slip (it would pay the day twice), but can be a real
+    // second shift, so ask rather than refuse.
+    let clashes: Clash[];
+    try {
+      clashes = sameDayClashes(rows as { employee_id: string; work_date: string }[], await storeFor(dataMode).listRecordKeys(days[0]!, days.at(-1)!));
+    } catch (err) { toast.error(`Couldn't check for records already on those days: ${(err as Error).message}`); return; }
+    if (clashes.length) {
+      const nameOf = (id: string) => { const e = employees.find((x) => x.id === id); return e ? fullName(e) : "Someone"; };
+      const all = clashes.length === rows.length;
+      const answer = await askChoice({
+        title: clashes.length === 1 ? "Already has a record that day" : `${clashes.length} already have a record that day`,
+        detail: `Adding another would pay ${clashes.length === 1 ? "that day" : "those days"} twice. That's right only if they really worked twice, e.g. a day and a night shift.`,
+        items: clashes.map((c) => `${nameOf(c.employee_id)} · ${weekday(c.work_date)} ${c.work_date} · already ${c.existing.map(describeRecord).join(", ")}`),
+        choices: [
+          { id: "cancel", label: "Cancel" },
+          { id: "all", label: "Add anyway", danger: true },
+          ...(all ? [] : [{ id: "skip", label: `Skip ${clashes.length === 1 ? "that one" : "those"}, add the rest`, primary: true }]),
+        ],
+      });
+      if (answer === null || answer === "cancel") return;
+      if (answer === "skip") {
+        const clash = new Set(clashes.map((c) => `${c.employee_id}|${c.work_date}`));
+        rows = rows.filter((r) => !clash.has(`${r.employee_id}|${r.work_date}`));
+      }
+    } else if (days.length > 1 && !confirm(`Add ${rows.length} records: ${picked.length} employee${picked.length === 1 ? "" : "s"} × ${days.length} days (${weekday(days[0]!)} ${days[0]} to ${weekday(days.at(-1)!)} ${days.at(-1)})?`)) return;
     const { error } = await db().insert("time_records", rows);
     if (error) { toast.error(error.message); return; }
     toast.success(rows.length === 1 ? "Record added" : `${rows.length} records added`);

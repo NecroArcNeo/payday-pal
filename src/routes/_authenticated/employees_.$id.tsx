@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { db } from "@/lib/db/mode";
 import { AppShell } from "@/components/AppShell";
 import { ProfileForm, profileValues, type ProfileValues } from "@/components/ProfileForm";
+import { codeTakenMessage, employeeWithCode, friendlySaveError } from "@/lib/employee-code";
 import { fullName, useEmployees, useShifts } from "@/lib/payroll";
 import { shiftFor } from "@/lib/pay";
 import { EMPLOYEE_SECTIONS as sections } from "@/lib/employee-fields";
@@ -32,6 +33,8 @@ function ProfilePage() {
 
   const save = async ({ form, custom }: ProfileValues) => {
     for (const k of required) if (!form[k]?.trim()) { toast.error("Employee ID, first and last name are required"); return; }
+    const owner = employeeWithCode(employees, form["employee_code"] ?? "", id);
+    if (owner) { toast.error(codeTakenMessage(form["employee_code"] ?? "", owner)); return; }
     const rate = Number(form["hourly_rate"]);
     if (!Number.isFinite(rate) || rate < 0) { toast.error("Hourly rate must be a positive number"); return; }
     const row: Record<string, string | number | null> = {};
@@ -45,7 +48,7 @@ function ProfilePage() {
     for (const [k, v] of Object.entries(custom)) if (v.trim()) cf[k] = v.trim().slice(0, 1000);
     (row as Record<string, unknown>)["custom_fields"] = cf;
     const { error } = await db().update("employees", id, row as never);
-    if (error) { toast.error(error.message); return; }
+    if (error) { toast.error(friendlySaveError(error.message)); return; }
     toast.success("Profile saved");
     qc.invalidateQueries({ queryKey: ["employees"] });
   };

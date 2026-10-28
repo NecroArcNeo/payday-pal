@@ -11,6 +11,7 @@ import { SearchInput } from "@/components/EmployeeSearch";
 import { DataTable } from "@/components/DataTable";
 import { EmailLink } from "@/components/EmailLink";
 import { CategoryInput } from "@/components/ProfileCategories";
+import { codeTakenMessage, employeeWithCode, friendlySaveError } from "@/lib/employee-code";
 import { fullName, money, useEmployeeDefaults, useEmployees, useFieldDefs, usePrivateFields, useShifts, type Employee, type FieldDef, type Shift } from "@/lib/payroll";
 import { NO_DEFAULTS, withDefaults } from "@/lib/employee-fields";
 import { PAY_TYPES, shiftFor } from "@/lib/pay";
@@ -68,9 +69,11 @@ function EmployeesPage() {
     e.preventDefault();
     const parsed = schema.safeParse(form);
     if (!parsed.success) { toast.error(parsed.error.issues[0]?.message ?? "Invalid input"); return; }
+    const owner = employeeWithCode(employees, parsed.data.employee_code);
+    if (owner) { toast.error(codeTakenMessage(parsed.data.employee_code, owner)); return; }
     const row = { ...parsed.data, email: parsed.data.email || null, department: parsed.data.department || null, shift_id: form["shift_id"] || shifts[0]?.id || null, pay_type: form["pay_type"] === "salary" ? "salary" : "hourly" };
     const { error } = await db().insert("employees", withDefaults(row, defaults));
-    if (error) { toast.error(error.message); return; }
+    if (error) { toast.error(friendlySaveError(error.message)); return; }
     toast.success("Employee added");
     setForm(blank);
     qc.invalidateQueries({ queryKey: ["employees"] });
@@ -118,14 +121,19 @@ function EmployeesPage() {
     }
   };
 
-  const field = (k: string, ph: string, type = "text") => (
-    <input className={inputCls} type={type} step="0.01" placeholder={label(k, ph)} aria-label={label(k, ph)} value={form[k]} onChange={(e) => setForm({ ...form, [k]: e.target.value })} />
+  const field = (k: string, ph: string, type = "text", bad = false) => (
+    <input className={`${inputCls} ${bad ? "ring-2 ring-destructive" : ""}`} type={type} step="0.01" placeholder={label(k, ph)} aria-label={label(k, ph)} aria-invalid={bad || undefined} value={form[k]} onChange={(e) => setForm({ ...form, [k]: e.target.value })} />
   );
+  // Say straight away when the ID being typed is someone else's.
+  const codeOwner = employeeWithCode(employees, form["employee_code"] ?? "");
 
   return (
     <AppShell eyebrow="Directory" title={`${employees.length} employees`}>
       <form onSubmit={save} className="glass-panel grid gap-3 p-5 md:grid-cols-9">
-        {field("employee_code", "Employee ID")}
+        <div>
+          {field("employee_code", "Employee ID", "text", !!codeOwner)}
+          {codeOwner && <div className="mt-1 text-[11px] text-destructive">Already used by {fullName(codeOwner)}</div>}
+        </div>
         {field("first_name", "First name")}
         {field("last_name", "Last name")}
         {field("email", "Email", "email")}

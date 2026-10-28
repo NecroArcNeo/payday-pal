@@ -15,6 +15,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { cloudConfigured, getDataMode, setDataMode } from "@/lib/db/mode";
 import { Toaster } from "@/components/ui/sonner";
 import { PasswordPrompt } from "@/components/PasswordPrompt";
+import { ChoicePrompt } from "@/components/ChoicePrompt";
 
 function NotFoundComponent() {
   return (
@@ -150,6 +151,7 @@ function RootComponent() {
       <Outlet />
       <Toaster />
       <PasswordPrompt />
+      <ChoicePrompt />
     </QueryClientProvider>
   );
 }
