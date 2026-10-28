@@ -20,6 +20,13 @@ import { shiftFor } from "@/lib/pay";
 import { describeTimes, usualTimes, usualTimesFor, type UsualTimes } from "@/lib/shift-times";
 import { Check, Pencil, Plus, Trash2, X } from "lucide-react";
 
+/** One shift's times for "Add each shift's usual hours", as typed (break in minutes). */
+type GroupTimes = { clock_in: string; clock_out: string; lunch_minutes: string; hours: string };
+type ShiftGroup = { key: string; name: string; times: UsualTimes | null; people: string[] };
+const fromUsual = (t: UsualTimes): GroupTimes => ({
+  clock_in: t.clock_in, clock_out: t.clock_out, lunch_minutes: String(t.lunch_minutes), hours: String(computeHours(t.clock_in, t.clock_out, t.lunch_minutes)),
+});
+
 /** Bulk-edit row keys to the label alias keys used everywhere else (src/lib/labels.ts). */
 const RECORD_LABEL_KEYS: Record<string, string> = { employee_id: "employee", shift_id: "shift", pay: "manual_pay" };
 
@@ -75,12 +82,12 @@ function RecordsPage() {
   };
   // The shift each picked person's record would be on (the one chosen for the record, else their own), with its usual hours.
   const shiftGroups = useMemo(() => {
-    const groups = new Map<string, { name: string; times: UsualTimes | null; people: string[] }>();
+    const groups = new Map<string, { key: string; name: string; times: UsualTimes | null; people: string[] }>();
     for (const id of picked) {
       const emp = employees.find((e) => e.id === id);
       const u = usualTimesFor(emp?.shift_id, f.shift_id, shifts);
       const key = u?.shift.id ?? "";
-      const g = groups.get(key) ?? { name: u?.shift.name ?? "No shift", times: u?.times ?? null, people: [] };
+      const g = groups.get(key) ?? { key, name: u?.shift.name ?? "No shift", times: u?.times ?? null, people: [] };
       g.people.push(emp ? fullName(emp) : "?");
       groups.set(key, g);
     }
@@ -102,8 +109,19 @@ function RecordsPage() {
   const [eachShift, setEachShift] = useState(true);
   useEffect(() => { if (mixed) setEachShift(true); }, [mixed]);
   const useOwn = mixed && eachShift;
-  // Every picked person's hours come from their shift, so the form's times aren't used at all.
-  const covered = useOwn && shiftGroups.every((g) => g.times);
+  // Each shift's times, set in the list below the form: its usual hours (or the form's times when it has none) until changed there.
+  const [groupEdits, setGroupEdits] = useState<Record<string, GroupTimes>>({});
+  const formTimes: GroupTimes = { clock_in: f.clock_in, clock_out: f.clock_out, lunch_minutes: f.lunch_minutes, hours: f.hours };
+  const timesOf = (g: ShiftGroup): GroupTimes => groupEdits[g.key] ?? (g.times ? fromUsual(g.times) : formTimes);
+  const editGroup = (g: ShiftGroup, patch: Partial<GroupTimes>) => setGroupEdits((x) => {
+    const next = { ...timesOf(g), ...patch };
+    // Keep the hours in step with the times, so switching to daily hours shows what the times come to.
+    if (!("hours" in patch)) next.hours = String(computeHours(next.clock_in, next.clock_out, Number(next.lunch_minutes) || 0));
+    return { ...x, [g.key]: next };
+  });
+  const resetGroup = (g: ShiftGroup) => setGroupEdits(({ [g.key]: _, ...rest }) => rest);
+  // Every picked person's hours come from their shift's times below, so the form's times aren't used at all.
+  const covered = useOwn;
 
   const preview = mode === "clock" ? computeHours(f.clock_in, f.clock_out, Number(f.lunch_minutes) || 0) : Number(f.hours) || 0;
 
@@ -115,26 +133,34 @@ function RecordsPage() {
     if (days.length > 366) { toast.error("Pick a range of at most a year"); return; }
     const lunch = Number(f.lunch_minutes);
     const hours = Number(f.hours);
-    if (mode === "clock" && !validBreak(lunch)) { toast.error(breakRangeText(breakUnit)); return; }
-    if (mode === "hours" && (!Number.isFinite(hours) || hours < 0 || hours > 24)) { toast.error("Hours must be 0–24"); return; }
+    // With each shift's hours, the times come from the list below the form instead of the form's cells.
+    const perShift = new Map(useOwn ? shiftGroups.map((g) => [g.key, timesOf(g)] as const) : []);
+    const checks = useOwn ? shiftGroups.map((g) => ({ ...timesOf(g), what: `${g.name}: ` })) : [{ ...formTimes, what: "" }];
+    for (const c of checks) {
+      if (mode === "clock" && (!c.clock_in || !c.clock_out)) { toast.error(`${c.what}enter a clock in and clock out time`); return; }
+      if (mode === "clock" && !validBreak(Number(c.lunch_minutes))) { toast.error(c.what + breakRangeText(breakUnit)); return; }
+      const h = Number(c.hours);
+      if (mode === "hours" && (c.hours.trim() === "" || !Number.isFinite(h) || h < 0 || h > 24)) { toast.error(`${c.what}hours must be 0–24`); return; }
+    }
     const pay = f.pay.trim() === "" ? null : Number(f.pay.replace(/[$,\s]/g, ""));
     if (pay !== null && (!Number.isFinite(pay) || pay < 0 || pay > 100000)) { toast.error("Day pay must be an amount from $0 to $100,000, or empty"); return; }
     const manual = pay === null ? {} : { pay_override: Math.round(pay * 100) / 100 };
     // Only store a shift when it differs from the person's usual one.
     const shiftOf = (id: string) => (f.shift_id && f.shift_id !== shiftFor(employees.find((e) => e.id === id)?.shift_id, shifts).id ? { shift_id: f.shift_id } : {});
-    // With "each person's shift hours", people whose shift has usual hours get those; everyone else the times typed here.
-    const own = (id: string) => (useOwn ? usualTimesFor(employees.find((e) => e.id === id)?.shift_id, f.shift_id, shifts)?.times ?? null : null);
+    // With each shift's hours, everyone gets the times set for the shift their record is on.
+    const own = (id: string) => perShift.get(usualTimesFor(employees.find((e) => e.id === id)?.shift_id, f.shift_id, shifts)?.shift.id ?? "");
     const rows: TablesInsert<"time_records">[] = days.flatMap((work_date) => picked.map((employee_id) => {
       const t = own(employee_id);
       return mode === "clock"
-        ? { employee_id, work_date, entry_mode: "clock", clock_in: t?.clock_in ?? f.clock_in, clock_out: t?.clock_out ?? f.clock_out, lunch_minutes: t?.lunch_minutes ?? lunch, ...manual, ...shiftOf(employee_id) }
-        : { employee_id, work_date, entry_mode: "hours", hours: t ? computeHours(t.clock_in, t.clock_out, t.lunch_minutes) : hours, ...manual, ...shiftOf(employee_id) };
+        ? { employee_id, work_date, entry_mode: "clock", clock_in: t?.clock_in ?? f.clock_in, clock_out: t?.clock_out ?? f.clock_out, lunch_minutes: t ? Number(t.lunch_minutes) : lunch, ...manual, ...shiftOf(employee_id) }
+        : { employee_id, work_date, entry_mode: "hours", hours: t ? Number(t.hours) : hours, ...manual, ...shiftOf(employee_id) };
     }));
     if (days.length > 1 && !confirm(`Add ${rows.length} records: ${picked.length} employee${picked.length === 1 ? "" : "s"} × ${days.length} days (${weekday(days[0]!)} ${days[0]} to ${weekday(days.at(-1)!)} ${days.at(-1)})?`)) return;
     const { error } = await db().insert("time_records", rows);
     if (error) { toast.error(error.message); return; }
     toast.success(rows.length === 1 ? "Record added" : `${rows.length} records added`);
     setPicked([]);
+    setGroupEdits({});
     setF((x) => ({ ...x, pay: "" }));
     qc.invalidateQueries({ queryKey: ["records"] });
   };
@@ -323,16 +349,40 @@ function RecordsPage() {
               Add each shift's usual hours
             </label>
             {eachShift ? (
-              <ul className="space-y-1 pl-6 text-xs text-muted-foreground">
-                {shiftGroups.map((g) => (
-                  <li key={g.name}>
-                    <span className="font-medium text-foreground">{g.name}</span>
-                    {" · "}{g.people.length} {g.people.length === 1 ? "person" : "people"} ({g.people.slice(0, 3).join(", ")}{g.people.length > 3 ? ` +${g.people.length - 3} more` : ""}):{" "}
-                    {g.times
-                      ? <span className="font-mono text-foreground">{describeTimes(g.times)}, {formatBreak(g.times.lunch_minutes, breakUnit)} {breakUnit === "h" ? "h" : "min"} break = {computeHours(g.times.clock_in, g.times.clock_out, g.times.lunch_minutes).toFixed(2)} h</span>
-                      : <>no usual hours, gets the {mode === "clock" ? "times" : "hours"} above</>}
-                  </li>
-                ))}
+              <ul className="space-y-2 pl-6">
+                {shiftGroups.map((g) => {
+                  const t = timesOf(g);
+                  const edited = !!groupEdits[g.key];
+                  const h = mode === "clock" ? computeHours(t.clock_in, t.clock_out, Number(t.lunch_minutes) || 0) : Number(t.hours) || 0;
+                  const small = `${inputCls} !py-1.5 text-sm ${edited ? "ring-2 ring-primary/40" : ""}`;
+                  return (
+                    <li key={g.key} className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+                      <div className="min-w-[14rem] flex-1 text-xs text-muted-foreground">
+                        <span className="text-sm font-medium text-foreground">{g.name}</span>
+                        {" · "}{g.people.length} {g.people.length === 1 ? "person" : "people"} ({g.people.slice(0, 3).join(", ")}{g.people.length > 3 ? ` +${g.people.length - 3} more` : ""})
+                        <div>{g.times ? (edited ? `Changed from usual ${describeTimes(g.times)}, ${formatBreak(g.times.lunch_minutes, breakUnit)} ${breakUnit === "h" ? "h" : "min"} break` : "Usual hours") : "No usual hours"}</div>
+                      </div>
+                      {mode === "clock" ? (
+                        <>
+                          <input type="time" aria-label={`${g.name} clock in`} className={`${small} !w-32`} value={t.clock_in} onChange={(e) => editGroup(g, { clock_in: e.target.value })} />
+                          <span className="text-muted-foreground">–</span>
+                          <input type="time" aria-label={`${g.name} clock out`} className={`${small} !w-32`} value={t.clock_out} onChange={(e) => editGroup(g, { clock_out: e.target.value })} />
+                          <BreakInput label={`${g.name} break`} minutes={t.lunch_minutes} onChange={(m) => editGroup(g, { lunch_minutes: m })} className={`${small} !w-20`} />
+                          <span className="text-xs text-muted-foreground">{breakUnit === "h" ? "h" : "min"} break</span>
+                        </>
+                      ) : (
+                        <>
+                          <input type="number" step="0.25" min={0} max={24} aria-label={`${g.name} hours`} className={`${small} !w-24`} value={t.hours} onChange={(e) => editGroup(g, { hours: e.target.value })} />
+                          <span className="text-xs text-muted-foreground">hours</span>
+                        </>
+                      )}
+                      <span className="w-16 text-right font-mono text-xs">{mode === "clock" ? `= ${h.toFixed(2)} h` : ""}</span>
+                      <button type="button" onClick={() => resetGroup(g)} disabled={!edited} className="w-24 text-left text-xs text-muted-foreground hover:text-foreground disabled:invisible">
+                        {g.times ? "Back to usual" : "Reset"}
+                      </button>
+                    </li>
+                  );
+                })}
               </ul>
             ) : (
               <p className="pl-6 text-xs text-muted-foreground">Everyone gets the {mode === "clock" ? "times" : "hours"} above.</p>

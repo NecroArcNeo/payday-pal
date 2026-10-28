@@ -34,3 +34,4 @@
 - [x] "By shift" buttons only pick people the employee search shows (search Spotter, press Day: only day-shift spotters)
 - [x] Time records list can be filtered by shift (records set to it, plus ones on the employee's usual shift)
 - [x] Department, position and shift filters are checklists: tick several to include any of them, or press Exclude to leave some out; typing `-word` in a search leaves out anyone it matches
+- [x] Each shift's times in "Add each shift's usual hours" can be changed before adding (for an unusual day); "Back to usual" undoes it, and they reset after Add
