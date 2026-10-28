@@ -10,22 +10,29 @@ import { colLetters, colNumber, parseAddress, TemplateError, type CellValue } fr
 /** One-off values, each into one cell of a template. */
 export const SHEET_FIELDS = {
   employee_name: "Employee name", first_name: "First name", last_name: "Last name", employee_code: "Employee ID",
-  department: "Department", job_title: "Position", shift: "Shift", pay_type: "Pay type", hourly_rate: "Hourly rate",
+  department: "Department", job_title: "Position", email: "Email", phone: "Phone", hire_date: "Hire date",
+  shift: "Shift", pay_type: "Pay type", hourly_rate: "Hourly rate",
   period_from: "Period start", period_to: "Period end", period: "Period (from – to)", days_worked: "Days worked",
-  total_hours: "Total hours", regular_hours: "Regular hours", overtime_hours: "Overtime hours",
-  regular_pay: "Regular pay", overtime_pay: "Overtime pay", hours_pay: "Pay from hours", extra_pay: "Extra pay", total_pay: "Total pay",
+  total_hours: "Total hours", regular_hours: "Regular hours", overtime_hours: "Overtime hours", weekend_hours: "Weekend hours",
+  regular_pay: "Regular pay", overtime_pay: "Overtime pay", set_pay: "Pay for days with a set amount", hours_pay: "Pay from hours", extra_pay: "Extra pay", total_pay: "Total pay",
   today: "Today's date",
 } as const;
 /** The day-by-day columns: one row per record (or per day). */
 export const ROW_FIELDS = {
-  date: "Date", weekday: "Weekday", shift: "Shift", clock_in: "Clock in", clock_out: "Clock out", break_minutes: "Break (minutes)",
+  date: "Date", weekday: "Weekday", week_of: "Week of (Monday)", weekend: "Weekend (shows \"Weekend\")", entry_type: "Entry type",
+  shift: "Shift", clock_in: "Clock in", clock_out: "Clock out", break_minutes: "Break (minutes)",
   break_hours: "Break (hours)", hours: "Hours", regular_hours: "Regular hours", overtime_hours: "Overtime hours", rate: "Rate",
   regular_pay: "Regular pay", overtime_pay: "Overtime pay", pay: "Day pay", note: "Note",
 } as const;
-export type SheetField = keyof typeof SHEET_FIELDS;
+/** A built-in value, or one of the user's own categories (`custom:<category id>`). */
+export type SheetField = keyof typeof SHEET_FIELDS | `custom:${string}`;
+/** The user's categories a template can show: not ones under Personal, which stay on the profile. */
+export type TemplateCategory = { id: string; label: string; field_type: string };
+export const fieldLabel = (k: SheetField, categories: TemplateCategory[] = []) =>
+  k.startsWith("custom:") ? categories.find((c) => `custom:${c.id}` === k)?.label ?? "A deleted category" : SHEET_FIELDS[k as keyof typeof SHEET_FIELDS];
 export type RowField = keyof typeof ROW_FIELDS;
 
-export type TimesheetData = { values: Record<SheetField, CellValue>; rows: Record<RowField, CellValue>[] };
+export type TimesheetData = { values: Partial<Record<SheetField, CellValue>>; rows: Record<RowField, CellValue>[] };
 
 export type TimesheetTemplate = {
   id: string; name: string; fileName: string;
@@ -50,9 +57,10 @@ export type TimesheetTemplate = {
 
 export type SheetRecord = {
   id: string; work_date: string; entry_mode: string; clock_in: string | null; clock_out: string | null;
-  lunch_minutes: number; hours: number | string; note: string | null; shiftName: string; rate: number;
+  lunch_minutes: number; hours: number | string; note: string | null; shiftName: string; rate: number; pay_override?: number | string | null;
 };
 
+const mondayOf = (d: string) => { const x = new Date(`${d}T00:00:00Z`); x.setUTCDate(x.getUTCDate() - ((x.getUTCDay() + 6) % 7)); return x.toISOString().slice(0, 10); };
 const weekdayOf = (d: string) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(`${d}T00:00:00Z`).getUTCDay()]!;
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const dayList = (from: string, to: string) => {
@@ -66,7 +74,11 @@ const dayList = (from: string, to: string) => {
  * `per: "day"` gives one row per calendar day, combining a day's records (first in, last out, hours and pay added).
  */
 export function timesheetData(input: {
-  employee: { first_name: string; last_name: string; employee_code: string; department: string | null; job_title: string | null; pay_type: string };
+  employee: {
+    first_name: string; last_name: string; employee_code: string; department: string | null; job_title: string | null; pay_type: string;
+    email?: string | null; phone?: string | null; hire_date?: string | null; custom_fields?: unknown;
+  };
+  categories?: TemplateCategory[];
   shiftName: string; rates: number[]; from: string; to: string; today: string;
   records: SheetRecord[]; lines: Map<string, PayLine>; extraPay: number;
 }, per: "record" | "day" = "record"): TimesheetData {
@@ -75,23 +87,35 @@ export function timesheetData(input: {
   const sum = (rs: SheetRecord[], f: (l: PayLine) => number) => round2(rs.reduce((s, r) => s + (line(r) ? f(line(r)!) : 0), 0));
   const hoursOf = (rs: SheetRecord[]) => round2(rs.reduce((s, r) => s + Number(r.hours), 0));
   const hoursPay = sum(records, (l) => l.pay);
-  const values: Record<SheetField, CellValue> = {
+  const custom = (e.custom_fields && typeof e.custom_fields === "object" ? e.custom_fields : {}) as Record<string, unknown>;
+  const values: Partial<Record<SheetField, CellValue>> = {
     employee_name: `${e.first_name} ${e.last_name}`, first_name: e.first_name, last_name: e.last_name, employee_code: e.employee_code,
-    department: e.department ?? "", job_title: e.job_title ?? "", shift: input.shiftName, pay_type: e.pay_type === "salary" ? "Salary" : "Hourly",
+    department: e.department ?? "", job_title: e.job_title ?? "", email: e.email ?? "", phone: e.phone ?? "", hire_date: e.hire_date ? { date: e.hire_date } : "",
+    shift: input.shiftName, pay_type: e.pay_type === "salary" ? "Salary" : "Hourly",
     hourly_rate: input.rates.length === 1 ? input.rates[0]! : input.rates.map((r) => r.toFixed(2)).join(" → "),
     period_from: { date: input.from }, period_to: { date: input.to }, period: `${input.from} – ${input.to}`,
     days_worked: new Set(records.map((r) => r.work_date)).size,
     total_hours: hoursOf(records), regular_hours: sum(records, (l) => l.regular), overtime_hours: sum(records, (l) => l.overtime),
-    regular_pay: sum(records, (l) => l.regPay), overtime_pay: sum(records, (l) => l.otPay), hours_pay: hoursPay,
+    weekend_hours: sum(records, (l) => (l.weekend ? l.regular + l.overtime : 0)),
+    regular_pay: sum(records, (l) => l.regPay), overtime_pay: sum(records, (l) => l.otPay), set_pay: sum(records, (l) => (l.manual ? l.pay : 0)), hours_pay: hoursPay,
     extra_pay: round2(input.extraPay), total_pay: round2(hoursPay + input.extraPay), today: { date: input.today },
   };
+  for (const c of input.categories ?? []) {
+    const raw = custom[c.id];
+    const text = raw === undefined || raw === null ? "" : String(raw);
+    const n = Number(text.replace(/[$,\s]/g, ""));
+    values[`custom:${c.id}`] = c.field_type === "date" && /^\d{4}-\d{2}-\d{2}$/.test(text) ? { date: text }
+      : (c.field_type === "number" || c.field_type === "money") && text.trim() && Number.isFinite(n) ? n : text;
+  }
   const row = (date: string, rs: SheetRecord[]): Record<RowField, CellValue> => {
     const clock = rs.filter((r) => r.entry_mode === "clock" && r.clock_in && r.clock_out);
     const breaks = rs.reduce((s, r) => s + (r.entry_mode === "clock" ? r.lunch_minutes : 0), 0);
     const rates = [...new Set(rs.map((r) => r.rate))];
     const empty = !rs.length;
     return {
-      date: { date }, weekday: weekdayOf(date), shift: [...new Set(rs.map((r) => r.shiftName))].join(", "),
+      date: { date }, weekday: weekdayOf(date), week_of: { date: mondayOf(date) }, weekend: [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay()) ? "Weekend" : null,
+      entry_type: [...new Set(rs.map((r) => (r.pay_override !== null && r.pay_override !== undefined ? "Set amount" : r.entry_mode === "clock" ? "Clock in/out" : "Daily hours")))].join(", ") || null,
+      shift: [...new Set(rs.map((r) => r.shiftName))].join(", "),
       clock_in: clock.length ? { time: clock[0]!.clock_in!.slice(0, 5) } : null,
       clock_out: clock.length ? { time: clock.at(-1)!.clock_out!.slice(0, 5) } : null,
       break_minutes: empty || !clock.length ? null : breaks, break_hours: empty || !clock.length ? null : round2(breaks / 60),
@@ -111,7 +135,7 @@ export function timesheetData(input: {
 export function templateCells(t: TimesheetTemplate, data: TimesheetData): Map<string, CellValue> {
   const cells = new Map<string, CellValue>();
   for (const [k, ref] of Object.entries(t.cells) as [SheetField, string][]) {
-    if (ref) cells.set(ref.toUpperCase(), data.values[k]);
+    if (ref) cells.set(ref.toUpperCase(), data.values[k] ?? "");
   }
   const cols = (Object.entries(t.table.columns) as [RowField, string][]).filter(([, c]) => c);
   if (cols.length && t.table.startRow) {
@@ -126,9 +150,9 @@ export function templateCells(t: TimesheetTemplate, data: TimesheetData): Map<st
 }
 
 /** Problems that would make a template fill the wrong cells, or nothing. */
-export function templateProblems(t: TimesheetTemplate): string[] {
+export function templateProblems(t: TimesheetTemplate, categories: TemplateCategory[] = []): string[] {
   const out: string[] = [];
-  for (const [k, ref] of Object.entries(t.cells) as [SheetField, string][]) if (ref && !parseAddress(ref)) out.push(`${SHEET_FIELDS[k]}: "${ref}" isn't a cell like B3`);
+  for (const [k, ref] of Object.entries(t.cells) as [SheetField, string][]) if (ref && !parseAddress(ref)) out.push(`${fieldLabel(k, categories)}: "${ref}" isn't a cell like B3`);
   const cols = Object.entries(t.table.columns).filter(([, c]) => c) as [RowField, string][];
   for (const [k, c] of cols) if (!/^[A-Za-z]{1,3}$/.test(c)) out.push(`${ROW_FIELDS[k]}: "${c}" isn't a column letter`);
   if (cols.length && !t.table.startRow) out.push("Say which row the day-by-day rows start on");
@@ -139,7 +163,7 @@ export function templateProblems(t: TimesheetTemplate): string[] {
     const colSet = new Set(cols.map(([, c]) => colNumber(c)));
     for (const [k, ref] of Object.entries(t.cells) as [SheetField, string][]) {
       const a = ref && parseAddress(ref);
-      if (a && a.row >= t.table.startRow && a.row <= end && colSet.has(a.col)) out.push(`${SHEET_FIELDS[k]} (${ref}) is inside the day-by-day rows${t.table.rows === null ? "; set how many rows the template has" : ""}`);
+      if (a && a.row >= t.table.startRow && a.row <= end && colSet.has(a.col)) out.push(`${fieldLabel(k, categories)} (${ref}) is inside the day-by-day rows${t.table.rows === null ? "; set how many rows the template has" : ""}`);
     }
   }
   return out;
@@ -150,7 +174,7 @@ export function templateProblems(t: TimesheetTemplate): string[] {
 /** A plain table: who and when, then a row per record (or day), then the totals. */
 function plainTable(data: TimesheetData): (string | number)[][] {
   const v = data.values;
-  const show = (c: CellValue): string | number => (c === null ? "" : typeof c === "object" ? ("date" in c ? c.date : c.time) : c);
+  const show = (c: CellValue | undefined): string | number => (c === null || c === undefined ? "" : typeof c === "object" ? ("date" in c ? c.date : c.time) : c);
   const cols = Object.keys(ROW_FIELDS) as RowField[];
   return [
     ["Timesheet", show(v.employee_name), show(v.employee_code)],

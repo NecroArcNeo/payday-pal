@@ -38,10 +38,16 @@ describe("filling an Excel template", () => {
     expect(sheet).toContain(`<mergeCell ref="B1:C1"/>`);
     expect(files["xl/styles.xml"]).toEqual(unzipSync(template())["xl/styles.xml"]);
     expect(files["xl/worksheets/sheet2.xml"]).toEqual(unzipSync(template())["xl/worksheets/sheet2.xml"]);
-    // Excel's formula index goes, and the workbook recalculates on open.
-    expect(files["xl/calcChain.xml"]).toBeUndefined();
-    expect(strFromU8(files["[Content_Types].xml"]!)).not.toContain("calcChain");
-    expect(strFromU8(files["xl/workbook.xml"]!)).toContain(`fullCalcOnLoad="1"`);
+    // No formula was overwritten, so Excel's formula index stays; the workbook recalculates on open.
+    expect(files["xl/calcChain.xml"]).toBeDefined();
+    expect(strFromU8(files["xl/workbook.xml"]!)).toContain(`<calcPr fullCalcOnLoad="1"/></workbook>`);
+    // Every other file in the workbook is byte for byte the same.
+    const before = unzipSync(template());
+    for (const name of Object.keys(before)) if (name !== "xl/worksheets/sheet1.xml" && name !== "xl/workbook.xml") expect(files[name], name).toEqual(before[name]);
+    // And in the sheet, only the filled cells changed: the text up to the first one and after the last one is untouched.
+    const original = strFromU8(before["xl/worksheets/sheet1.xml"]!);
+    expect(sheet.slice(0, original.indexOf(`<c r="B1"`))).toBe(original.slice(0, original.indexOf(`<c r="B1"`)));
+    expect(sheet.slice(sheet.indexOf("</sheetData>"))).toBe(original.slice(original.indexOf("</sheetData>")));
 
     const wb = XLSX.read(out, { type: "array", cellDates: false });
     const ws = wb.Sheets["Timesheet"]!;
@@ -58,7 +64,7 @@ describe("filling an Excel template", () => {
   });
 
   it("lists sheets, refuses what it can't fill, and reads addresses", () => {
-    expect(templateSheets(template())).toEqual(["Cover", "Timesheet"]);
+    expect(templateSheets(template())).toEqual([{ name: "Cover", hidden: false, fillable: true }, { name: "Timesheet", hidden: false, fillable: true }]);
     expect(() => fillTemplate(new Uint8Array([1, 2, 3]), null, new Map())).toThrow(TemplateError);
     expect(() => fillTemplate(template(), "Nope", new Map())).toThrow(/no sheet called "Nope"/);
     expect(parseAddress("$B$12")).toEqual({ col: 2, row: 12 });
@@ -70,4 +76,43 @@ describe("filling an Excel template", () => {
     expect(formatKind('"$"#,##0.00')).toBe("other");
     expect(formatKind("[$-409]mmmm d, yyyy")).toBe("date");
   });
+
+  it("drops Excel's formula index only when a formula is overwritten, and won't break a formula other cells copy", () => {
+    const files = unzipSync(fillTemplate(template(), "Timesheet", new Map<string, CellValue>([["D6", 99]])));
+    expect(files["xl/calcChain.xml"]).toBeUndefined();
+    expect(strFromU8(files["[Content_Types].xml"]!)).not.toContain("calcChain");
+    expect(strFromU8(files["xl/_rels/workbook.xml.rels"]!)).not.toContain("calcChain");
+    const shared = edit(template(), "xl/worksheets/sheet1.xml", (x) => x.replace(`<c r="C4" s="3"/>`, `<c r="C4" s="3"><f t="shared" ref="C4:C5" si="0">A4+1</f><v>0</v></c>`));
+    expect(() => fillTemplate(shared, "Timesheet", new Map<string, CellValue>([["C4", 1]]))).toThrow(/C4 holds a formula that other cells copy/);
+  });
+
+  it("puts a value aimed inside a merged block into its top-left cell", () => {
+    const sheet = strFromU8(unzipSync(fillTemplate(template(), "Timesheet", new Map<string, CellValue>([["C1", "Ada"]])))["xl/worksheets/sheet1.xml"]!);
+    expect(sheet).toContain(`<c r="B1" s="1" t="inlineStr"><is><t xml:space="preserve">Ada</t></is></c>`);
+    expect(sheet).not.toContain(`r="C1"`);
+  });
+
+  it("reads files whose XML uses a prefix or the strict namespace, and lists hidden and chart sheets", () => {
+    const strict = edit(template(), "xl/workbook.xml", (x) => x
+      .replace(/http:\/\/schemas\.openxmlformats\.org\/spreadsheetml\/2006\/main/, "http://purl.oclc.org/ooxml/spreadsheetml/main")
+      .replace(/http:\/\/schemas\.openxmlformats\.org\/officeDocument\/2006\/relationships/, "http://purl.oclc.org/ooxml/officeDocument/relationships")
+      .replace(`<sheet name="Cover" sheetId="1" r:id="rId2"/>`, `<sheet name="Cover" sheetId="1" state="hidden" r:id="rId2"/><sheet name="Chart" sheetId="3" r:id="rId9"/>`));
+    const withChart = edit(strict, "xl/_rels/workbook.xml.rels", (x) => x.replace("</Relationships>", `<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet" Target="chartsheets/sheet1.xml"/></Relationships>`));
+    expect(templateSheets(withChart)).toEqual([{ name: "Cover", hidden: true, fillable: true }, { name: "Chart", hidden: false, fillable: false }, { name: "Timesheet", hidden: false, fillable: true }]);
+    expect(() => fillTemplate(withChart, "Chart", new Map())).toThrow(/chart sheet/);
+
+    const prefixed = edit(template(), "xl/worksheets/sheet1.xml", (x) => x
+      .replace(`xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"`, `xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main"`)
+      .replace(/<(\/?)(worksheet|sheetData|row|c|v|f|mergeCells|mergeCell)\b/g, "<$1x:$2"));
+    const sheet = strFromU8(unzipSync(fillTemplate(prefixed, "Timesheet", new Map<string, CellValue>([["B1", "Ada"], ["D4", 2]])))["xl/worksheets/sheet1.xml"]!);
+    expect(sheet).toContain(`<x:c r="B1" s="1" t="inlineStr"><x:is><x:t xml:space="preserve">Ada</x:t></x:is></x:c>`);
+    expect(sheet).toContain(`<x:c r="D4"><x:v>2</x:v></x:c>`);
+    expect(XLSX.read(fillTemplate(prefixed, "Timesheet", new Map<string, CellValue>([["B1", "Ada"]])), { type: "array" }).Sheets["Timesheet"]!["B1"].v).toBe("Ada");
+  });
 });
+
+/** The template with one of its files changed. */
+function edit(file: Uint8Array, name: string, fn: (text: string) => string) {
+  const files = unzipSync(file);
+  return zipSync({ ...files, [name]: strToU8(fn(strFromU8(files[name]!))) });
+}

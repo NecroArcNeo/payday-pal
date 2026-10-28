@@ -1,21 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { toast } from "sonner";
-import { ChevronDown, Download, FileSpreadsheet, Pencil, Upload, X } from "lucide-react";
+import { ChevronDown, Download, Eye, FileSpreadsheet, Pencil, Upload, X } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { btnGhost, btnPrimary, inputCls } from "@/components/AppShell";
 import { downloadBlob } from "@/lib/db/backups";
 import {
-  colLetters, fromBase64, getTemplates, MAX_TEMPLATE_BYTES, plainCsv, plainXlsx, ROW_FIELDS, saveTemplates, SHEET_FIELDS, templateCells, templateProblems, toBase64, useTemplates,
-  type RowField, type SheetField, type TimesheetData, type TimesheetTemplate,
+  colLetters, fieldLabel, fromBase64, getTemplates, MAX_TEMPLATE_BYTES, plainCsv, plainXlsx, ROW_FIELDS, saveTemplates, SHEET_FIELDS, templateCells, templateProblems, toBase64, useTemplates,
+  type RowField, type SheetField, type TemplateCategory, type TimesheetData, type TimesheetTemplate,
 } from "@/lib/export/timesheet-export";
-import { fillTemplate, parseAddress, templateSheets } from "@/lib/export/xlsx-template";
+import { fillTemplate, parseAddress, templateSheets, type TemplateSheet } from "@/lib/export/xlsx-template";
 
 const XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const safeName = (s: string) => s.replace(/[\\/:*?"<>|]+/g, "-").trim() || "timesheet";
 
 /** The Timesheet page's Export menu: a plain Excel or CSV file, or the period filled into one of the user's templates. */
-export function TimesheetExport({ data, fileName }: { data: (per: "record" | "day") => TimesheetData; fileName: string }) {
+export function TimesheetExport({ data, fileName, categories }: { data: (per: "record" | "day") => TimesheetData; fileName: string; categories: TemplateCategory[] }) {
   const templates = useTemplates();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<TimesheetTemplate | "new" | null>(null);
@@ -61,19 +61,19 @@ export function TimesheetExport({ data, fileName }: { data: (per: "record" | "da
           <button role="menuitem" className={`${item} text-primary`} onClick={() => { setOpen(false); setEditing("new"); }}><Upload className="h-4 w-4" />Add a template…</button>
         </div>
       )}
-      {editing && <TemplateEditor initial={editing === "new" ? null : editing} onClose={() => setEditing(null)} />}
+      {editing && <TemplateEditor initial={editing === "new" ? null : editing} onClose={() => setEditing(null)} data={data} categories={categories} />}
     </div>
   );
 }
 
-type Grid = { rows: string[][]; merges: XLSX.Range[]; cols: number };
+type Grid = { rows: string[][]; cols: number };
 const PREVIEW_ROWS = 80, PREVIEW_COLS = 26;
 
-/** The sheet's visible text, for clicking cells. */
-function readGrid(bytes: Uint8Array, sheet: string | null): Grid {
+/** The sheet's text as Excel would show it (number formats applied), for clicking cells and previewing. */
+function readGrid(bytes: Uint8Array, sheet: string): Grid {
   const wb = XLSX.read(bytes, { type: "array", sheetRows: PREVIEW_ROWS });
-  const ws = wb.Sheets[sheet ?? wb.SheetNames[0]!];
-  if (!ws?.["!ref"]) return { rows: [], merges: [], cols: 8 };
+  const ws = wb.Sheets[sheet];
+  if (!ws?.["!ref"]) return { rows: Array.from({ length: 20 }, () => Array<string>(8).fill("")), cols: 8 };
   const range = XLSX.utils.decode_range(ws["!ref"]);
   const cols = Math.min(PREVIEW_COLS, Math.max(8, range.e.c + 2));
   const rows: string[][] = [];
@@ -82,7 +82,7 @@ function readGrid(bytes: Uint8Array, sheet: string | null): Grid {
     for (let c = 0; c < cols; c++) { const cell = ws[XLSX.utils.encode_cell({ r, c })] as XLSX.CellObject | undefined; row.push(cell ? String(cell.w ?? cell.v ?? "") : ""); }
     rows.push(row);
   }
-  return { rows, merges: ws["!merges"] ?? [], cols };
+  return { rows, cols };
 }
 
 type Active = { kind: "cell"; key: SheetField } | { kind: "column"; key: RowField } | null;
@@ -90,25 +90,54 @@ const emptyTemplate = (): Omit<TimesheetTemplate, "file" | "fileName"> => ({
   id: crypto.randomUUID(), name: "", sheet: null, cells: {}, table: { columns: {}, startRow: null, rows: null, per: "record" },
 });
 
-/** Upload an Excel file, then click where each value goes. */
-function TemplateEditor({ initial, onClose }: { initial: TimesheetTemplate | null; onClose: () => void }) {
+/** Upload an Excel file, pick its sheet, then click where each value goes; a preview shows the result with real values. */
+function TemplateEditor({ initial, onClose, data, categories }: {
+  initial: TimesheetTemplate | null; onClose: () => void; data: (per: "record" | "day") => TimesheetData; categories: TemplateCategory[];
+}) {
   const [t, setT] = useState<Omit<TimesheetTemplate, "file" | "fileName">>(initial ?? emptyTemplate());
   const [file, setFile] = useState<{ name: string; bytes: Uint8Array } | null>(initial ? { name: initial.fileName, bytes: fromBase64(initial.file) } : null);
-  const [sheets, setSheets] = useState<string[]>([]);
+  const sheets = useMemo<TemplateSheet[]>(() => { try { return file ? templateSheets(file.bytes) : []; } catch { return []; } }, [file]);
   const [active, setActive] = useState<Active>({ kind: "cell", key: "employee_name" });
-  useEffect(() => { if (file) try { setSheets(templateSheets(file.bytes)); } catch { setSheets([]); } }, [file]);
-  const grid = useMemo(() => (file ? readGrid(file.bytes, t.sheet) : null), [file, t.sheet]);
+  const [preview, setPreview] = useState(false);
+  // The sheet being filled: the chosen one, else the first visible worksheet.
+  const sheetName = t.sheet ?? (sheets.find((s) => s.fillable && !s.hidden) ?? sheets.find((s) => s.fillable))?.name ?? null;
 
   const load = async (f: File | undefined) => {
     if (!f) return;
     if (f.size > MAX_TEMPLATE_BYTES) { toast.error(`That file is ${(f.size / 1e6).toFixed(1)} MB. Templates can be up to ${MAX_TEMPLATE_BYTES / 1e6} MB; try removing big pictures from it.`); return; }
     const bytes = new Uint8Array(await f.arrayBuffer());
-    try { setSheets(templateSheets(bytes)); } catch (e) { toast.error((e as Error).message); return; }
+    let list: TemplateSheet[];
+    try { list = templateSheets(bytes); } catch (e) { toast.error((e as Error).message); return; }
+    if (!list.some((s) => s.fillable)) { toast.error("That workbook has no worksheets to fill (only charts)."); return; }
     setFile({ name: f.name, bytes });
     setT((x) => ({ ...x, name: x.name || f.name.replace(/\.xls[xm]$/i, ""), sheet: null }));
   };
 
-  const fields = [...(Object.keys(SHEET_FIELDS) as SheetField[]).map((k) => ({ kind: "cell" as const, key: k })), ...(Object.keys(ROW_FIELDS) as RowField[]).map((k) => ({ kind: "column" as const, key: k }))];
+  const full: TimesheetTemplate | null = file && sheetName ? { ...t, sheet: sheetName, fileName: file.name, file: toBase64(file.bytes) } : null;
+  const problems = full ? [...templateProblems(full, categories), ...(t.name.trim() ? [] : ["Give the template a name"])] : [];
+  const placed = Object.values(t.cells).filter(Boolean).length + Object.values(t.table.columns).filter(Boolean).length;
+
+  // The grid: the sheet as it is, or filled with this timesheet's values exactly as the export will be.
+  const shown = useMemo(() => {
+    if (!file || !sheetName) return { grid: null, note: "" };
+    if (preview && placed) {
+      try {
+        const tpl: TimesheetTemplate = { ...t, sheet: sheetName, fileName: file.name, file: "" };
+        return { grid: readGrid(fillTemplate(file.bytes, sheetName, templateCells(tpl, data(tpl.table.per))), sheetName), note: "" };
+      } catch (e) {
+        return { grid: readGrid(file.bytes, sheetName), note: (e as Error).message };
+      }
+    }
+    return { grid: readGrid(file.bytes, sheetName), note: "" };
+  }, [file, sheetName, preview, placed, t, data]);
+  const grid = shown.grid;
+
+  const fields = [
+    ...(Object.keys(SHEET_FIELDS) as SheetField[]).map((k) => ({ kind: "cell" as const, key: k })),
+    ...categories.map((c) => ({ kind: "cell" as const, key: `custom:${c.id}` as SheetField })),
+    ...(Object.keys(ROW_FIELDS) as RowField[]).map((k) => ({ kind: "column" as const, key: k })),
+  ];
+  const labelOf = (f: NonNullable<Active>) => (f.kind === "cell" ? fieldLabel(f.key, categories) : ROW_FIELDS[f.key]);
   const nextAfter = (a: NonNullable<Active>): Active => {
     const group = fields.filter((f) => f.kind === a.kind);
     const i = group.findIndex((f) => f.key === a.key);
@@ -116,31 +145,27 @@ function TemplateEditor({ initial, onClose }: { initial: TimesheetTemplate | nul
   };
   /** A click on the sheet places the field being set, then moves on to the next unplaced one. */
   const place = (r: number, c: number) => {
-    // A merged block's value lives in its top-left cell.
-    const m = grid?.merges.find((x) => r >= x.s.r && r <= x.e.r && c >= x.s.c && c <= x.e.c);
-    if (m) { r = m.s.r; c = m.s.c; }
-    if (!active) return;
+    if (!active || preview) return;
     if (active.kind === "cell") setT((x) => ({ ...x, cells: { ...x.cells, [active.key]: `${colLetters(c + 1)}${r + 1}` } }));
     else setT((x) => ({ ...x, table: { ...x.table, columns: { ...x.table.columns, [active.key]: colLetters(c + 1) }, startRow: x.table.startRow ?? r + 1 } }));
     setActive(nextAfter(active));
   };
 
-  // What each cell of the preview is set to show.
+  // What each cell of the grid is set to show.
   const marks = new Map<string, string>();
-  for (const [k, ref] of Object.entries(t.cells) as [SheetField, string][]) { const a = ref && parseAddress(ref); if (a) marks.set(`${a.row}:${a.col}`, SHEET_FIELDS[k]); }
+  for (const [k, ref] of Object.entries(t.cells) as [SheetField, string][]) { const a = ref && parseAddress(ref); if (a) marks.set(`${a.row}:${a.col}`, fieldLabel(k, categories)); }
   const tableCols = new Map<number, string>();
   for (const [k, col] of Object.entries(t.table.columns) as [RowField, string][]) if (col) tableCols.set(parseAddress(`${col}1`)?.col ?? 0, ROW_FIELDS[k]);
   const inTable = (row: number) => t.table.startRow !== null && row >= t.table.startRow && row < t.table.startRow + (t.table.rows ?? 1);
 
-  const full: TimesheetTemplate | null = file ? { ...t, fileName: file.name, file: toBase64(file.bytes) } : null;
-  const problems = full ? [...templateProblems(full), ...(t.name.trim() ? [] : ["Give the template a name"])] : [];
   const save = () => {
     if (!full || problems.length) return;
     const list = getTemplates();
+    const named = { ...full, name: full.name.trim() };
     try {
-      saveTemplates(list.some((x) => x.id === full.id) ? list.map((x) => (x.id === full.id ? { ...full, name: full.name.trim() } : x)) : [...list, { ...full, name: full.name.trim() }]);
+      saveTemplates(list.some((x) => x.id === named.id) ? list.map((x) => (x.id === named.id ? named : x)) : [...list, named]);
     } catch (e) { toast.error((e as Error).message); return; }
-    toast.success(`Template "${full.name.trim()}" saved. Use it from Export.`);
+    toast.success(`Template "${named.name}" saved. Use it from Export.`);
     onClose();
   };
   const remove = () => {
@@ -154,15 +179,18 @@ function TemplateEditor({ initial, onClose }: { initial: TimesheetTemplate | nul
     const on = active?.kind === f.kind && active.key === f.key;
     const set = (v: string) => setT((x) => (f.kind === "cell" ? { ...x, cells: { ...x.cells, [f.key]: v.toUpperCase() } } : { ...x, table: { ...x.table, columns: { ...x.table.columns, [f.key]: v.toUpperCase() } } }));
     return (
-      <div key={`${f.kind}:${f.key}`} onClick={() => setActive(f)}
+      <div key={`${f.kind}:${f.key}`} onClick={() => { setActive(f); setPreview(false); }}
         className={`flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-sm ${on ? "bg-primary/15 ring-1 ring-primary/50" : "hover:bg-secondary"}`}>
-        <span className="flex-1 truncate">{f.kind === "cell" ? SHEET_FIELDS[f.key] : ROW_FIELDS[f.key]}</span>
-        <input value={value} onChange={(e) => set(e.target.value)} onFocus={() => setActive(f)} placeholder={on ? "click a cell" : "—"} aria-label={`${f.kind === "cell" ? SHEET_FIELDS[f.key] : ROW_FIELDS[f.key]} ${f.kind === "cell" ? "cell" : "column"}`}
+        <span className="flex-1 truncate" title={labelOf(f)}>{labelOf(f)}</span>
+        <input value={value} onChange={(e) => set(e.target.value)} onFocus={() => setActive(f)} placeholder={on ? "click a cell" : "—"} aria-label={`${labelOf(f)} ${f.kind === "cell" ? "cell" : "column"}`}
           className={`${inputCls} !w-20 !px-2 !py-1 text-center font-mono text-xs`} />
         <button type="button" onClick={(e) => { e.stopPropagation(); set(""); }} disabled={!value} className="text-muted-foreground hover:text-foreground disabled:invisible" aria-label="Clear"><X className="h-3.5 w-3.5" /></button>
       </div>
     );
   };
+  const step = (n: number, text: string) => (
+    <div className="label-mono mb-1 mt-2"><span className="mr-1.5 inline-grid h-4 w-4 place-items-center rounded-full bg-primary text-[10px] text-primary-foreground">{n}</span>{text}</div>
+  );
 
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
@@ -170,7 +198,7 @@ function TemplateEditor({ initial, onClose }: { initial: TimesheetTemplate | nul
         <DialogHeader>
           <DialogTitle>{initial ? `Edit template: ${initial.name}` : "Add a timesheet template"}</DialogTitle>
           <DialogDescription>
-            Use your own Excel timesheet: its look stays exactly as it is, and the app fills in the values. Pick a value on the left, then click the cell it goes in. For the day-by-day rows, click the first row's cell in each column.
+            Use your own Excel timesheet. Each export is a copy of your file with the values filled in: every sheet, the layout, colours, fonts, borders, merged cells, pictures, formulas and print settings stay exactly as they are.
           </DialogDescription>
         </DialogHeader>
         {!file ? (
@@ -181,73 +209,88 @@ function TemplateEditor({ initial, onClose }: { initial: TimesheetTemplate | nul
           </label>
         ) : (
           <div className="flex min-h-0 flex-1 gap-4">
-            <div className="flex w-80 shrink-0 flex-col gap-3 overflow-y-auto pr-1">
+            <div className="flex w-80 shrink-0 flex-col gap-1 overflow-y-auto pr-1">
               <label className="block text-sm"><span className="label-mono">Template name</span>
                 <input className={`${inputCls} mt-1`} value={t.name} onChange={(e) => setT({ ...t, name: e.target.value })} /></label>
-              <div className="flex items-end gap-2 text-sm">
-                {sheets.length > 1 && (
-                  <label className="flex-1"><span className="label-mono">Sheet</span>
-                    <select className={`${inputCls} mt-1`} value={t.sheet ?? sheets[0]} onChange={(e) => setT({ ...t, sheet: e.target.value })}>{sheets.map((s) => <option key={s}>{s}</option>)}</select></label>
-                )}
-                <label className={`${btnGhost} cursor-pointer !py-2 text-xs`} title={file.name}>Other file…<input type="file" accept=".xlsx,.xlsm" className="hidden" onChange={(e) => void load(e.target.files?.[0])} /></label>
+              <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                <span className="truncate" title={file.name}>{file.name}</span>
+                <label className={`${btnGhost} shrink-0 cursor-pointer !py-1.5 text-xs`}>Other file…<input type="file" accept=".xlsx,.xlsm" className="hidden" onChange={(e) => void load(e.target.files?.[0])} /></label>
               </div>
-              <div>
-                <div className="label-mono mb-1">Single values</div>
-                {fields.filter((f) => f.kind === "cell").map(fieldRow)}
+              {step(1, "Pick the sheet: tabs above the grid")}
+              {step(2, "Single values: pick one, click its cell")}
+              {fields.filter((f) => f.kind === "cell").map(fieldRow)}
+              {step(3, "Day-by-day rows: first row's cell")}
+              <div className="mb-1 grid grid-cols-2 gap-2 text-xs">
+                <label><span className="text-muted-foreground">First row</span>
+                  <input type="number" min={1} className={`${inputCls} mt-0.5 !py-1`} value={t.table.startRow ?? ""} onChange={(e) => setT({ ...t, table: { ...t.table, startRow: e.target.value ? Math.max(1, Math.round(+e.target.value)) : null } })} /></label>
+                <label title="How many rows the template has for days. Rows a period doesn't use are emptied; a period needing more is refused."><span className="text-muted-foreground">Rows it has room for</span>
+                  <input type="number" min={1} className={`${inputCls} mt-0.5 !py-1`} placeholder="no limit" value={t.table.rows ?? ""} onChange={(e) => setT({ ...t, table: { ...t.table, rows: e.target.value ? Math.max(1, Math.round(+e.target.value)) : null } })} /></label>
+                <label className="col-span-2"><span className="text-muted-foreground">One row for each</span>
+                  <select className={`${inputCls} mt-0.5 !py-1`} value={t.table.per} onChange={(e) => setT({ ...t, table: { ...t.table, per: e.target.value as "record" | "day" } })}>
+                    <option value="record">time record</option>
+                    <option value="day">day of the period (days off left blank)</option>
+                  </select></label>
               </div>
-              <div>
-                <div className="label-mono mb-1">Day-by-day rows</div>
-                <div className="mb-2 grid grid-cols-2 gap-2 text-xs">
-                  <label><span className="text-muted-foreground">First row</span>
-                    <input type="number" min={1} className={`${inputCls} mt-0.5 !py-1`} value={t.table.startRow ?? ""} onChange={(e) => setT({ ...t, table: { ...t.table, startRow: e.target.value ? Math.max(1, Math.round(+e.target.value)) : null } })} /></label>
-                  <label title="How many rows the template has for days. Leave empty if nothing is below them."><span className="text-muted-foreground">Rows it has room for</span>
-                    <input type="number" min={1} className={`${inputCls} mt-0.5 !py-1`} placeholder="no limit" value={t.table.rows ?? ""} onChange={(e) => setT({ ...t, table: { ...t.table, rows: e.target.value ? Math.max(1, Math.round(+e.target.value)) : null } })} /></label>
-                  <label className="col-span-2"><span className="text-muted-foreground">One row for each</span>
-                    <select className={`${inputCls} mt-0.5 !py-1`} value={t.table.per} onChange={(e) => setT({ ...t, table: { ...t.table, per: e.target.value as "record" | "day" } })}>
-                      <option value="record">time record</option>
-                      <option value="day">day of the period (days off left blank)</option>
-                    </select></label>
-                </div>
-                {fields.filter((f) => f.kind === "column").map(fieldRow)}
-              </div>
+              {fields.filter((f) => f.kind === "column").map(fieldRow)}
+              {step(4, "Tick the preview to check, then save")}
             </div>
-            <div className="min-w-0 flex-1 overflow-auto rounded-xl ring-1 ring-border">
-              <table className="border-collapse text-xs">
-                <thead className="sticky top-0 z-10">
-                  <tr><th className="sticky left-0 z-10 w-10 bg-secondary" />{Array.from({ length: grid?.cols ?? 0 }, (_, c) => (
-                    <th key={c} className={`min-w-[5.5rem] border border-border bg-secondary px-1 py-0.5 font-mono font-normal text-muted-foreground ${tableCols.has(c + 1) ? "!bg-primary/20 !text-foreground" : ""}`}>{colLetters(c + 1)}</th>
-                  ))}</tr>
-                </thead>
-                <tbody>
-                  {grid?.rows.map((row, r) => (
-                    <tr key={r}>
-                      <th className={`sticky left-0 border border-border bg-secondary px-1 font-mono font-normal text-muted-foreground ${inTable(r + 1) ? "!bg-primary/20 !text-foreground" : ""}`}>{r + 1}</th>
-                      {row.map((v, c) => {
-                        const mark = marks.get(`${r + 1}:${c + 1}`) ?? (inTable(r + 1) && r + 1 === t.table.startRow ? tableCols.get(c + 1) : undefined);
-                        const rowCell = inTable(r + 1) && tableCols.has(c + 1);
-                        return (
-                          <td key={c} onClick={() => place(r, c)} title={`${colLetters(c + 1)}${r + 1}${mark ? ` · ${mark}` : ""}${v ? ` · ${v}` : ""}`}
-                            className={`max-w-[11rem] cursor-pointer truncate border border-border px-1.5 py-1 ${mark ? "bg-primary/25 font-medium text-foreground" : rowCell ? "bg-primary/10" : "hover:bg-accent"}`}>
-                            {mark ? <span className="rounded bg-primary px-1 text-[10px] text-primary-foreground">{mark}</span> : v}
-                          </td>
-                        );
-                      })}
-                    </tr>
+            <div className="flex min-w-0 flex-1 flex-col gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap gap-1" role="tablist" aria-label="Sheets">
+                  {sheets.map((s) => (
+                    <button key={s.name} type="button" role="tab" aria-selected={s.name === sheetName} disabled={!s.fillable}
+                      onClick={() => setT({ ...t, sheet: s.name })} title={s.fillable ? (s.hidden ? "A hidden sheet" : `Fill "${s.name}"`) : "A chart sheet: it can't hold values"}
+                      className={`rounded-t-lg border-b-2 px-3 py-1.5 text-xs ${s.name === sheetName ? "border-primary bg-primary/15 font-semibold text-foreground" : "border-transparent bg-secondary text-muted-foreground hover:text-foreground"} disabled:opacity-40`}>
+                      {s.name}{s.hidden ? " (hidden)" : ""}{!s.fillable ? " (chart)" : ""}
+                    </button>
                   ))}
-                </tbody>
-              </table>
+                </div>
+                <label className={`flex items-center gap-2 text-xs ${placed ? "" : "opacity-50"}`} title="Fills the template with the timesheet open now, exactly as the export will">
+                  <input type="checkbox" checked={preview} disabled={!placed} onChange={(e) => setPreview(e.target.checked)} />
+                  <Eye className="h-3.5 w-3.5" />Preview with this timesheet
+                </label>
+              </div>
+              {shown.note && <div className="rounded-lg bg-destructive/10 px-3 py-1.5 text-xs text-destructive">{shown.note}</div>}
+              <div className="min-h-0 flex-1 overflow-auto rounded-xl ring-1 ring-border">
+                <table className="border-collapse text-xs">
+                  <thead className="sticky top-0 z-10">
+                    <tr><th className="sticky left-0 z-10 w-10 bg-secondary" />{Array.from({ length: grid?.cols ?? 0 }, (_, c) => (
+                      <th key={c} className={`min-w-[5.5rem] border border-border bg-secondary px-1 py-0.5 font-mono font-normal text-muted-foreground ${tableCols.has(c + 1) ? "!bg-primary/20 !text-foreground" : ""}`}>{colLetters(c + 1)}</th>
+                    ))}</tr>
+                  </thead>
+                  <tbody>
+                    {grid?.rows.map((row, r) => (
+                      <tr key={r}>
+                        <th className={`sticky left-0 border border-border bg-secondary px-1 font-mono font-normal text-muted-foreground ${inTable(r + 1) ? "!bg-primary/20 !text-foreground" : ""}`}>{r + 1}</th>
+                        {row.map((v, c) => {
+                          const mark = marks.get(`${r + 1}:${c + 1}`) ?? (inTable(r + 1) && r + 1 === t.table.startRow ? tableCols.get(c + 1) : undefined);
+                          const rowCell = inTable(r + 1) && tableCols.has(c + 1);
+                          const filled = preview && (mark || rowCell);
+                          return (
+                            <td key={c} onClick={() => place(r, c)} title={`${colLetters(c + 1)}${r + 1}${mark ? ` · ${mark}` : ""}${v ? ` · ${v}` : ""}`}
+                              className={`max-w-[11rem] truncate border border-border px-1.5 py-1 ${preview ? "" : "cursor-pointer"} ${filled ? "bg-emerald-500/15 font-medium text-foreground" : mark ? "bg-primary/25 font-medium text-foreground" : rowCell ? "bg-primary/10" : preview ? "" : "hover:bg-accent"}`}>
+                              {mark && !preview ? <span className="rounded bg-primary px-1 text-[10px] text-primary-foreground">{mark}</span> : v}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         )}
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
           <div className="min-w-0 flex-1 text-xs text-muted-foreground">
-            {active && file && <span className="text-foreground">Click the cell for <b>{active.kind === "cell" ? SHEET_FIELDS[active.key] : `${ROW_FIELDS[active.key]} (first row)`}</b>. </span>}
+            {preview ? <span>Previewing the export with the timesheet open now; filled cells are green. Your template's own formulas (totals) show their old values here; Excel recalculates them when the file opens. Untick the preview to keep placing values. </span>
+              : active && file ? <span className="text-foreground">Click the cell for <b>{active.kind === "cell" ? labelOf(active) : `${ROW_FIELDS[active.key]} (first row)`}</b>{sheetName ? ` on "${sheetName}"` : ""}. </span> : null}
             {problems.length > 0 && <span className="text-destructive">{problems[0]}{problems.length > 1 ? ` (+${problems.length - 1} more)` : ""}</span>}
           </div>
           <div className="flex gap-2">
             {initial && <button type="button" onClick={remove} className={`${btnGhost} hover:!text-destructive`}>Delete template</button>}
             <button type="button" onClick={onClose} className={btnGhost}>Cancel</button>
-            <button type="button" onClick={save} disabled={!file || problems.length > 0} className={`${btnPrimary} disabled:opacity-50`}>Save template</button>
+            <button type="button" onClick={save} disabled={!full || problems.length > 0} className={`${btnPrimary} disabled:opacity-50`}>Save template</button>
           </div>
         </div>
       </DialogContent>

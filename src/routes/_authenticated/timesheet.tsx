@@ -137,8 +137,10 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
     .filter((r) => r.work_date >= from && r.work_date <= to)
     .sort((a, b) => a.work_date.localeCompare(b.work_date) || (a.clock_in ?? "").localeCompare(b.clock_in ?? ""));
   const extras = adjustments.reduce((s, a) => s + Number(a.amount), 0);
+  // Categories filed under Personal are personal details, which stay off timesheets.
+  const templateCategories = defs.filter((d) => d.section !== "Personal").map((d) => ({ id: d.id, label: d.label, field_type: d.field_type }));
   const exportData = (per: "record" | "day") => timesheetData({
-    employee: emp, shiftName: shift.name, rates, from, to, today: isoDate(new Date()), lines: lineById, extraPay: extras,
+    employee: emp, categories: templateCategories, shiftName: shift.name, rates, from, to, today: isoDate(new Date()), lines: lineById, extraPay: extras,
     records: shown.map((r) => ({ ...r, shiftName: shiftFor(r.shift_id ?? emp.shift_id, shifts).name, rate: rateOn(rateHistory, emp.hourly_rate, r.work_date) })),
   }, per);
   const lunchHours = shown.reduce((s, r) => s + r.lunch_minutes, 0) / 60;
@@ -196,7 +198,7 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
             </div>
           </div>
           <div className="flex gap-2">
-            <TimesheetExport data={exportData} fileName={`timesheet ${fullName(emp)} ${from} to ${to}`} />
+            <TimesheetExport data={exportData} categories={templateCategories} fileName={`timesheet ${fullName(emp)} ${from} to ${to}`} />
             <Link to="/employees/$id" params={{ id: emp.id }} className={`${btnGhost} print:hidden`}>Edit profile</Link>
           </div>
         </div>
