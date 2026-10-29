@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import * as XLSX from "xlsx";
 import { toast } from "sonner";
 import { ChevronDown, Download, Eye, FileSpreadsheet, Pencil, Upload, X } from "lucide-react";
@@ -10,6 +10,7 @@ import {
   type RowField, type SheetField, type TemplateCategory, type TimesheetData, type TimesheetTemplate,
 } from "@/lib/export/timesheet-export";
 import { fillTemplate, parseAddress, templateSheets, type TemplateSheet } from "@/lib/export/xlsx-template";
+import { renderSheet, type RenderedCell, type RenderedSheet } from "@/lib/export/sheet-render";
 
 const XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const safeName = (s: string) => s.replace(/[\\/:*?"<>|]+/g, "-").trim() || "timesheet";
@@ -66,25 +67,65 @@ export function TimesheetExport({ data, fileName, categories }: { data: (per: "r
   );
 }
 
-type Grid = { rows: string[][]; cols: number };
-const PREVIEW_ROWS = 80, PREVIEW_COLS = 26;
-
-/** The sheet's text as Excel would show it (number formats applied), for clicking cells and previewing. */
-function readGrid(bytes: Uint8Array, sheet: string): Grid {
-  const wb = XLSX.read(bytes, { type: "array", sheetRows: PREVIEW_ROWS });
-  const ws = wb.Sheets[sheet];
-  if (!ws?.["!ref"]) return { rows: Array.from({ length: 20 }, () => Array<string>(8).fill("")), cols: 8 };
-  const range = XLSX.utils.decode_range(ws["!ref"]);
-  const cols = Math.min(PREVIEW_COLS, Math.max(8, range.e.c + 2));
-  const rows: string[][] = [];
-  for (let r = 0; r < Math.min(PREVIEW_ROWS, Math.max(20, range.e.r + 6)); r++) {
-    const row: string[] = [];
-    for (let c = 0; c < cols; c++) { const cell = ws[XLSX.utils.encode_cell({ r, c })] as XLSX.CellObject | undefined; row.push(cell ? String(cell.w ?? cell.v ?? "") : ""); }
-    rows.push(row);
-  }
-  return { rows, cols };
+/** A cell's look on screen: the template's own fill, font, borders and alignment, drawn on white paper as Excel shows it. */
+function cellStyle(c: RenderedCell, height: number, gridlines: boolean): CSSProperties {
+  const l = c.look;
+  const grid = gridlines ? "1px solid #d4d4d4" : "1px solid transparent";
+  return {
+    height, background: l.background ?? "#ffffff", color: l.color ?? "#000000",
+    fontWeight: l.bold ? 700 : 400, fontStyle: l.italic ? "italic" : "normal",
+    textDecoration: [l.underline ? "underline" : "", l.strike ? "line-through" : ""].filter(Boolean).join(" ") || "none",
+    fontSize: `${((l.fontSize ?? 11) * 4) / 3}px`, fontFamily: `${l.fontFamily ? `"${l.fontFamily}", ` : ""}Calibri, Carlito, Arial, sans-serif`,
+    textAlign: l.align ?? (c.numeric ? "right" : "left"), verticalAlign: l.valign ?? "bottom",
+    whiteSpace: l.wrap ? "normal" : "nowrap", overflow: "hidden", lineHeight: 1.15, padding: "0 3px", position: "relative",
+    borderTop: l.borderTop ?? grid, borderRight: l.borderRight ?? grid, borderBottom: l.borderBottom ?? grid, borderLeft: l.borderLeft ?? grid,
+  };
 }
 
+/** The template's sheet as Excel draws it, with the values placed so far marked on top. */
+function SheetView({ sheet, marks, tableCols, inTable, startRow, preview, onCell }: {
+  sheet: RenderedSheet; marks: Map<string, string>; tableCols: Map<number, string>; inTable: (row: number) => boolean; startRow: number | null;
+  preview: boolean; onCell: (row: number, col: number) => void;
+}) {
+  const header = "sticky bg-[#f3f3f3] text-[#555] font-normal font-mono text-[11px] border border-[#d4d4d4]";
+  return (
+    <table style={{ tableLayout: "fixed", borderCollapse: "collapse", width: 40 + sheet.cols.reduce((n, c) => n + c.width, 0) }}>
+      <colgroup><col style={{ width: 40 }} />{sheet.cols.map((c) => <col key={c.col} style={{ width: c.width }} />)}</colgroup>
+      <thead>
+        <tr>
+          <th className={`${header} left-0 top-0 z-30`} />
+          {sheet.cols.map((c) => <th key={c.col} className={`${header} top-0 z-20 py-0.5 ${tableCols.has(c.col) ? "!bg-[#dbe7fb] !text-[#1a4fa0]" : ""}`}>{colLetters(c.col)}</th>)}
+        </tr>
+      </thead>
+      <tbody>
+        {sheet.rows.map((r) => (
+          <tr key={r.row}>
+            <th className={`${header} left-0 z-10 px-1 ${inTable(r.row) ? "!bg-[#dbe7fb] !text-[#1a4fa0]" : ""}`}>{r.row}</th>
+            {r.cells.map((c) => {
+              const mark = marks.get(`${c.row}:${c.col}`) ?? (c.row === startRow ? tableCols.get(c.col) : undefined);
+              const rowCell = inTable(c.row) && tableCols.has(c.col);
+              const style = cellStyle(c, r.height, sheet.gridlines);
+              // Marks go on top of the template's own look, never instead of it.
+              if (preview) { if (mark || rowCell) style.boxShadow = "inset 0 0 0 2px rgba(16,185,129,0.9)"; }
+              else if (mark) style.boxShadow = "inset 0 0 0 2px rgba(37,99,235,0.95)";
+              else if (rowCell) style.boxShadow = "inset 0 0 0 9999px rgba(37,99,235,0.12)";
+              return (
+                <td key={c.col} rowSpan={c.rowSpan} colSpan={c.colSpan} style={style} onClick={() => onCell(c.row, c.col)}
+                  title={`${colLetters(c.col)}${c.row}${mark ? ` · ${mark}` : ""}${c.text ? ` · ${c.text}` : ""}`}
+                  className={preview ? "" : "cursor-pointer hover:outline hover:outline-2 hover:-outline-offset-2 hover:outline-blue-500"}>
+                  {c.text}
+                  {mark && !preview && (
+                    <span className="pointer-events-none absolute left-0.5 top-0.5 z-[1] max-w-[95%] truncate rounded bg-blue-600 px-1 font-sans text-[10px] font-medium leading-4 text-white shadow">{mark}</span>
+                  )}
+                </td>
+              );
+            })}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
 type Active = { kind: "cell"; key: SheetField } | { kind: "column"; key: RowField } | null;
 const emptyTemplate = (): Omit<TimesheetTemplate, "file" | "fileName"> => ({
   id: crypto.randomUUID(), name: "", sheet: null, cells: {}, table: { columns: {}, startRow: null, rows: null, per: "record" },
@@ -117,20 +158,20 @@ function TemplateEditor({ initial, onClose, data, categories }: {
   const problems = full ? [...templateProblems(full, categories), ...(t.name.trim() ? [] : ["Give the template a name"])] : [];
   const placed = Object.values(t.cells).filter(Boolean).length + Object.values(t.table.columns).filter(Boolean).length;
 
-  // The grid: the sheet as it is, or filled with this timesheet's values exactly as the export will be.
+  // The sheet as Excel shows it, or filled with this timesheet's values exactly as the export will be.
   const shown = useMemo(() => {
-    if (!file || !sheetName) return { grid: null, note: "" };
+    if (!file || !sheetName) return { sheet: null, note: "" };
+    const draw = (bytes: Uint8Array) => renderSheet(bytes, sheetName);
     if (preview && placed) {
       try {
         const tpl: TimesheetTemplate = { ...t, sheet: sheetName, fileName: file.name, file: "" };
-        return { grid: readGrid(fillTemplate(file.bytes, sheetName, templateCells(tpl, data(tpl.table.per))), sheetName), note: "" };
+        return { sheet: draw(fillTemplate(file.bytes, sheetName, templateCells(tpl, data(tpl.table.per)))), note: "" };
       } catch (e) {
-        return { grid: readGrid(file.bytes, sheetName), note: (e as Error).message };
+        return { sheet: draw(file.bytes), note: (e as Error).message };
       }
     }
-    return { grid: readGrid(file.bytes, sheetName), note: "" };
+    return { sheet: draw(file.bytes), note: preview ? "Nothing is placed yet: pick a value on the left and click its cell, then the preview shows it filled in." : "" };
   }, [file, sheetName, preview, placed, t, data]);
-  const grid = shown.grid;
 
   const fields = [
     ...(Object.keys(SHEET_FIELDS) as SheetField[]).map((k) => ({ kind: "cell" as const, key: k })),
@@ -245,38 +286,14 @@ function TemplateEditor({ initial, onClose, data, categories }: {
                     </button>
                   ))}
                 </div>
-                <label className={`flex items-center gap-2 text-xs ${placed ? "" : "opacity-50"}`} title="Fills the template with the timesheet open now, exactly as the export will">
-                  <input type="checkbox" checked={preview} disabled={!placed} onChange={(e) => setPreview(e.target.checked)} />
+                <label className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-xs ring-1 ring-border hover:bg-secondary" title="Fills the template with the timesheet open now, exactly as the export will">
+                  <input type="checkbox" checked={preview} onChange={(e) => setPreview(e.target.checked)} />
                   <Eye className="h-3.5 w-3.5" />Preview with this timesheet
                 </label>
               </div>
-              {shown.note && <div className="rounded-lg bg-destructive/10 px-3 py-1.5 text-xs text-destructive">{shown.note}</div>}
-              <div className="min-h-0 flex-1 overflow-auto rounded-xl ring-1 ring-border">
-                <table className="border-collapse text-xs">
-                  <thead className="sticky top-0 z-10">
-                    <tr><th className="sticky left-0 z-10 w-10 bg-secondary" />{Array.from({ length: grid?.cols ?? 0 }, (_, c) => (
-                      <th key={c} className={`min-w-[5.5rem] border border-border bg-secondary px-1 py-0.5 font-mono font-normal text-muted-foreground ${tableCols.has(c + 1) ? "!bg-primary/20 !text-foreground" : ""}`}>{colLetters(c + 1)}</th>
-                    ))}</tr>
-                  </thead>
-                  <tbody>
-                    {grid?.rows.map((row, r) => (
-                      <tr key={r}>
-                        <th className={`sticky left-0 border border-border bg-secondary px-1 font-mono font-normal text-muted-foreground ${inTable(r + 1) ? "!bg-primary/20 !text-foreground" : ""}`}>{r + 1}</th>
-                        {row.map((v, c) => {
-                          const mark = marks.get(`${r + 1}:${c + 1}`) ?? (inTable(r + 1) && r + 1 === t.table.startRow ? tableCols.get(c + 1) : undefined);
-                          const rowCell = inTable(r + 1) && tableCols.has(c + 1);
-                          const filled = preview && (mark || rowCell);
-                          return (
-                            <td key={c} onClick={() => place(r, c)} title={`${colLetters(c + 1)}${r + 1}${mark ? ` · ${mark}` : ""}${v ? ` · ${v}` : ""}`}
-                              className={`max-w-[11rem] truncate border border-border px-1.5 py-1 ${preview ? "" : "cursor-pointer"} ${filled ? "bg-emerald-500/15 font-medium text-foreground" : mark ? "bg-primary/25 font-medium text-foreground" : rowCell ? "bg-primary/10" : preview ? "" : "hover:bg-accent"}`}>
-                              {mark && !preview ? <span className="rounded bg-primary px-1 text-[10px] text-primary-foreground">{mark}</span> : v}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              {shown.note && <div className="rounded-lg bg-secondary px-3 py-1.5 text-xs text-foreground ring-1 ring-border">{shown.note}</div>}
+              <div className="min-h-0 flex-1 overflow-auto rounded-xl bg-white ring-1 ring-border">
+                {shown.sheet && <SheetView sheet={shown.sheet} marks={marks} tableCols={tableCols} inTable={inTable} startRow={t.table.startRow} preview={preview} onCell={(r, c) => place(r - 1, c - 1)} />}
               </div>
             </div>
           </div>

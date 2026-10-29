@@ -39,12 +39,12 @@ const timeSerial = (hm: string) => { const [h = 0, m = 0, s = 0] = hm.split(":")
 
 /** Encoded text as this window's Uint8Array (a TextEncoder from another realm's fails fflate's check). */
 const strToU8 = (text: string) => Uint8Array.from(encode(text));
-const xml = (text: string) => new DOMParser().parseFromString(text, "application/xml");
+export const xml = (text: string) => new DOMParser().parseFromString(text, "application/xml");
 /** Elements by local name, whatever namespace or prefix the file uses (Excel's own, "strict" files, other programs). */
-const byName = (root: Document | Element, name: string) => [...root.getElementsByTagName("*")].filter((e) => e.localName === name);
+export const byName = (root: Document | Element, name: string) => [...root.getElementsByTagName("*")].filter((e) => e.localName === name);
 const attrByLocalName = (e: Element, name: string) => [...e.attributes].find((a) => a.localName === name)?.value ?? null;
 
-function readZip(file: Uint8Array) {
+export function readZip(file: Uint8Array) {
   try {
     return unzipSync(file);
   } catch {
@@ -53,7 +53,7 @@ function readZip(file: Uint8Array) {
 }
 
 /** The workbook's sheets in tab order, each with the file inside the zip that holds it. */
-function sheetEntries(files: Record<string, Uint8Array>) {
+export function sheetEntries(files: Record<string, Uint8Array>) {
   const wbRaw = files["xl/workbook.xml"], relsRaw = files["xl/_rels/workbook.xml.rels"];
   if (!wbRaw || !relsRaw) throw new TemplateError("That isn't an Excel workbook (.xlsx).");
   const rels = new Map(byName(xml(strFromU8(relsRaw)), "Relationship").map((r) => [r.getAttribute("Id"), r]));
