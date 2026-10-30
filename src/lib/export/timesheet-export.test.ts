@@ -36,6 +36,25 @@ describe("timesheet export", () => {
     expect(byDay.rows[1]).toMatchObject({ hours: null, clock_in: null, pay: null, weekday: "Tue" });
   });
 
+  it("lays rows over whole weeks, dating every day, and refuses a period past them", () => {
+    // The period starts on a Monday; two weeks give 14 dated days, the 19th's two records each in a row by record.
+    const byDay = timesheetData(input, "day", 2);
+    expect(byDay.rows).toHaveLength(14);
+    expect(byDay.rows[13]).toMatchObject({ date: { date: "2026-11-01" }, weekday: "Sun", clock_in: null, hours: null, pay: null });
+    const byRecord = timesheetData(input, "record", 2);
+    expect(byRecord.rows).toHaveLength(15);
+    expect(byRecord.rows.map((r) => r.weekday).slice(0, 4)).toEqual(["Mon", "Mon", "Tue", "Wed"]);
+    expect(byRecord.rows[2]).toMatchObject({ date: { date: "2026-10-20" }, clock_in: null });
+    // A mid-week start begins on that week's Monday.
+    expect(timesheetData({ ...input, from: "2026-10-21" }, "day", 1).rows[0]!.date).toEqual({ date: "2026-10-19" });
+    expect(() => timesheetData({ ...input, to: "2026-10-26" }, "day", 1)).toThrow(/shows 1 week \(2026-10-19 to 2026-10-25\)/);
+    // Weeks can start on another weekday (counting back from the period's start), or on the period's first day.
+    expect(timesheetData({ ...input, from: "2026-10-21" }, "day", 1, 3).rows.map((r) => r.weekday)).toEqual(["Wed", "Thu", "Fri", "Sat", "Sun", "Mon", "Tue"]);
+    expect(timesheetData({ ...input, from: "2026-10-20" }, "day", 1, 6).rows[0]!.date).toEqual({ date: "2026-10-17" });
+    expect(timesheetData({ ...input, from: "2026-10-20" }, "day", 1, "period").rows[0]!.date).toEqual({ date: "2026-10-20" });
+    expect(templateProblems(template({ per: "day", weeks: 2, rows: 7 }))).toContain("2 weeks need 14 rows, and the template has room for 7");
+  });
+
   it("places values and rows where the template says, clearing its unused rows, and refuses too many rows", () => {
     const cells = templateCells(template(), timesheetData(input));
     expect(cells.get("B2")).toBe("Ada Lovelace");

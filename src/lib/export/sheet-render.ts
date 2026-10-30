@@ -1,5 +1,6 @@
 import * as XLSX from "xlsx";
 import { strFromU8 } from "fflate";
+import { recalculate } from "./formula";
 import { byName, parseAddress, readZip, sheetEntries, xml } from "./xlsx-template";
 
 // Lays a template's sheet out the way Excel shows it, so the editor can draw it: each cell's text (with its number
@@ -14,7 +15,11 @@ export type CellLook = {
 };
 export type RenderedCell = { row: number; col: number; text: string; look: CellLook; rowSpan: number; colSpan: number; numeric: boolean };
 /** Rows and columns are 1-based sheet numbers; `rows` and `cols` list only the visible ones. */
-export type RenderedSheet = { cols: { col: number; width: number }[]; rows: { row: number; height: number; cells: RenderedCell[] }[]; gridlines: boolean };
+export type RenderedSheet = {
+  cols: { col: number; width: number }[]; rows: { row: number; height: number; cells: RenderedCell[] }[];
+  /** Gridlines shown on screen, and printed (Excel prints them only when the sheet's page setup asks). */
+  gridlines: boolean; printGridlines?: boolean;
+};
 
 // Excel's 64 indexed colours (the old palette, still used by some files).
 const INDEXED = ["000000", "FFFFFF", "FF0000", "00FF00", "0000FF", "FFFF00", "FF00FF", "00FFFF", "000000", "FFFFFF", "FF0000", "00FF00", "0000FF", "FFFF00", "FF00FF", "00FFFF",
@@ -130,22 +135,46 @@ const colPx = (chars: number) => Math.round(chars * 7 + 5);
 /** Row height in points to pixels. */
 const rowPx = (pt: number) => Math.round((pt * 4) / 3);
 
-/** The sheet named `sheet`, laid out for drawing: at least `minRows` × `minCols`, at most `maxRows` × `maxCols`. */
-export function renderSheet(file: Uint8Array, sheet: string, opts: { minRows?: number; minCols?: number; maxRows?: number; maxCols?: number } = {}): RenderedSheet {
+/** The first print area set for the sheet at `index` (tab order), from the workbook's defined names. */
+function printArea(files: Record<string, Uint8Array>, index: number) {
+  const wb = files["xl/workbook.xml"];
+  if (!wb) return null;
+  const name = byName(xml(strFromU8(wb)), "definedName").find((d) => d.getAttribute("name") === "_xlnm.Print_Area" && Number(d.getAttribute("localSheetId")) === index);
+  const first = (name?.textContent ?? "").split(",")[0]!;
+  const [a, b] = first.slice(first.lastIndexOf("!") + 1).replace(/\$/g, "").split(":").map((x) => parseAddress(x ?? ""));
+  return a && b ? { r1: a.row, c1: a.col, r2: b.row, c2: b.col } : null;
+}
+
+/**
+ * The sheet named `sheet`, laid out for drawing: at least `minRows` × `minCols`, at most `maxRows` × `maxCols`.
+ * For a PDF: `recalculate` works the formulas out again (Excel would on opening; throws if one can't be), and
+ * `printArea` keeps to the sheet's print area when it has one.
+ */
+export function renderSheet(file: Uint8Array, sheet: string, opts: { minRows?: number; minCols?: number; maxRows?: number; maxCols?: number; recalculate?: Date; printArea?: boolean } = {}): RenderedSheet {
   const { minRows = 30, minCols = 10, maxRows = 120, maxCols = 40 } = opts;
   const files = readZip(file);
-  const entry = sheetEntries(files).find((s) => s.name === sheet && s.fillable);
+  const entries = sheetEntries(files);
+  const entry = entries.find((s) => s.name === sheet && s.fillable);
   if (!entry) return { cols: [], rows: [], gridlines: true };
   const doc = xml(strFromU8(files[entry.path]!));
   const looks = styleLooks(files);
   // The text, with number formats applied. A file SheetJS can't read still shows its design, without text.
   let ws: XLSX.WorkSheet | undefined;
-  try { ws = XLSX.read(file, { type: "array", sheets: [sheet], sheetRows: maxRows }).Sheets[sheet]; } catch { ws = undefined; }
+  if (opts.recalculate) {
+    // Every sheet, as formulas may refer to others; a formula that can't be worked out stops the export.
+    const wb = XLSX.read(file, { type: "array", cellNF: true });
+    recalculate(wb, sheet, opts.recalculate);
+    ws = wb.Sheets[sheet];
+  } else {
+    try { ws = XLSX.read(file, { type: "array", sheets: [sheet], sheetRows: maxRows }).Sheets[sheet]; } catch { ws = undefined; }
+  }
+  const area = opts.printArea ? printArea(files, entries.indexOf(entry)) : null;
 
   const fmt = byName(doc, "sheetFormatPr")[0];
   const defaultWidth = Number(fmt?.getAttribute("defaultColWidth") ?? 0) || Number(fmt?.getAttribute("baseColWidth") ?? 8) + 0.43;
   const defaultHeight = Number(fmt?.getAttribute("defaultRowHeight") ?? 15) || 15;
   const gridlines = byName(doc, "sheetView")[0]?.getAttribute("showGridLines") !== "0";
+  const printGridlines = ["1", "true"].includes(byName(doc, "printOptions")[0]?.getAttribute("gridLines") ?? "");
 
   // Columns: width, hidden, default style.
   const colInfo = new Map<number, { width: number | undefined; hidden: boolean; style: number | undefined }>();
@@ -171,11 +200,11 @@ export function renderSheet(file: Uint8Array, sheet: string, opts: { minRows?: n
   }
   const merges = byName(doc, "mergeCell").map((m) => (m.getAttribute("ref") ?? "").split(":").map(parseAddress)).filter((m): m is [NonNullable<ReturnType<typeof parseAddress>>, NonNullable<ReturnType<typeof parseAddress>>] => !!m[0] && !!m[1]);
   for (const [, b] of merges) { lastRow = Math.max(lastRow, b.row); lastCol = Math.max(lastCol, b.col); }
-  const rowsTo = Math.min(maxRows, Math.max(minRows, lastRow + 3));
-  const colsTo = Math.min(maxCols, Math.max(minCols, lastCol + 2));
+  const rowsTo = Math.min(maxRows, area ? area.r2 : Math.max(minRows, lastRow + 3));
+  const colsTo = Math.min(maxCols, area ? area.c2 : Math.max(minCols, lastCol + 2));
 
-  const visibleCols = Array.from({ length: colsTo }, (_, i) => i + 1).filter((c) => !colInfo.get(c)?.hidden);
-  const visibleRows = Array.from({ length: rowsTo }, (_, i) => i + 1).filter((r) => !rowInfo.get(r)?.hidden);
+  const visibleCols = Array.from({ length: colsTo }, (_, i) => i + 1).filter((c) => !colInfo.get(c)?.hidden && (!area || c >= area.c1));
+  const visibleRows = Array.from({ length: rowsTo }, (_, i) => i + 1).filter((r) => !rowInfo.get(r)?.hidden && (!area || r >= area.r1));
   const covered = new Set<string>();
   const spans = new Map<string, { rowSpan: number; colSpan: number }>();
   for (const [a, b] of merges) {
@@ -186,7 +215,7 @@ export function renderSheet(file: Uint8Array, sheet: string, opts: { minRows?: n
   }
 
   return {
-    gridlines,
+    gridlines, printGridlines,
     cols: visibleCols.map((col) => ({ col, width: colPx(colInfo.get(col)?.width ?? defaultWidth) })),
     rows: visibleRows.map((row) => ({
       row,

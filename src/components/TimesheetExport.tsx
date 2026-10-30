@@ -1,22 +1,19 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import * as XLSX from "xlsx";
 import { toast } from "sonner";
-import { ChevronDown, Download, Eye, FileSpreadsheet, Pencil, Upload, X } from "lucide-react";
+import { ChevronDown, Download, Eye, FileSpreadsheet, FileText, Pencil, Upload, X } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { btnGhost, btnPrimary, inputCls } from "@/components/AppShell";
 import { downloadBlob } from "@/lib/db/backups";
 import {
-  colLetters, fieldLabel, fromBase64, getTemplates, MAX_TEMPLATE_BYTES, plainCsv, plainXlsx, ROW_FIELDS, saveTemplates, SHEET_FIELDS, templateCells, templateProblems, toBase64, useTemplates,
-  type RowField, type SheetField, type TemplateCategory, type TimesheetData, type TimesheetTemplate,
+  colLetters, exportFile, fieldLabel, fromBase64, ROW_FIELDS, SHEET_FIELDS, templateCells, templateProblems, toBase64,
+  WEEKDAY_NAMES, type ExportKind, type RowField, type SheetField, type TemplateCategory, type TimesheetSource, type TimesheetTemplate,
 } from "@/lib/export/timesheet-export";
+import { deleteTemplate, MAX_TEMPLATE_BYTES, saveTemplate, useTemplates } from "@/lib/export/template-store";
 import { fillTemplate, parseAddress, templateSheets, type TemplateSheet } from "@/lib/export/xlsx-template";
 import { renderSheet, type RenderedCell, type RenderedSheet } from "@/lib/export/sheet-render";
 
-const XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-const safeName = (s: string) => s.replace(/[\\/:*?"<>|]+/g, "-").trim() || "timesheet";
-
-/** The Timesheet page's Export menu: a plain Excel or CSV file, or the period filled into one of the user's templates. */
-export function TimesheetExport({ data, fileName, categories }: { data: (per: "record" | "day") => TimesheetData; fileName: string; categories: TemplateCategory[] }) {
+/** The Timesheet page's Export menu: a plain Excel, CSV or PDF file, or the period filled into one of the user's templates (as Excel or PDF). */
+export function TimesheetExport({ data, fileName, categories }: { data: TimesheetSource; fileName: string; categories: TemplateCategory[] }) {
   const templates = useTemplates();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<TimesheetTemplate | "new" | null>(null);
@@ -28,18 +25,14 @@ export function TimesheetExport({ data, fileName, categories }: { data: (per: "r
     return () => document.removeEventListener("mousedown", close);
   }, [open]);
 
-  const run = (fn: () => void) => { setOpen(false); try { fn(); } catch (e) { toast.error((e as Error).message); } };
-  const plain = (kind: "xlsx" | "csv") => run(() => {
-    const d = data("record");
-    if (kind === "xlsx") downloadBlob(new Blob([plainXlsx(d) as Uint8Array<ArrayBuffer>], { type: XLSX_TYPE }), `${safeName(fileName)}.xlsx`);
-    else downloadBlob(new Blob(["﻿" + plainCsv(d)], { type: "text/csv" }), `${safeName(fileName)}.csv`);
-  });
-  const filled = (t: TimesheetTemplate) => run(() => {
-    const out = fillTemplate(fromBase64(t.file), t.sheet, templateCells(t, data(t.table.per)));
-    const ext = /\.xlsm$/i.test(t.fileName) ? "xlsm" : "xlsx";
-    downloadBlob(new Blob([out as Uint8Array<ArrayBuffer>], { type: ext === "xlsm" ? "application/vnd.ms-excel.sheet.macroEnabled.12" : XLSX_TYPE }), `${safeName(`${t.name} ${fileName}`)}.${ext}`);
-    toast.success(`Saved with the "${t.name}" template`);
-  });
+  const save = async (kind: ExportKind) => {
+    setOpen(false);
+    try {
+      const f = await exportFile(kind, data, fileName);
+      downloadBlob(new Blob([f.bytes as Uint8Array<ArrayBuffer>], { type: f.type }), f.name);
+      if (kind.template) toast.success(`Saved with the "${kind.template.name}" template${kind.format === "pdf" ? " as a PDF" : ""}`);
+    } catch (e) { toast.error((e as Error).message, { duration: 15000 }); }
+  };
 
   const item = "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-secondary";
   return (
@@ -49,13 +42,16 @@ export function TimesheetExport({ data, fileName, categories }: { data: (per: "r
       </button>
       {open && (
         <div role="menu" className="absolute right-0 z-20 mt-1 w-72 rounded-xl border border-border bg-background p-1.5 shadow-xl">
-          <button role="menuitem" className={item} onClick={() => plain("xlsx")}><FileSpreadsheet className="h-4 w-4 text-muted-foreground" />Excel file (.xlsx)</button>
-          <button role="menuitem" className={item} onClick={() => plain("csv")}><FileSpreadsheet className="h-4 w-4 text-muted-foreground" />CSV file (.csv)</button>
+          <button role="menuitem" className={item} onClick={() => void save({ format: "xlsx" })}><FileSpreadsheet className="h-4 w-4 text-muted-foreground" />Excel file (.xlsx)</button>
+          <button role="menuitem" className={item} onClick={() => void save({ format: "csv" })}><FileSpreadsheet className="h-4 w-4 text-muted-foreground" />CSV file (.csv)</button>
+          <button role="menuitem" className={item} onClick={() => void save({ format: "pdf" })}><FileText className="h-4 w-4 text-muted-foreground" />PDF file (.pdf)</button>
           <div className="my-1 border-t border-border" />
           <div className="px-3 pb-1 pt-1.5 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Your templates</div>
           {templates.map((t) => (
             <div key={t.id} className="flex items-center">
-              <button role="menuitem" className={`${item} flex-1`} onClick={() => filled(t)} title={`Fill ${t.fileName} with this timesheet`}><FileSpreadsheet className="h-4 w-4 text-primary" />{t.name}</button>
+              <button role="menuitem" className={`${item} flex-1`} onClick={() => void save({ format: "xlsx", template: t })} title={`Fill ${t.fileName} with this timesheet`}><FileSpreadsheet className="h-4 w-4 text-primary" />{t.name}</button>
+              <button role="menuitem" className="rounded-lg px-2 py-1.5 text-xs font-medium text-muted-foreground hover:bg-secondary hover:text-foreground" onClick={() => void save({ format: "pdf", template: t })}
+                title={`Fill ${t.fileName} with this timesheet and save it as a PDF`} aria-label={`${t.name} as a PDF`}>PDF</button>
               <button className="rounded-lg p-2 text-muted-foreground hover:bg-secondary hover:text-foreground" onClick={() => { setOpen(false); setEditing(t); }} aria-label={`Edit the ${t.name} template`}><Pencil className="h-3.5 w-3.5" /></button>
             </div>
           ))}
@@ -128,12 +124,12 @@ function SheetView({ sheet, marks, tableCols, inTable, startRow, preview, onCell
 }
 type Active = { kind: "cell"; key: SheetField } | { kind: "column"; key: RowField } | null;
 const emptyTemplate = (): Omit<TimesheetTemplate, "file" | "fileName"> => ({
-  id: crypto.randomUUID(), name: "", sheet: null, cells: {}, table: { columns: {}, startRow: null, rows: null, per: "record" },
+  id: crypto.randomUUID(), name: "", sheet: null, cells: {}, table: { columns: {}, startRow: null, rows: null, per: "record", weeks: null },
 });
 
 /** Upload an Excel file, pick its sheet, then click where each value goes; a preview shows the result with real values. */
 function TemplateEditor({ initial, onClose, data, categories }: {
-  initial: TimesheetTemplate | null; onClose: () => void; data: (per: "record" | "day") => TimesheetData; categories: TemplateCategory[];
+  initial: TimesheetTemplate | null; onClose: () => void; data: TimesheetSource; categories: TemplateCategory[];
 }) {
   const [t, setT] = useState<Omit<TimesheetTemplate, "file" | "fileName">>(initial ?? emptyTemplate());
   const [file, setFile] = useState<{ name: string; bytes: Uint8Array } | null>(initial ? { name: initial.fileName, bytes: fromBase64(initial.file) } : null);
@@ -165,7 +161,7 @@ function TemplateEditor({ initial, onClose, data, categories }: {
     if (preview && placed) {
       try {
         const tpl: TimesheetTemplate = { ...t, sheet: sheetName, fileName: file.name, file: "" };
-        return { sheet: draw(fillTemplate(file.bytes, sheetName, templateCells(tpl, data(tpl.table.per)))), note: "" };
+        return { sheet: draw(fillTemplate(file.bytes, sheetName, templateCells(tpl, data(tpl.table.per, tpl.table.weeks ?? null, tpl.table.weekStart ?? 1)))), note: "" };
       } catch (e) {
         return { sheet: draw(file.bytes), note: (e as Error).message };
       }
@@ -199,19 +195,16 @@ function TemplateEditor({ initial, onClose, data, categories }: {
   for (const [k, col] of Object.entries(t.table.columns) as [RowField, string][]) if (col) tableCols.set(parseAddress(`${col}1`)?.col ?? 0, ROW_FIELDS[k]);
   const inTable = (row: number) => t.table.startRow !== null && row >= t.table.startRow && row < t.table.startRow + (t.table.rows ?? 1);
 
-  const save = () => {
+  const save = async () => {
     if (!full || problems.length) return;
-    const list = getTemplates();
     const named = { ...full, name: full.name.trim() };
-    try {
-      saveTemplates(list.some((x) => x.id === named.id) ? list.map((x) => (x.id === named.id ? named : x)) : [...list, named]);
-    } catch (e) { toast.error((e as Error).message); return; }
+    try { await saveTemplate(named); } catch (e) { toast.error((e as Error).message); return; }
     toast.success(`Template "${named.name}" saved. Use it from Export.`);
     onClose();
   };
-  const remove = () => {
+  const remove = async () => {
     if (!initial || !confirm(`Delete the "${initial.name}" template? Your original file isn't affected.`)) return;
-    saveTemplates(getTemplates().filter((x) => x.id !== initial.id));
+    try { await deleteTemplate(initial.id); } catch (e) { toast.error((e as Error).message); return; }
     onClose();
   };
 
@@ -223,7 +216,8 @@ function TemplateEditor({ initial, onClose, data, categories }: {
       <div key={`${f.kind}:${f.key}`} onClick={() => { setActive(f); setPreview(false); }}
         className={`flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-sm ${on ? "bg-primary/15 ring-1 ring-primary/50" : "hover:bg-secondary"}`}>
         <span className="flex-1 truncate" title={labelOf(f)}>{labelOf(f)}</span>
-        <input value={value} onChange={(e) => set(e.target.value)} onFocus={() => setActive(f)} placeholder={on ? "click a cell" : "—"} aria-label={`${labelOf(f)} ${f.kind === "cell" ? "cell" : "column"}`}
+        {/* Typing an address keeps the preview on, so it shows the change; picking the row (to click a cell) turns it off. */}
+        <input value={value} onChange={(e) => set(e.target.value)} onFocus={() => setActive(f)} onClick={(e) => e.stopPropagation()} placeholder={on ? "click a cell" : "—"} aria-label={`${labelOf(f)} ${f.kind === "cell" ? "cell" : "column"}`}
           className={`${inputCls} !w-20 !px-2 !py-1 text-center font-mono text-xs`} />
         <button type="button" onClick={(e) => { e.stopPropagation(); set(""); }} disabled={!value} className="text-muted-foreground hover:text-foreground disabled:invisible" aria-label="Clear"><X className="h-3.5 w-3.5" /></button>
       </div>
@@ -271,6 +265,17 @@ function TemplateEditor({ initial, onClose, data, categories }: {
                     <option value="record">time record</option>
                     <option value="day">day of the period (days off left blank)</option>
                   </select></label>
+                <label title="Fill this many whole weeks. Every day gets its date and weekday, with clock times and pay left blank on days without records, so each export is the same length.">
+                  <span className="text-muted-foreground">Weeks shown</span>
+                  <input type="number" min={1} max={53} className={`${inputCls} mt-0.5 !py-1`} placeholder="just the period" value={t.table.weeks ?? ""}
+                    onChange={(e) => setT({ ...t, table: { ...t.table, weeks: e.target.value ? Math.min(53, Math.max(1, Math.round(+e.target.value))) : null } })} /></label>
+                <label title="The day the weeks start on. A weekday counts back from the period's start to the last such day; or start on the period's own first day.">
+                  <span className="text-muted-foreground">Weeks start on</span>
+                  <select className={`${inputCls} mt-0.5 !py-1`} disabled={!t.table.weeks} value={String(t.table.weekStart ?? 1)}
+                    onChange={(e) => setT({ ...t, table: { ...t.table, weekStart: e.target.value === "period" ? "period" : Number(e.target.value) } })}>
+                    {[1, 2, 3, 4, 5, 6, 0].map((d) => <option key={d} value={d}>{WEEKDAY_NAMES[d]}</option>)}
+                    <option value="period">the period's first day</option>
+                  </select></label>
               </div>
               {fields.filter((f) => f.kind === "column").map(fieldRow)}
               {step(4, "Tick the preview to check, then save")}
@@ -300,14 +305,14 @@ function TemplateEditor({ initial, onClose, data, categories }: {
         )}
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
           <div className="min-w-0 flex-1 text-xs text-muted-foreground">
-            {preview ? <span>Previewing the export with the timesheet open now; filled cells are green. Your template's own formulas (totals) show their old values here; Excel recalculates them when the file opens. Untick the preview to keep placing values. </span>
+            {preview ? <span>Previewing the export with the timesheet open now; filled cells are green. Your template's own formulas (totals) show their old values here; Excel recalculates them when the file opens, and a PDF export works them out itself. Untick the preview to keep placing values. </span>
               : active && file ? <span className="text-foreground">Click the cell for <b>{active.kind === "cell" ? labelOf(active) : `${ROW_FIELDS[active.key]} (first row)`}</b>{sheetName ? ` on "${sheetName}"` : ""}. </span> : null}
             {problems.length > 0 && <span className="text-destructive">{problems[0]}{problems.length > 1 ? ` (+${problems.length - 1} more)` : ""}</span>}
           </div>
           <div className="flex gap-2">
-            {initial && <button type="button" onClick={remove} className={`${btnGhost} hover:!text-destructive`}>Delete template</button>}
+            {initial && <button type="button" onClick={() => void remove()} className={`${btnGhost} hover:!text-destructive`}>Delete template</button>}
             <button type="button" onClick={onClose} className={btnGhost}>Cancel</button>
-            <button type="button" onClick={save} disabled={!full || problems.length > 0} className={`${btnPrimary} disabled:opacity-50`}>Save template</button>
+            <button type="button" onClick={() => void save()} disabled={!full || problems.length > 0} className={`${btnPrimary} disabled:opacity-50`}>Save template</button>
           </div>
         </div>
       </DialogContent>

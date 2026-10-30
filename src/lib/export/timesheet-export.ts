@@ -1,11 +1,11 @@
 import * as XLSX from "xlsx";
-import { getPref, setPref, usePref } from "@/lib/prefs";
+import { strToU8 } from "fflate";
 import type { PayLine } from "@/lib/pay";
-import { colLetters, colNumber, parseAddress, TemplateError, type CellValue } from "./xlsx-template";
+import { colLetters, colNumber, fillTemplate, parseAddress, TemplateError, templateSheets, type CellValue } from "./xlsx-template";
 
 // What a timesheet export holds, and the user's own Excel templates: which cell gets each value, and
-// which columns the day-by-day rows fill. Templates are kept on this device (with display preferences),
-// not in the payroll database; the user still has the original file.
+// which columns the day-by-day rows fill. Templates are kept on this device (template-store.ts), not in the
+// payroll database; the user still has the original file.
 
 /** One-off values, each into one cell of a template. */
 export const SHEET_FIELDS = {
@@ -31,6 +31,11 @@ export type TemplateCategory = { id: string; label: string; field_type: string }
 export const fieldLabel = (k: SheetField, categories: TemplateCategory[] = []) =>
   k.startsWith("custom:") ? categories.find((c) => `custom:${c.id}` === k)?.label ?? "A deleted category" : SHEET_FIELDS[k as keyof typeof SHEET_FIELDS];
 export type RowField = keyof typeof ROW_FIELDS;
+export type WeekStart = number | "period";
+export const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
+
+/** Builds an export's values for one layout: what the template (or plain file) asks for. */
+export type TimesheetSource = (per: "record" | "day", weeks: number | null, weekStart: WeekStart) => TimesheetData;
 
 export type TimesheetData = { values: Partial<Record<SheetField, CellValue>>; rows: Record<RowField, CellValue>[] };
 
@@ -50,6 +55,11 @@ export type TimesheetTemplate = {
     rows: number | null;
     /** One row per record, or one per calendar day of the period (days off left blank, a day's records combined). */
     per: "record" | "day";
+    /** Show this many whole weeks, every day dated even with no records (null or missing: just the period's records, or days). */
+    weeks?: number | null;
+    /** The day those weeks start on: a weekday (0 Sunday … 6 Saturday; missing: Monday), counting back from the
+     *  period's start to the last such day, or "period" for the period's own first day. */
+    weekStart?: WeekStart;
   };
 };
 
@@ -62,6 +72,13 @@ export type SheetRecord = {
 
 const mondayOf = (d: string) => { const x = new Date(`${d}T00:00:00Z`); x.setUTCDate(x.getUTCDate() - ((x.getUTCDay() + 6) % 7)); return x.toISOString().slice(0, 10); };
 const weekdayOf = (d: string) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(`${d}T00:00:00Z`).getUTCDay()]!;
+/** The day a week of rows starts on: the period's first day, or the last `start` weekday on or before it. */
+export const weekStartOf = (from: string, start: WeekStart = 1) => {
+  if (start === "period") return from;
+  const x = new Date(`${from}T00:00:00Z`);
+  x.setUTCDate(x.getUTCDate() - ((x.getUTCDay() - start + 7) % 7));
+  return x.toISOString().slice(0, 10);
+};
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const dayList = (from: string, to: string) => {
   const out: string[] = [];
@@ -72,6 +89,8 @@ const dayList = (from: string, to: string) => {
 /**
  * Everything a timesheet export can show. `records` are the period's records, oldest first; `lines` their pay.
  * `per: "day"` gives one row per calendar day, combining a day's records (first in, last out, hours and pay added).
+ * `weeks` lays the rows over that many whole weeks from `weekStart` (see `weekStartOf`), so every day shows its
+ * date and weekday: a day without records gets one blank row. Throws if the period runs past those weeks.
  */
 export function timesheetData(input: {
   employee: {
@@ -81,7 +100,7 @@ export function timesheetData(input: {
   categories?: TemplateCategory[];
   shiftName: string; rates: number[]; from: string; to: string; today: string;
   records: SheetRecord[]; lines: Map<string, PayLine>; extraPay: number;
-}, per: "record" | "day" = "record"): TimesheetData {
+}, per: "record" | "day" = "record", weeks: number | null = null, weekStart: WeekStart = 1): TimesheetData {
   const { employee: e, records, lines } = input;
   const line = (r: SheetRecord) => lines.get(r.id);
   const sum = (rs: SheetRecord[], f: (l: PayLine) => number) => round2(rs.reduce((s, r) => s + (line(r) ? f(line(r)!) : 0), 0));
@@ -125,9 +144,24 @@ export function timesheetData(input: {
       note: rs.map((r) => r.note).filter(Boolean).join("; ") || null,
     };
   };
-  const rows = per === "record"
+  let days: string[] | null = per === "day" ? dayList(input.from, input.to) : null;
+  if (weeks) {
+    const start = weekStartOf(input.from, weekStart);
+    const end = new Date(`${start}T00:00:00Z`);
+    end.setUTCDate(end.getUTCDate() + weeks * 7 - 1);
+    const last = end.toISOString().slice(0, 10);
+    const lastRecord = records.reduce((m, r) => (r.work_date > m ? r.work_date : m), input.to);
+    if (lastRecord > last) {
+      throw new TemplateError(`The template shows ${weeks} week${weeks === 1 ? "" : "s"} (${start} to ${last}), and this period runs to ${lastRecord}. Pick a shorter period, or show more weeks.`);
+    }
+    days = dayList(start, last);
+  }
+  const rows = !days
     ? records.map((r) => row(r.work_date, [r]))
-    : dayList(input.from, input.to).map((d) => row(d, records.filter((r) => r.work_date === d)));
+    : days.flatMap((d) => {
+      const rs = records.filter((r) => r.work_date === d);
+      return per === "day" || !rs.length ? [row(d, rs)] : rs.map((r) => row(d, [r]));
+    });
   return { values, rows };
 }
 
@@ -156,6 +190,9 @@ export function templateProblems(t: TimesheetTemplate, categories: TemplateCateg
   const cols = Object.entries(t.table.columns).filter(([, c]) => c) as [RowField, string][];
   for (const [k, c] of cols) if (!/^[A-Za-z]{1,3}$/.test(c)) out.push(`${ROW_FIELDS[k]}: "${c}" isn't a column letter`);
   if (cols.length && !t.table.startRow) out.push("Say which row the day-by-day rows start on");
+  if (t.table.weeks && t.table.per === "day" && t.table.rows !== null && t.table.weeks * 7 > t.table.rows) {
+    out.push(`${t.table.weeks} weeks need ${t.table.weeks * 7} rows, and the template has room for ${t.table.rows}`);
+  }
   if (!cols.length && !Object.values(t.cells).some(Boolean)) out.push("Nothing is placed on the template yet");
   // Day-by-day rows running into a value placed below them would overwrite it.
   if (t.table.startRow && cols.length) {
@@ -171,11 +208,17 @@ export function templateProblems(t: TimesheetTemplate, categories: TemplateCateg
 
 // ---------------------------------------------------------------- plain files (no template)
 
-/** A plain table: who and when, then a row per record (or day), then the totals. */
-function plainTable(data: TimesheetData): (string | number)[][] {
+/** Where the plain table's header row is, in `plainTable`'s lines. */
+export const PLAIN_HEADER_ROW = 3;
+
+/**
+ * A plain table: who and when, then a row per record (or day), then the totals. `compact` leaves out the
+ * day-by-day columns that are empty all period (for a PDF, where every column costs width).
+ */
+export function plainTable(data: TimesheetData, compact = false): (string | number)[][] {
   const v = data.values;
   const show = (c: CellValue | undefined): string | number => (c === null || c === undefined ? "" : typeof c === "object" ? ("date" in c ? c.date : c.time) : c);
-  const cols = Object.keys(ROW_FIELDS) as RowField[];
+  const cols = (Object.keys(ROW_FIELDS) as RowField[]).filter((c) => !compact || c === "date" || data.rows.some((r) => show(r[c]) !== ""));
   return [
     ["Timesheet", show(v.employee_name), show(v.employee_code)],
     ["Period", show(v.period_from), show(v.period_to)],
@@ -200,24 +243,49 @@ export function plainCsv(data: TimesheetData): string {
   return plainTable(data).map((l) => l.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\r\n");
 }
 
-// ---------------------------------------------------------------- storage
+// ---------------------------------------------------------------- the finished file
 
-const KEY = "meridian-timesheet-templates";
-/** Kept with the display preferences, whose storage holds a few megabytes in all. */
-export const MAX_TEMPLATE_BYTES = 1_500_000;
+export const XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+export const safeFileName = (s: string) => s.replace(/[\\/:*?"<>|]+/g, "-").trim() || "timesheet";
 
-export const useTemplates = () => usePref<TimesheetTemplate[]>(KEY, [])[0];
+/** What an export is made as: a plain Excel or CSV file, or one of the user's templates. */
+export type ExportFormat = "xlsx" | "csv" | "pdf";
+export type ExportKind = { format: ExportFormat; template?: TimesheetTemplate | undefined };
+export type ExportedFile = { name: string; type: string; bytes: Uint8Array };
 
-/** Saves the list. Throws if this device can't hold it (the storage is full). */
-export function saveTemplates(list: TimesheetTemplate[]) {
-  try {
-    localStorage.setItem(KEY, JSON.stringify(list));
-  } catch {
-    throw new Error("There isn't room to keep this template on this device. Delete a template you don't use, or use a smaller file.");
-  }
-  setPref(KEY, list);
+/** Saved as text in routines: "xlsx", "csv", "pdf", or a template's id (as Excel) or "pdf:" and its id. */
+export const exportKindKey = (k: ExportKind) => (k.template ? `${k.format === "pdf" ? "pdf:" : ""}${k.template.id}` : k.format);
+export function exportKindFrom(key: string, templates: TimesheetTemplate[]): ExportKind | null {
+  if (key === "xlsx" || key === "csv" || key === "pdf") return { format: key };
+  const pdf = key.startsWith("pdf:");
+  const template = templates.find((t) => t.id === (pdf ? key.slice(4) : key));
+  return template ? { format: pdf ? "pdf" : "xlsx", template } : null;
 }
-export const getTemplates = () => getPref<TimesheetTemplate[]>(KEY, []);
+
+/**
+ * The finished file for one timesheet. `name` has no extension. Throws (TemplateError) when a template can't hold
+ * it, or, for a template's PDF, when one of its formulas can't be worked out. PDF code loads only when it's used.
+ */
+export async function exportFile(kind: ExportKind, data: TimesheetSource, name: string): Promise<ExportedFile> {
+  const t = kind.template;
+  if (!t) {
+    const d = data("record", null, 1);
+    if (kind.format === "xlsx") return { name: `${safeFileName(name)}.xlsx`, type: XLSX_TYPE, bytes: plainXlsx(d) };
+    if (kind.format === "csv") return { name: `${safeFileName(name)}.csv`, type: "text/csv", bytes: strToU8("﻿" + plainCsv(d)) };
+    const { canvasMeasure, plainSheet, sheetPdf } = await import("./pdf");
+    return { name: `${safeFileName(name)}.pdf`, type: "application/pdf", bytes: sheetPdf(plainSheet(plainTable(d, true), PLAIN_HEADER_ROW, canvasMeasure()), name) };
+  }
+  const filled = fillTemplate(fromBase64(t.file), t.sheet, templateCells(t, data(t.table.per, t.table.weeks ?? null, t.table.weekStart ?? 1)));
+  if (kind.format === "pdf") {
+    const [{ sheetPdf }, { renderSheet }] = await Promise.all([import("./pdf"), import("./sheet-render")]);
+    const sheet = t.sheet ?? templateSheets(filled).find((s) => s.fillable && !s.hidden)?.name ?? "";
+    // Formulas worked out again (Excel would on opening the file), and only the print area if the sheet has one.
+    const drawn = renderSheet(filled, sheet, { minRows: 1, minCols: 1, maxRows: 2000, maxCols: 100, recalculate: new Date(), printArea: true });
+    return { name: `${safeFileName(`${t.name} ${name}`)}.pdf`, type: "application/pdf", bytes: sheetPdf(drawn, `${t.name} ${name}`) };
+  }
+  const macro = /\.xlsm$/i.test(t.fileName);
+  return { name: `${safeFileName(`${t.name} ${name}`)}.${macro ? "xlsm" : "xlsx"}`, type: macro ? "application/vnd.ms-excel.sheet.macroEnabled.12" : XLSX_TYPE, bytes: filled };
+}
 
 export function toBase64(bytes: Uint8Array) {
   let s = "";

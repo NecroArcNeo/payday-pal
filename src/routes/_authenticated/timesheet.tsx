@@ -11,13 +11,15 @@ import { customKey } from "@/lib/db/privacy";
 import { formatBreak, useBreakUnit, type BreakUnit } from "@/lib/breaks";
 import { profileSections } from "@/lib/employee-fields";
 import {
-  addDays, currentWeek, fullName, isoDate, money, useAdjustments, useAllRecords, useEmployees, useFieldDefs, usePayRates, usePayrollSettings, useShifts, weekday,
+  currentWeek, fullName, isoDate, money, useAdjustments, useAllRecords, useEmployees, useFieldDefs, usePayRates, usePayrollSettings, useShifts, weekday,
   type Adjustment, type Employee, type FieldDef, type Shift, type TimeRecord,
 } from "@/lib/payroll";
 import { employeePay, shiftFor, weekEnd, weekStart, type PayLine } from "@/lib/pay";
-import { rateOn, ratesBetween, type RateEntry } from "@/lib/pay-rates";
+import { ratesBetween, type RateEntry } from "@/lib/pay-rates";
 import { TimesheetExport } from "@/components/TimesheetExport";
-import { timesheetData } from "@/lib/export/timesheet-export";
+import { BulkExport } from "@/components/BulkExport";
+import { employeeTimesheet, timesheetCategories } from "@/lib/export/employee-timesheet";
+import { periodPresets } from "@/lib/periods";
 import { Printer } from "lucide-react";
 
 /** Shown in the sheet's heading, so not repeated in the details grid. */
@@ -41,22 +43,6 @@ export const Route = createFileRoute("/_authenticated/timesheet")({
   component: TimesheetPage,
 });
 
-function presets() {
-  const now = new Date();
-  const week = currentWeek();
-  const monthStart = isoDate(new Date(now.getFullYear(), now.getMonth(), 1));
-  const monthEnd = isoDate(new Date(now.getFullYear(), now.getMonth() + 1, 0));
-  const lastMonthStart = isoDate(new Date(now.getFullYear(), now.getMonth() - 1, 1));
-  const lastMonthEnd = isoDate(new Date(now.getFullYear(), now.getMonth(), 0));
-  return [
-    { label: "This week", from: week.from, to: week.to },
-    { label: "Last week", from: addDays(week.from, -7), to: addDays(week.to, -7) },
-    { label: "Last 2 weeks", from: addDays(week.from, -7), to: week.to },
-    { label: "This month", from: monthStart, to: monthEnd },
-    { label: "Last month", from: lastMonthStart, to: lastMonthEnd },
-  ];
-}
-
 function TimesheetPage() {
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
@@ -78,7 +64,10 @@ function TimesheetPage() {
 
   return (
     <AppShell eyebrow="Timesheet" title={emp ? fullName(emp) : "Timesheet"} actions={
-      emp && <button onClick={() => window.print()} className={`${btnGhost} print:hidden`}><Printer className="mr-1 inline h-4 w-4" />Print</button>
+      <div className="flex gap-2 print:hidden">
+        <BulkExport from={from} to={to} />
+        {emp && <button onClick={() => window.print()} className={btnGhost}><Printer className="mr-1 inline h-4 w-4" />Print</button>}
+      </div>
     }>
       <div className="glass-panel flex flex-wrap items-end gap-3 p-5 print:hidden">
         <label className="min-w-[16rem] flex-1">
@@ -94,7 +83,7 @@ function TimesheetPage() {
           <input type="date" className={`${inputCls} mt-1`} value={to} onChange={(e) => isDate(e.target.value) && set({ to: e.target.value })} />
         </label>
         <div className="flex flex-wrap gap-1.5">
-          {presets().map((p) => (
+          {periodPresets().map((p) => (
             <button key={p.label} type="button" onClick={() => set({ from: p.from, to: p.to })}
               className={`rounded-lg px-2.5 py-1.5 text-xs ring-1 ring-border ${p.from === from && p.to === to ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground hover:text-foreground"}`}>
               {p.label}
@@ -138,11 +127,8 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
     .sort((a, b) => a.work_date.localeCompare(b.work_date) || (a.clock_in ?? "").localeCompare(b.clock_in ?? ""));
   const extras = adjustments.reduce((s, a) => s + Number(a.amount), 0);
   // Categories filed under Personal are personal details, which stay off timesheets.
-  const templateCategories = defs.filter((d) => d.section !== "Personal").map((d) => ({ id: d.id, label: d.label, field_type: d.field_type }));
-  const exportData = (per: "record" | "day") => timesheetData({
-    employee: emp, categories: templateCategories, shiftName: shift.name, rates, from, to, today: isoDate(new Date()), lines: lineById, extraPay: extras,
-    records: shown.map((r) => ({ ...r, shiftName: shiftFor(r.shift_id ?? emp.shift_id, shifts).name, rate: rateOn(rateHistory, emp.hourly_rate, r.work_date) })),
-  }, per);
+  const templateCategories = timesheetCategories(defs);
+  const exportData = employeeTimesheet(emp, { from, to, today: isoDate(new Date()), records, adjustments, shifts, defs, rateHistory, rules });
   const lunchHours = shown.reduce((s, r) => s + r.lunch_minutes, 0) / 60;
 
   // Group by Mon–Sun week for subtotals.
