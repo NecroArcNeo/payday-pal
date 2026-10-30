@@ -7,11 +7,21 @@ import { DataTable } from "./DataTable";
 import { formatBreak, useBreakUnit } from "@/lib/breaks";
 import { Trash2 } from "lucide-react";
 import { EditableLabel } from "@/components/EditableLabel";
+import { SortControl } from "@/components/SortControl";
+import { usePref } from "@/lib/prefs";
+import { sortRecords, validSort, type Sort, type SortKey } from "@/lib/record-sort";
+
+const SORT_KEYS = ["date", "employee", "hours", "pay"] as const satisfies readonly SortKey[];
+const NEWEST: Sort<(typeof SORT_KEYS)[number]> = { by: "date", desc: true };
 
 export function RecordsTable({ records, title = "Time records", onDelete, showName = true }: { records: RecordWithEmp[]; title?: string; onDelete?: (id: string) => void; showName?: boolean }) {
   const [mode, setMode] = useState<"clock" | "hours">("clock");
-  const rows = records.filter((r) => r.entry_mode === mode);
   const pay = useRecordPay(records);
+  const [savedSort, setSort] = usePref<Sort>("meridian-recent-records-sort", NEWEST);
+  // With no name column (one person's records), sorting by employee means nothing.
+  const sortKeys = showName ? SORT_KEYS : SORT_KEYS.filter((k) => k !== "employee");
+  const sort = validSort(savedSort, sortKeys, NEWEST);
+  const rows = sortRecords(records.filter((r) => r.entry_mode === mode), sort, { name: (r) => (r.employees ? fullName(r.employees) : ""), pay: (r) => pay?.get(r.id)?.pay });
   const { data: rateHistory } = usePayRates();
   const { data: shifts = [] } = useShifts();
   const [breakUnit] = useBreakUnit();
@@ -21,7 +31,10 @@ export function RecordsTable({ records, title = "Time records", onDelete, showNa
   return (
     <div className="glass-panel overflow-hidden">
       <div className="flex items-center justify-between border-b border-border px-5 py-4">
-        <div className="font-display font-extrabold tracking-tight">{title}</div>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="font-display font-extrabold tracking-tight">{title}</div>
+          <SortControl value={sort} onChange={setSort} keys={sortKeys} />
+        </div>
         {mode === "clock" && <span className="ml-auto mr-3 flex items-center gap-2 text-xs text-muted-foreground">Breaks in <BreakUnitToggle /></span>}
         <div className="flex rounded-xl bg-secondary p-1 text-xs font-medium ring-1 ring-border">
           {(["clock", "hours"] as const).map((m) => (

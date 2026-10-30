@@ -21,6 +21,13 @@ import { BulkExport } from "@/components/BulkExport";
 import { employeeTimesheet, timesheetCategories } from "@/lib/export/employee-timesheet";
 import { periodPresets } from "@/lib/periods";
 import { Printer } from "lucide-react";
+import { SortControl } from "@/components/SortControl";
+import { usePref } from "@/lib/prefs";
+import { sortRecords, validSort, type Sort, type SortKey } from "@/lib/record-sort";
+
+const SORT_KEYS = ["date", "hours", "pay"] as const satisfies readonly SortKey[];
+/** A timesheet reads in time order. */
+const OLDEST: Sort<(typeof SORT_KEYS)[number]> = { by: "date", desc: false };
 
 /** Shown in the sheet's heading, so not repeated in the details grid. */
 const IN_HEADER = ["first_name", "last_name", "employee_code"];
@@ -122,18 +129,23 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
   const salary = emp.pay_type === "salary";
   const pay = employeePay(records, { rate: Number(emp.hourly_rate), rates: rateHistory, shiftMultiplier: shift.multiplier, rules, payType: emp.pay_type, shifts, from, to });
   const lineById = new Map(pay.lines.map((l) => [l.id, l]));
-  const shown = records
+  const [savedSort, setSort] = usePref<Sort>("meridian-timesheet-sort", OLDEST);
+  const sort = validSort(savedSort, SORT_KEYS, OLDEST);
+  const inRange = records
     .filter((r) => r.work_date >= from && r.work_date <= to)
     .sort((a, b) => a.work_date.localeCompare(b.work_date) || (a.clock_in ?? "").localeCompare(b.clock_in ?? ""));
+  // By date: in time order (each day's entries by clock-in), or all of it reversed. Otherwise by hours or pay, ties newest first.
+  const shown = sort.by === "date" ? (sort.desc ? inRange.reverse() : inRange) : sortRecords(inRange, sort, { pay: (r) => lineById.get(r.id)?.pay });
   const extras = adjustments.reduce((s, a) => s + Number(a.amount), 0);
   // Categories filed under Personal are personal details, which stay off timesheets.
   const templateCategories = timesheetCategories(defs);
   const exportData = employeeTimesheet(emp, { from, to, today: isoDate(new Date()), records, adjustments, shifts, defs, rateHistory, rules });
   const lunchHours = shown.reduce((s, r) => s + r.lunch_minutes, 0) / 60;
 
-  // Group by Mon–Sun week for subtotals.
+  // Group by Mon–Sun week for subtotals. Sorted by hours or pay, a week's records are scattered, so there's one group and no subtotals.
   const weeks: { start: string; rows: TimeRecord[] }[] = [];
-  for (const r of shown) {
+  if (sort.by !== "date") weeks.push({ start: "", rows: shown });
+  else for (const r of shown) {
     const start = weekStart(r.work_date);
     if (weeks.at(-1)?.start !== start) weeks.push({ start, rows: [] });
     weeks.at(-1)!.rows.push(r);
@@ -228,7 +240,10 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
       <div className="glass-panel overflow-hidden">
         <div className="border-b border-border px-5 py-4">
           <div className="flex items-center justify-between gap-3">
-            <div className="font-display font-extrabold tracking-tight">Hours and pay</div>
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="font-display font-extrabold tracking-tight">Hours and pay</div>
+              <SortControl value={sort} onChange={setSort} keys={SORT_KEYS} natural={{ date: false }} />
+            </div>
             <span className="flex items-center gap-2 text-xs text-muted-foreground print:hidden">Breaks in <BreakUnitToggle /></span>
           </div>
           <p className="text-xs text-muted-foreground">
@@ -259,7 +274,7 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
                 </td></tr>
               )}
               {weeks.map((w) => (
-                <WeekRows key={w.start} start={w.start} rows={w.rows} lineById={lineById} breakUnit={breakUnit} shifts={shifts} employeeShiftId={emp.shift_id} total={totalCells(subtotal(w.rows))} showSubtotal={weeks.length > 1} />
+                <WeekRows key={w.start || "all"} start={w.start} rows={w.rows} lineById={lineById} breakUnit={breakUnit} shifts={shifts} employeeShiftId={emp.shift_id} total={totalCells(subtotal(w.rows))} showSubtotal={weeks.length > 1} />
               ))}
             </tbody>
             {shown.length > 0 && (

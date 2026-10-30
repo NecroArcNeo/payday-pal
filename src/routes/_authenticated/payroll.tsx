@@ -22,6 +22,9 @@ import { EditableLabel } from "@/components/EditableLabel";
 import { BreakInput } from "@/components/BreakField";
 import { useBreakUnit, validBreak, breakRangeText } from "@/lib/breaks";
 import type { TablesUpdate } from "@/integrations/supabase/types";
+import { SortControl } from "@/components/SortControl";
+import { usePref } from "@/lib/prefs";
+import { validSort, type Sort, type SortKey } from "@/lib/record-sort";
 
 export const Route = createFileRoute("/_authenticated/payroll")({
   head: () => ({ meta: [{ title: "Payroll — Meridian Payroll" }] }),
@@ -38,12 +41,17 @@ const builtInCols: { key: string; label: string; get: (e: Employee) => string; a
   { key: "hire_date", label: "Hire date", get: (e) => e.hire_date ?? "" },
 ];
 
+const SORT_KEYS = ["employee", "hours", "pay"] as const satisfies readonly SortKey[];
+const BY_NAME: Sort<(typeof SORT_KEYS)[number]> = { by: "employee", desc: false };
+
 function PayrollPage() {
   const w = currentWeek();
   const [from, setFrom] = useState(w.from);
   const [to, setTo] = useState(w.to);
   const [showSettings, setShowSettings] = useState(false);
   const [q, setQ] = useState<EmployeeFilter>(NO_FILTER);
+  const [savedSort, setSort] = usePref<Sort>("meridian-payroll-sort", BY_NAME);
+  const sort = validSort(savedSort, SORT_KEYS, BY_NAME);
   const qc = useQueryClient();
   // Load whole Mon–Sun weeks around the period, so weekly overtime is right even when the period starts mid-week.
   const isDate = (d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d);
@@ -91,7 +99,12 @@ function PayrollPage() {
       const extraTotal = Object.values(extras).reduce((s, n) => s + n, 0);
       return { e, shift, rate, rates, ...p, extras, gross: p.total + extraTotal };
     })
-    .sort((a, b) => fullName(a.e).localeCompare(fullName(b.e)));
+    .sort((a, b) => {
+      // Ties (and the name sort itself) go by name A to Z, so equal amounts stay in a findable order.
+      const byName = fullName(a.e).localeCompare(fullName(b.e), undefined, { sensitivity: "base" });
+      const diff = sort.by === "hours" ? a.regular + a.overtime - (b.regular + b.overtime) : sort.by === "pay" ? a.gross - b.gross : byName;
+      return (sort.desc ? -diff : diff) || byName;
+    });
 
   const sum = (f: (r: (typeof list)[number]) => number) => list.reduce((s, r) => s + f(r), 0);
   const hasManual = list.some((r) => r.manualDays > 0);
@@ -152,7 +165,10 @@ function PayrollPage() {
             {" "}Shift multipliers scale the rate for regular hours only; overtime is always {mult}× the base rate, never stacked with the shift. Salaried employees get {threshold} h × rate for each week they work, with no overtime. Days with manual pay are paid exactly the amount entered.
             {isFiltering(q) && ` Showing ${shown.length} of ${list.length}; totals above include everyone.`}
           </span>
-          <SearchInput value={q} onChange={setQ} employees={list.map((r) => r.e)} className="w-full max-w-xl" />
+          <div className="flex w-full flex-wrap items-center gap-3">
+            <SearchInput value={q} onChange={setQ} employees={list.map((r) => r.e)} className="min-w-[16rem] max-w-xl flex-1" />
+            <SortControl value={sort} onChange={setSort} keys={SORT_KEYS} />
+          </div>
         </div>
         <div className="overflow-x-auto">
           <DataTable id="payroll" className="w-full text-sm">

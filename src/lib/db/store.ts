@@ -6,6 +6,7 @@ import { tableColumns, type Row, type Sql, type SqlDb } from "./snapshot";
 import type { TableName } from "./schema";
 import type { FrozenPay } from "@/lib/pay";
 import { localUndo, undoableStore } from "./undo";
+import type { Sort, StoreSortKey } from "@/lib/record-sort";
 
 type Employee = Tables<"employees">;
 type RecordWithEmp = Tables<"time_records"> & {
@@ -23,8 +24,8 @@ export type FrozenRow = { id: string; pay: FrozenPay };
  * Excluding shifts is the same as keeping the rest, so the caller passes the shifts left.
  */
 export type RecordFilter = { from?: string | undefined; to?: string | undefined; mode?: "clock" | "hours" | undefined; employeeIds?: string[] | undefined; shifts?: { ids: string[]; employeeIds: string[] } | undefined;
-  /** Which records a page starts with (listRecordsPage only). Newest by default. */
-  order?: "newest" | "oldest" | undefined };
+  /** How a page is ordered (listRecordsPage only). Newest first by default; ties go newest first. */
+  sort?: Sort<StoreSortKey> | undefined };
 export type RecordKey = Pick<Tables<"time_records">, "employee_id" | "work_date" | "entry_mode" | "clock_in" | "clock_out" | "hours">;
 const RECORD_KEY_COLUMNS = "employee_id, work_date, entry_mode, clock_in, clock_out, hours";
 
@@ -38,7 +39,7 @@ export interface DataStore {
   listAdjustments(from?: string, to?: string): Promise<Tables<"pay_adjustments">[]>;
   /** Every employee's pay rate history, oldest first. */
   listPayRates(): Promise<Tables<"pay_rates">[]>;
-  /** One page of records matching the filter, newest first (or oldest, per `filter.order`), plus how many match in total. */
+  /** One page of records matching the filter, ordered by `filter.sort` (newest first by default), plus how many match in total. */
   listRecordsPage(filter: RecordFilter, offset: number, limit: number): Promise<{ rows: RecordWithEmp[]; total: number }>;
   /** Every record matching the filter (no cap), for "edit all". */
   listRecordsMatching(filter: RecordFilter): Promise<Tables<"time_records">[]>;
@@ -82,6 +83,17 @@ async function attempt(fn: () => Promise<unknown>): Promise<Result> {
 const RECORD_WHERE = `($1::date is null or r.work_date >= $1::date) and ($2::date is null or r.work_date <= $2::date)
   and ($3::text is null or r.entry_mode = $3) and ($4::uuid[] is null or r.employee_id = any($4::uuid[]))
   and ($5::uuid[] is null or r.shift_id = any($5::uuid[]) or (r.shift_id is null and r.employee_id = any($6::uuid[])))`;
+/** ORDER BY for a page of records (`r` joined to its employee `e`): the asked key, then newest first, then id so pages never overlap. */
+function recordOrder(sort: Sort<StoreSortKey> | undefined) {
+  const dir = sort?.desc === false ? "asc" : "desc";
+  const newest = "r.work_date desc, r.created_at desc, r.id";
+  switch (sort?.by ?? "date") {
+    case "date": return `r.work_date ${dir}, r.created_at ${dir}, r.id`;
+    // As names show ("First Last"), ignoring case; records of deleted employees go last.
+    case "employee": return `lower(e.first_name) ${dir} nulls last, lower(e.last_name) ${dir} nulls last, ${newest}`;
+    case "hours": return `r.hours ${dir} nulls last, ${newest}`;
+  }
+}
 const recordParams = (f: RecordFilter) => [f.from || null, f.to || null, f.mode ?? null, f.employeeIds ?? null, f.shifts?.ids ?? null, f.shifts?.employeeIds ?? []];
 
 async function knownColumns(sql: Sql, table: TableName, keys: string[]) {
@@ -142,13 +154,12 @@ export function createLocalStore(getDb: () => Promise<SqlDb>): DataStore {
     },
     async listRecordsPage(filter, offset, limit) {
       const db = await getDb();
-      const dir = filter.order === "oldest" ? "asc" : "desc";
       return db.transaction(async (tx) => {
         const { rows } = await tx.query<RecordWithEmp>(
           `select r.*, case when e.id is null then null else jsonb_build_object(
               'first_name', e.first_name, 'last_name', e.last_name, 'employee_code', e.employee_code, 'hourly_rate', e.hourly_rate) end as employees
            from time_records r left join employees e on e.id = r.employee_id
-           where ${RECORD_WHERE} order by r.work_date ${dir}, r.created_at ${dir}, r.id limit $7 offset $8`,
+           where ${RECORD_WHERE} order by ${recordOrder(filter.sort)} limit $7 offset $8`,
           [...recordParams(filter), limit, offset],
         );
         const { rows: n } = await tx.query<{ n: number }>(`select count(*)::int as n from time_records r where ${RECORD_WHERE}`, recordParams(filter));
@@ -325,8 +336,13 @@ export const cloudStore: DataStore = {
   },
   async listRecordsPage(filter, offset, limit) {
     const q = filterRecords(supabase.from("time_records").select("*, employees(first_name,last_name,employee_code,hourly_rate)", { count: "exact" }), filter);
-    const ascending = filter.order === "oldest";
-    const { data, error, count } = await q.order("work_date", { ascending }).order("created_at", { ascending }).order("id").range(offset, offset + limit - 1);
+    const ascending = filter.sort?.desc === false;
+    const by = filter.sort?.by ?? "date";
+    // Same order as the local store's recordOrder (names compare case-sensitively here). `employees(...)` orders by the joined employee.
+    const sorted = by === "date" ? q.order("work_date", { ascending }).order("created_at", { ascending })
+      : (by === "employee" ? q.order("employees(first_name)", { ascending, nullsFirst: false }).order("employees(last_name)", { ascending, nullsFirst: false })
+        : q.order("hours", { ascending, nullsFirst: false })).order("work_date", { ascending: false }).order("created_at", { ascending: false });
+    const { data, error, count } = await sorted.order("id").range(offset, offset + limit - 1);
     if (error) throw new Error(error.message);
     return { rows: (data ?? []) as RecordWithEmp[], total: count ?? 0 };
   },

@@ -498,12 +498,31 @@ describe("record pages", () => {
     expect(first.total).toBe(30);
     expect(first.rows.map((r) => r.work_date)).toEqual(days.slice(20).reverse());
     expect((await store.listRecordsPage({ mode: "hours" }, 10, 10)).rows[0]!.work_date).toBe("2026-09-20");
-    expect((await store.listRecordsPage({ mode: "hours", order: "oldest" }, 0, 3)).rows.map((r) => r.work_date)).toEqual(days.slice(0, 3));
+    expect((await store.listRecordsPage({ mode: "hours", sort: { by: "date", desc: false } }, 0, 3)).rows.map((r) => r.work_date)).toEqual(days.slice(0, 3));
     expect((await store.listRecordsPage({ mode: "clock" }, 0, 10)).total).toBe(1);
     expect((await store.listRecordsPage({ mode: "hours", from: "2026-09-10", to: "2026-09-19" }, 0, 50)).total).toBe(10);
     expect((await store.listRecordsPage({ mode: "hours", employeeIds: [b!.id] }, 0, 50)).total).toBe(15);
     expect((await store.listRecordsPage({ employeeIds: [] }, 0, 50)).total).toBe(0);
     expect(await store.listRecordsMatching({ mode: "hours", employeeIds: [a!.id] })).toHaveLength(15);
+  });
+
+  it("sorts pages by employee or hours, either way round, ties newest first", async () => {
+    const db = await newLocal();
+    const store = createLocalStore(async () => db);
+    await store.upsertEmployeesByCode([{ employee_code: "Z", first_name: "zoe", last_name: "Last" }, { employee_code: "A", first_name: "Amy", last_name: "First" }]);
+    const emps = await store.listEmployees();
+    const zoe = emps.find((e) => e.employee_code === "Z")!, amy = emps.find((e) => e.employee_code === "A")!;
+    await store.insert("time_records", [
+      { employee_id: zoe.id, work_date: "2026-09-01", entry_mode: "hours", hours: 9 },
+      { employee_id: amy.id, work_date: "2026-09-02", entry_mode: "hours", hours: 4 },
+      { employee_id: amy.id, work_date: "2026-09-03", entry_mode: "hours", hours: 6 },
+    ]);
+    const page = async (sort: { by: "employee" | "hours"; desc: boolean }) => (await store.listRecordsPage({ sort }, 0, 10)).rows.map((r) => `${r.employees!.first_name} ${r.work_date}`);
+    // "zoe" after "Amy" despite the lower case; Amy's own records newest first.
+    expect(await page({ by: "employee", desc: false })).toEqual(["Amy 2026-09-03", "Amy 2026-09-02", "zoe 2026-09-01"]);
+    expect(await page({ by: "employee", desc: true })).toEqual(["zoe 2026-09-01", "Amy 2026-09-03", "Amy 2026-09-02"]);
+    expect(await page({ by: "hours", desc: true })).toEqual(["zoe 2026-09-01", "Amy 2026-09-03", "Amy 2026-09-02"]);
+    expect(await page({ by: "hours", desc: false })).toEqual(["Amy 2026-09-02", "Amy 2026-09-03", "zoe 2026-09-01"]);
   });
 
   it("filters by shift: records set to it, plus records left on the employee's usual shift when that's this one", async () => {

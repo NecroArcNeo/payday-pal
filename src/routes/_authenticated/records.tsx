@@ -17,13 +17,15 @@ import { ANY, describeEmployeeFilter, describeFacet, facetActive, facetAllows, i
 import { FacetFilter } from "@/components/FacetFilter";
 import { askChoice } from "@/lib/choice-prompt";
 import { describeRecord, sameDayClashes, type Clash } from "@/lib/record-clash";
-import { addDays, computeHours, datesBetween, fullName, isoDate, useEmployees, usePayrollSettings, useShifts, weekday, type Employee, type TimeRecord } from "@/lib/payroll";
+import { addDays, computeHours, datesBetween, fullName, isoDate, useEmployees, usePayrollSettings, useRecordPay, useShifts, weekday, type Employee, type RecordWithEmp, type TimeRecord } from "@/lib/payroll";
 import { shiftFor } from "@/lib/pay";
 import { describeTimes, usualTimes, usualTimesFor, type UsualTimes } from "@/lib/shift-times";
-import { ArrowDown, ArrowUp, Check, Lock, LockOpen, Pencil, Plus, Trash2, X } from "lucide-react";
+import { Check, Lock, LockOpen, Pencil, Plus, Trash2, X } from "lucide-react";
 import { usePref } from "@/lib/prefs";
 import { PayLock } from "@/components/PayLock";
 import { setRecordsLocked } from "@/lib/pay-freeze";
+import { SortControl } from "@/components/SortControl";
+import { sortRecords, validSort, type Sort, type SortKey } from "@/lib/record-sort";
 
 /** One shift's times for "Add each shift's usual hours", as typed (break in minutes). */
 type GroupTimes = { clock_in: string; clock_out: string; lunch_minutes: string; hours: string };
@@ -42,6 +44,8 @@ export const Route = createFileRoute("/_authenticated/records")({
 
 /** Records shown at first, and added by each "Load more". */
 const PAGE = 50;
+const SORT_KEYS = ["date", "employee", "hours", "pay"] as const satisfies readonly SortKey[];
+const NEWEST: Sort<(typeof SORT_KEYS)[number]> = { by: "date", desc: true };
 
 function RecordsPage() {
   const qc = useQueryClient();
@@ -62,7 +66,8 @@ function RecordsPage() {
   const [pickQ, setPickQ] = useState<EmployeeFilter>(NO_FILTER);
   const [listQ, setListQ] = useState<EmployeeFilter>(NO_FILTER);
   const [listShifts, setListShifts] = useState<Facet>(ANY);
-  const [order, setOrder] = usePref<"newest" | "oldest">("meridian-records-order", "newest");
+  const [savedSort, setSort] = usePref<Sort>("meridian-records-sort", NEWEST);
+  const sort = validSort(savedSort, SORT_KEYS, NEWEST);
   // Resigned employees can't be given new hours, so they aren't offered here (their old records still list below).
   const working = useMemo(() => employees.filter((e) => e.active), [employees]);
   const resigned = employees.length - working.length;
@@ -212,20 +217,43 @@ function RecordsPage() {
   // The shifts the shift filter lets through (excluding some is keeping the rest); undefined when it isn't set.
   const shiftsShown = useMemo(() => (facetActive(listShifts) ? shifts.map((x) => x.id).filter((id) => facetAllows(listShifts, id)) : undefined), [listShifts, shifts]);
   const filter = useMemo<RecordFilter>(() => ({
-    from: from || undefined, to: to || undefined, mode: listMode, order,
+    from: from || undefined, to: to || undefined, mode: listMode,
+    // The database sorts by everything but pay, which only the app works out (below).
+    sort: sort.by === "pay" ? undefined : { by: sort.by, desc: sort.desc },
     employeeIds: isFiltering(listQ) ? employees.filter((e) => matchesEmployee(e, listQ)).map((e) => e.id) : undefined,
     shifts: shiftsShown ? { ids: shiftsShown, employeeIds: employees.filter((e) => shiftsShown.includes(shiftFor(e.shift_id, shifts).id ?? "")).map((e) => e.id) } : undefined,
-  }), [from, to, listMode, order, listQ, shiftsShown, employees, shifts]);
+  }), [from, to, listMode, sort.by, sort.desc, listQ, shiftsShown, employees, shifts]);
   const filterKey = JSON.stringify(filter);
   // A new filter starts again from the first page, with nothing selected.
   useEffect(() => { setLimit(PAGE); setSelected(new Set()); setBulk(null); }, [filterKey]);
+  const byPay = sort.by === "pay";
   const page = useQuery({
     queryKey: ["records", "page", dataMode, filterKey, limit],
     queryFn: () => storeFor(dataMode).listRecordsPage(filter, 0, limit),
     placeholderData: keepPreviousData,
+    enabled: !byPay,
   });
-  const rows = page.data?.rows ?? [];
-  const total = page.data?.total ?? 0;
+  // Sorting by pay: pay isn't stored, so load every matching record, work out each one's pay (over whole weeks, as the
+  // table does), sort, and page through the sorted list here instead of in the database.
+  const everything = useQuery({
+    queryKey: ["records", "matching", dataMode, filterKey],
+    queryFn: () => storeFor(dataMode).listRecordsMatching(filter),
+    enabled: byPay,
+    placeholderData: keepPreviousData,
+  });
+  const allPay = useRecordPay(byPay ? everything.data ?? [] : []);
+  const byPayRows = useMemo(() => {
+    if (!byPay || !everything.data) return [];
+    const empById = new Map(employees.map((e) => [e.id, e]));
+    const withEmp: RecordWithEmp[] = everything.data.map((r) => {
+      const e = empById.get(r.employee_id);
+      return { ...r, employees: e ? { first_name: e.first_name, last_name: e.last_name, employee_code: e.employee_code, hourly_rate: e.hourly_rate } : null };
+    });
+    return sortRecords(withEmp, sort, { pay: (r) => allPay?.get(r.id)?.pay });
+  }, [byPay, everything.data, employees, allPay, sort]);
+  const rows = byPay ? byPayRows.slice(0, limit) : page.data?.rows ?? [];
+  const total = byPay ? byPayRows.length : page.data?.total ?? 0;
+  const loading = byPay ? everything.isFetching || (byPayRows.length > 0 && !allPay) : page.isFetching;
   const pickedRows = rows.filter((r) => selected.has(r.id));
   const toggleRow = (id: string) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const toggleAllRows = () => setSelected((s) => (rows.length && rows.every((r) => s.has(r.id)) ? new Set() : new Set(rows.map((r) => r.id))));
@@ -475,10 +503,8 @@ function RecordsPage() {
 
       <RecordsLedger
         title={<span className="flex items-center gap-3">{total} records
-          <button type="button" onClick={() => setOrder(order === "newest" ? "oldest" : "newest")} className={`${btnGhost} !px-2.5 !py-1 text-xs font-medium`} title="Reverse the order">
-            {order === "newest" ? <ArrowDown className="mr-1 inline h-3.5 w-3.5" /> : <ArrowUp className="mr-1 inline h-3.5 w-3.5" />}{order === "newest" ? "Newest first" : "Oldest first"}
-          </button>
-          {page.isFetching && <span className="text-xs font-normal text-muted-foreground">loading…</span>}</span>}
+          <SortControl value={sort} onChange={setSort} keys={SORT_KEYS} />
+          {loading && <span className="text-xs font-normal text-muted-foreground">{byPay ? "working out pay…" : "loading…"}</span>}</span>}
         rows={rows} total={total} mode={listMode} onModeChange={setListMode} employees={employees}
         selected={selected} onToggle={toggleRow} onToggleAll={toggleAllRows} onChanged={refresh} onDelete={del}
         footer={
@@ -487,8 +513,8 @@ function RecordsPage() {
             {total > 0 && <button onClick={() => deleteMany("all")} className={`${btnGhost} hover:!text-destructive`}>Delete all {total}</button>}
             {rows.length < total && (
               <>
-                <button onClick={() => setLimit((l) => l + PAGE)} disabled={page.isFetching} className={btnPrimary}>Load {Math.min(PAGE, total - rows.length)} more</button>
-                <button onClick={() => setLimit(total)} disabled={page.isFetching} className={btnGhost}>Load all</button>
+                <button onClick={() => setLimit((l) => l + PAGE)} disabled={loading} className={btnPrimary}>Load {Math.min(PAGE, total - rows.length)} more</button>
+                <button onClick={() => setLimit(total)} disabled={loading} className={btnGhost}>Load all</button>
               </>
             )}
           </div>
