@@ -24,7 +24,8 @@
 - [ ] Set up Supabase cloud sync (apply `drizzle/migrations` 0003 … latest in order; see README)
 - [ ] Edit history / undo for record and profile edits (L7)
 - [ ] Optional: auto-update for the desktop app (GitHub Releases); code signing only if handing it to people outside a trusted circle
-- [ ] Optional: app password/lock; payroll CSV exports are plain files (no ID numbers, but names and pay)
+- [ ] **In progress (Oct 31, 2026): data encrypted on this device + optional app password** (desktop app). One random data key encrypts the database and automatic backups; it's wrapped by Windows' key protection when there's no password, or by the password (asked at start) plus a recovery key shown once; optional reset by email code through the cloud account (key split between device and cloud). The plain database and backups move over on first start. Not covered: Chromium's own storage (prefs, templates, cloud sign-in token) and exported files (payroll CSV: names and pay, no ID numbers)
+- [x] Sort time records (Time records, Timesheet, Dashboard) and Payroll by date, employee, hours or total pay, with a flip button (done Oct 30, 2026)
 - [ ] Optional: speed — memoize table rows (opening an edit with 500 rows is slow on old PCs); check PGlite updates (0.5.12+)
 - [x] Timesheet export with selectable templates (done Oct 28, 2026: your own Excel templates)
 
