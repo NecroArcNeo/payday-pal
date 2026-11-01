@@ -25,6 +25,7 @@ import type { TablesUpdate } from "@/integrations/supabase/types";
 import { SortControl } from "@/components/SortControl";
 import { usePref } from "@/lib/prefs";
 import { validSort, type Sort, type SortKey } from "@/lib/record-sort";
+import { DateInput } from "@/components/DateInput";
 
 export const Route = createFileRoute("/_authenticated/payroll")({
   head: () => ({ meta: [{ title: "Payroll — Meridian Payroll" }] }),
@@ -136,9 +137,9 @@ function PayrollPage() {
     }>
       <div className="flex items-center gap-3">
         <span className="label-mono">Period</span>
-        <input type="date" className={`${inputCls} max-w-[11rem]`} value={from} onChange={(e) => setFrom(e.target.value)} />
+        <DateInput className={`${inputCls} max-w-[11rem]`} value={from} onChange={(v) => setFrom(v)} />
         <span className="text-muted-foreground">→</span>
-        <input type="date" className={`${inputCls} max-w-[11rem]`} value={to} onChange={(e) => setTo(e.target.value)} />
+        <DateInput className={`${inputCls} max-w-[11rem]`} value={to} onChange={(v) => setTo(v)} />
       </div>
       {to && <PayLock periodEnd={to} />}
 
@@ -310,7 +311,7 @@ function ExtrasPanel({ employees, adjustments, defaultDate, onChange }: {
         <input className={inputCls} list="extra-cats" placeholder="Category" value={category} onChange={(e) => setCategory(e.target.value)} />
         <datalist id="extra-cats">{known.map((k) => <option key={k} value={k} />)}</datalist>
         <input className={inputCls} type="number" step="0.01" placeholder="Amount" value={amount} onChange={(e) => setAmount(e.target.value)} />
-        <input className={inputCls} type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+        <DateInput className={inputCls} value={date} onChange={(v) => setDate(v)} />
         <input className={inputCls} placeholder="Note (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
         <button className={btnPrimary}>Add</button>
       </form>

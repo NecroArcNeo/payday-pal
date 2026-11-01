@@ -13,6 +13,7 @@ import { BreakHeader, BreakInput, BreakUnitToggle } from "@/components/BreakFiel
 import { DataTable } from "./DataTable";
 import { breakRangeText, formatBreak, useBreakUnit, validBreak } from "@/lib/breaks";
 import { EditableLabel } from "@/components/EditableLabel";
+import { DateInput } from "@/components/DateInput";
 
 export type EntryMode = "clock" | "hours";
 
@@ -176,7 +177,7 @@ function EditRow({ record, employees, shifts, onCancel, onSaved }: { record: Rec
       <td className="pl-5 align-top pt-4"><Pencil className="h-3.5 w-3.5 text-primary" /></td>
       <td className={cell}><EmployeePicker employees={employees} hideResigned value={f.employee_id} onChange={(id) => set("employee_id", id)} className="min-w-[12rem] !py-1.5 text-[13px]" /></td>
       <td className={cell}>
-        <input type="date" className={`${input} block !w-[9rem]`} value={f.work_date} onChange={(e) => set("work_date", e.target.value)} aria-label="Date" />
+        <DateInput className={`${input} block !w-[9rem]`} value={f.work_date} onChange={(v) => set("work_date", v)} aria-label="Date" />
         <select className={`${input} mt-1 block !w-[9rem]`} value={f.entry_mode} onChange={(e) => set("entry_mode", e.target.value)} aria-label="Entry type">
           <option value="clock">Clock in / out</option>
           <option value="hours">Daily hours</option>

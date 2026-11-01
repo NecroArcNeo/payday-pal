@@ -28,6 +28,7 @@
 - [ ] At launch (external setup, deferred): test email reset against the real Supabase project: apply migration 0016, and put the code (`{{ .Token }}`) in the "Magic Link" email template
 - [x] Sort time records (Time records, Timesheet, Dashboard) and Payroll by date, employee, hours or total pay, with a flip button (done Oct 30, 2026)
 - [x] **Copy a week** on Time records (done Oct 31, 2026): a week's shifts for the next 1–8 weeks (or earlier), chosen days and people; skips shifts already there and locked days, asks about days with another record, backs up first, one Ctrl+Z undoes it
+- [x] **Typing dates** (done Oct 31, 2026): every date box reads what's typed (1101, 11/1, 11/01/27, Nov 1, today…), shows the date it read, has a calendar button; no year means the nearest one, so future dates work
 - [ ] Ideas for later (Oct 31, 2026): payroll run checklist (flag missing clock-outs, overlaps, long days, then lock and export), paste rows from Excel into Time records, payslips (PDF), Ctrl+K quick search, automatic backup copy to a folder/USB, open where I left off, saved weekly patterns
 - [ ] Optional: speed — memoize table rows (opening an edit with 500 rows is slow on old PCs); check PGlite updates (0.5.12+)
 - [x] Timesheet export with selectable templates (done Oct 28, 2026: your own Excel templates)

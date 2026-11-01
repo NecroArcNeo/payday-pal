@@ -15,6 +15,7 @@ import {
   fullName, isoDate, useAdjustments, useAllRecords, useEmployees, useFieldDefs, usePayRates, usePayrollSettings, useShifts, weekday,
 } from "@/lib/payroll";
 import { periodPresets } from "@/lib/periods";
+import { DateInput } from "@/components/DateInput";
 
 const isDate = (d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d);
 
@@ -141,9 +142,9 @@ function BulkExportDialog({ initialFrom, initialTo, onClose }: { initialFrom: st
             <div className="label-mono mb-1">1 · Period</div>
             <div className="flex flex-wrap items-end gap-3">
               <label><span className="text-xs text-muted-foreground">From{isDate(from) && ` · ${weekday(from)}`}</span>
-                <input type="date" className={`${inputCls} mt-0.5 w-auto`} value={from} onChange={(e) => setFrom(e.target.value)} /></label>
+                <DateInput className={`${inputCls} mt-0.5 w-auto`} value={from} onChange={(v) => setFrom(v)} /></label>
               <label><span className="text-xs text-muted-foreground">To{isDate(to) && ` · ${weekday(to)}`}</span>
-                <input type="date" className={`${inputCls} mt-0.5 w-auto`} value={to} onChange={(e) => setTo(e.target.value)} /></label>
+                <DateInput className={`${inputCls} mt-0.5 w-auto`} value={to} onChange={(v) => setTo(v)} /></label>
               <div className="flex flex-wrap gap-1.5">
                 {periodPresets().map((p) => <button key={p.key} type="button" className={chip(p.from === from && p.to === to)} onClick={() => { setFrom(p.from); setTo(p.to); }}>{p.label}</button>)}
               </div>

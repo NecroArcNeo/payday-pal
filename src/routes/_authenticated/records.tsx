@@ -27,6 +27,7 @@ import { setRecordsLocked } from "@/lib/pay-freeze";
 import { SortControl } from "@/components/SortControl";
 import { CopyWeek } from "@/components/CopyWeek";
 import { sortRecords, validSort, type Sort, type SortKey } from "@/lib/record-sort";
+import { DateInput } from "@/components/DateInput";
 
 /** One shift's times for "Add each shift's usual hours", as typed (break in minutes). */
 type GroupTimes = { clock_in: string; clock_out: string; lunch_minutes: string; hours: string };
@@ -374,11 +375,11 @@ function RecordsPage() {
           </div>
         </div>
         <div className="flex flex-wrap items-end gap-3">
-          <label><span className="label-mono">{f.until ? "From" : "Date"}{f.work_date && ` · ${weekday(f.work_date)}`}</span><input type="date" className={`${inputCls} mt-1 w-auto`} value={f.work_date} onChange={(e) => setF({ ...f, work_date: e.target.value })} required /></label>
+          <label><span className="label-mono">{f.until ? "From" : "Date"}{f.work_date && ` · ${weekday(f.work_date)}`}</span><DateInput className={`${inputCls} mt-1 w-auto`} value={f.work_date} onChange={(v) => setF({ ...f, work_date: v })} required /></label>
           <label title="Leave empty for one day. Set it to add the same entry for every day up to and including this date.">
             <span className="label-mono">To (optional){f.until && ` · ${weekday(f.until)}`}</span>
             <div className="mt-1 flex items-center gap-1">
-              <input type="date" className={`${inputCls} w-auto ${rangeBad ? "ring-2 ring-destructive" : ""}`} value={f.until} min={f.work_date} onChange={(e) => setF({ ...f, until: e.target.value })} aria-label="Last date" />
+              <DateInput className={`${inputCls} w-auto ${rangeBad ? "ring-2 ring-destructive" : ""}`} value={f.until} min={f.work_date} onChange={(v) => setF({ ...f, until: v })} aria-label="Last date" />
               {f.until && <button type="button" onClick={() => setF({ ...f, until: "" })} className="text-muted-foreground hover:text-foreground" aria-label="Just one day"><X className="h-4 w-4" /></button>}
             </div>
           </label>
@@ -472,9 +473,9 @@ function RecordsPage() {
 
       <div className="flex flex-wrap items-center gap-3">
         <span className="label-mono">Filter</span>
-        <input type="date" className={`${inputCls} max-w-[11rem]`} value={from} onChange={(e) => setFrom(e.target.value)} aria-label="From date" />
+        <DateInput className={`${inputCls} max-w-[11rem]`} value={from} onChange={(v) => setFrom(v)} aria-label="From date" />
         <span className="text-muted-foreground">→</span>
-        <input type="date" className={`${inputCls} max-w-[11rem]`} value={to} onChange={(e) => setTo(e.target.value)} aria-label="To date" />
+        <DateInput className={`${inputCls} max-w-[11rem]`} value={to} onChange={(v) => setTo(v)} aria-label="To date" />
         {shifts.length > 1 && (
           <FacetFilter options={shifts.map((sh) => ({ value: sh.id, label: sh.name }))} value={listShifts} onChange={setListShifts} allLabel="All shifts" label="shift" />
         )}
@@ -629,7 +630,7 @@ function BulkRecordEdit({ mode, employees, label, load, onClose, onDone }: {
               <option value="shift">Move by days</option>
             </select>
             {dateMode === "set"
-              ? <input type="date" className={inputCls} value={v.date} onChange={(e) => set("date", e.target.value)} aria-label="New date" />
+              ? <DateInput className={inputCls} value={v.date} onChange={(d) => set("date", d)} aria-label="New date" />
               : <input type="number" step={1} className={inputCls} value={v.shift} onChange={(e) => set("shift", e.target.value)} placeholder="7 or -7" aria-label="Days to move" />}
           </div>
         ))}

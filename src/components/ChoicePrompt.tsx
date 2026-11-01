@@ -3,6 +3,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { btnGhost, btnPrimary, inputCls } from "@/components/AppShell";
 import { weekday } from "@/lib/payroll";
 import { answerChoice, useChoiceRequest } from "@/lib/choice-prompt";
+import { DateInput } from "@/components/DateInput";
 
 const SHOWN = 8;
 
@@ -31,7 +32,7 @@ export function ChoicePrompt() {
         {d && (
           <label className="block">
             <span className="label-mono">{d.label}{date && ` · ${weekday(date)}`}</span>
-            <input type="date" className={`${inputCls} mt-1 w-auto ${dateOk ? "" : "ring-2 ring-destructive"}`} value={date} min={d.min} max={d.max} onChange={(e) => setDate(e.target.value)} />
+            <DateInput className={`${inputCls} mt-1 w-auto ${dateOk ? "" : "ring-2 ring-destructive"}`} value={date} min={d.min} max={d.max} onChange={(v) => setDate(v)} />
             {!dateOk && date && d.max && date > d.max && <span className="ml-2 text-xs text-destructive">Can't be after {d.max}</span>}
           </label>
         )}

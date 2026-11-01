@@ -12,6 +12,7 @@ import { EditableLabel } from "@/components/EditableLabel";
 import { useLabels } from "@/lib/labels";
 import { customKey } from "@/lib/db/privacy";
 import { Plus, Trash2, TriangleAlert } from "lucide-react";
+import { DateInput } from "@/components/DateInput";
 
 const NEW_SECTION = "\u0000new";
 const cleanSection = (s: string | null | undefined) => {
@@ -195,6 +196,8 @@ export function CategoryInput({ type, value, onChange, className = "", placehold
   let input: React.ReactNode;
   if (t === "yesno" && fits) {
     input = <select {...common}><option value="">—</option><option value="yes">Yes</option><option value="no">No</option></select>;
+  } else if (t === "date" && fits) {
+    input = <DateInput className={className} value={value} placeholder={placeholder} disabled={disabled} onChange={onChange} />;
   } else if (t === "longtext") {
     input = <textarea rows={2} {...common} />;
   } else {

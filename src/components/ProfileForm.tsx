@@ -9,6 +9,7 @@ import { fieldSuggestions, PER_PERSON_FIELDS, profileSections } from "@/lib/empl
 import { useDataMode } from "@/lib/db/mode";
 import { customKey } from "@/lib/db/privacy";
 import { Lock } from "lucide-react";
+import { DateInput } from "@/components/DateInput";
 
 /** Marks a private field. In cloud mode it can't be edited, since the cloud never stores it. */
 function PrivateMark({ cloud }: { cloud: boolean }) {
@@ -73,10 +74,17 @@ export function ProfileForm({ source, employees, template, submitLabel, onSave }
                     <span className="label-mono flex items-center gap-1"><EditableLabel k={f.k} name={f.label} />{privateHere && <PrivateMark cloud={cloud} />}</span>
                     {f.type === "email" && <EmailButton email={form[f.k] ?? ""} />}
                   </span>
-                  <input className={`${inputCls} mt-1 disabled:opacity-60`} type={f.type ?? "text"} step={f.type === "number" ? "0.01" : undefined}
-                    disabled={off} title={locked ? "Entered for each employee" : off ? "Private: edit it on this device's data" : undefined}
-                    list={f.suggest ? `suggest-${f.k}` : undefined} placeholder={locked ? "Set for each employee" : off ? "Private, kept on your device" : f.suggest ? "Pick or type your own" : undefined}
-                    value={locked ? "" : form[f.k] ?? ""} onChange={(e) => setForm({ ...form, [f.k]: e.target.value })} />
+                  {f.type === "date" ? (
+                    <DateInput className={`${inputCls} mt-1 disabled:opacity-60`} disabled={off}
+                      title={locked ? "Entered for each employee" : off ? "Private: edit it on this device's data" : undefined}
+                      placeholder={locked ? "Set for each employee" : off ? "Private, kept on your device" : undefined}
+                      value={locked ? "" : form[f.k] ?? ""} onChange={(v) => setForm({ ...form, [f.k]: v })} />
+                  ) : (
+                    <input className={`${inputCls} mt-1 disabled:opacity-60`} type={f.type ?? "text"} step={f.type === "number" ? "0.01" : undefined}
+                      disabled={off} title={locked ? "Entered for each employee" : off ? "Private: edit it on this device's data" : undefined}
+                      list={f.suggest ? `suggest-${f.k}` : undefined} placeholder={locked ? "Set for each employee" : off ? "Private, kept on your device" : f.suggest ? "Pick or type your own" : undefined}
+                      value={locked ? "" : form[f.k] ?? ""} onChange={(e) => setForm({ ...form, [f.k]: e.target.value })} />
+                  )}
                   {f.suggest && <datalist id={`suggest-${f.k}`}>{fieldSuggestions(f.k, employees).map((v) => <option key={v} value={v} />)}</datalist>}
                 </label>
               );

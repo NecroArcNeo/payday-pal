@@ -24,6 +24,7 @@ import { Printer } from "lucide-react";
 import { SortControl } from "@/components/SortControl";
 import { usePref } from "@/lib/prefs";
 import { sortRecords, validSort, type Sort, type SortKey } from "@/lib/record-sort";
+import { DateInput } from "@/components/DateInput";
 
 const SORT_KEYS = ["date", "hours", "pay"] as const satisfies readonly SortKey[];
 /** A timesheet reads in time order. */
@@ -83,11 +84,11 @@ function TimesheetPage() {
         </label>
         <label>
           <span className="label-mono">From · {weekday(from)}</span>
-          <input type="date" className={`${inputCls} mt-1`} value={from} onChange={(e) => isDate(e.target.value) && set({ from: e.target.value })} />
+          <DateInput className={`${inputCls} mt-1`} value={from} onChange={(v) => isDate(v) && set({ from: v })} />
         </label>
         <label>
           <span className="label-mono">To · {weekday(to)}</span>
-          <input type="date" className={`${inputCls} mt-1`} value={to} onChange={(e) => isDate(e.target.value) && set({ to: e.target.value })} />
+          <DateInput className={`${inputCls} mt-1`} value={to} onChange={(v) => isDate(v) && set({ to: v })} />
         </label>
         <div className="flex flex-wrap gap-1.5">
           {periodPresets().map((p) => (

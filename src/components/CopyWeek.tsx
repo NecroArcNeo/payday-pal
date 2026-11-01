@@ -13,6 +13,7 @@ import { describeEmployeeFilter, isFiltering, NO_FILTER, searchEmployees, type E
 import { weekStartOf } from "@/lib/export/timesheet-export";
 import { addDays, fullName, isoDate, useEmployees, usePayrollSettings, weekday } from "@/lib/payroll";
 import { describeRecord, sameDayClashes } from "@/lib/record-clash";
+import { DateInput } from "@/components/DateInput";
 
 const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
@@ -128,9 +129,9 @@ function CopyWeekDialog({ onClose }: { onClose: () => void }) {
         <div className="-mx-1 flex min-h-0 flex-col gap-4 overflow-y-auto px-1">
           <section className="flex flex-wrap items-end gap-3">
             <label><span className="label-mono">From the week of</span>
-              <input type="date" className={`${inputCls} mt-1 w-auto`} value={from} onChange={(e) => pickFrom(e.target.value)} /></label>
+              <DateInput className={`${inputCls} mt-1 w-auto`} value={from} onChange={(v) => pickFrom(v)} /></label>
             <label><span className="label-mono">To the week of</span>
-              <input type="date" className={`${inputCls} mt-1 w-auto ${sameWeek ? "ring-2 ring-destructive" : ""}`} value={to} onChange={(e) => isDate(e.target.value) && setTo(monday(e.target.value))} /></label>
+              <DateInput className={`${inputCls} mt-1 w-auto ${sameWeek ? "ring-2 ring-destructive" : ""}`} value={to} onChange={(v) => isDate(v) && setTo(monday(v))} /></label>
             <label><span className="label-mono">Weeks in a row</span>
               <input type="number" min={1} max={8} className={`${inputCls} mt-1 !w-20`} value={weeks} onChange={(e) => setWeeks(Math.min(8, Math.max(1, Math.round(Number(e.target.value)) || 1)))} /></label>
           </section>
