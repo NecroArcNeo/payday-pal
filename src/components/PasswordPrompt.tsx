@@ -38,7 +38,7 @@ export function PasswordPrompt() {
             </div>
           )}
           {(problem || req.error) && <p className="text-sm text-destructive">{problem ?? req.error}</p>}
-          {setting && (
+          {setting && !req.required && (
             <label className="flex items-start gap-2 text-xs text-muted-foreground">
               <input type="checkbox" className="mt-0.5" checked={plain} onChange={(e) => setPlain(e.target.checked)} />
               <span>Save without a password. Anyone who gets the file can read everything in it, including ID numbers.</span>
@@ -46,7 +46,7 @@ export function PasswordPrompt() {
           )}
           <div className="flex justify-end gap-2">
             <button type="button" className={btnGhost} onClick={() => answerPassword(null)}>Cancel</button>
-            <button type="submit" className={btnPrimary} disabled={!ready}>{setting ? (plain ? "Save unprotected file" : "Save protected file") : "Open"}</button>
+            <button type="submit" className={btnPrimary} disabled={!ready}>{req.action ?? (setting ? (plain ? "Save unprotected file" : "Save protected file") : "Open")}</button>
           </div>
         </form>
       </DialogContent>

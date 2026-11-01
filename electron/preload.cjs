@@ -1,4 +1,4 @@
-// The only things the page can reach in the desktop app: the database and the backup files.
+// The only things the page can reach in the desktop app: the database, the backup files and the lock.
 // Typed for the page in src/lib/desktop.ts.
 const { contextBridge, ipcRenderer } = require("electron");
 
@@ -22,6 +22,18 @@ contextBridge.exposeInMainWorld("meridianDesktop", {
     get: (id) => call("backups:get", id),
     list: () => call("backups:list"),
     remove: (ids) => call("backups:delete", ids),
+  },
+  security: {
+    status: () => call("security:status"),
+    unlock: (password) => call("security:unlock", password),
+    recover: (recoveryKey, newPassword) => call("security:recover", recoveryKey, newPassword),
+    recoverWithCloud: (escrowKey, newPassword) => call("security:recover-cloud", escrowKey, newPassword),
+    setPassword: (current, next) => call("security:set-password", current, next),
+    removePassword: (current) => call("security:remove-password", current),
+    newRecoveryKey: (current) => call("security:new-recovery-key", current),
+    enableCloudReset: (current) => call("security:enable-cloud-reset", current),
+    disableCloudReset: () => call("security:disable-cloud-reset"),
+    startOver: () => call("security:start-over"),
   },
   info: () => call("desktop:info"),
   session: () => call("desktop:session"),

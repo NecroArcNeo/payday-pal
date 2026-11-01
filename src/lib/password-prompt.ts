@@ -10,6 +10,10 @@ export type PasswordRequest = {
   detail?: string;
   /** Shown under the field, e.g. after a wrong password. */
   error?: string;
+  /** "set" only: a password is required (no "go without" option). */
+  required?: boolean;
+  /** The confirm button's text, when the default (about saving a file) doesn't fit. */
+  action?: string;
 };
 /** The password, `plain` when the user chose no password, or null when they cancelled. */
 export type PasswordResult = { password: string } | { plain: true } | null;

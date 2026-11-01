@@ -1,14 +1,15 @@
 import { createFileRoute, Outlet } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { toast } from "sonner";
 import { localDb, OtherTabError } from "@/lib/db/local";
 import { listBackups, saveBackup } from "@/lib/db/backups";
 import { RecoveryScreen } from "@/components/RecoveryScreen";
+import { LockScreen } from "@/components/LockScreen";
 import { maybeAutoBackup } from "@/lib/db/sync";
 import { setDataMode, useDataMode } from "@/lib/db/mode";
 import { useSession } from "@/lib/payroll";
-import { desktop } from "@/lib/desktop";
+import { desktop, SECURITY_STATUS_KEY, type SecurityStatus } from "@/lib/desktop";
 
 // No sign-in needed: the app runs on this device's database. (The folder name
 // predates that; renaming it would only churn the route tree.)
@@ -47,11 +48,33 @@ async function warnIfUnclean() {
   );
 }
 
+/** What the data's encryption did at this start, said once: converted, or couldn't convert yet. */
+function reportEncryption(s: SecurityStatus | null | undefined) {
+  if (!s) return;
+  if (s.justEncrypted) {
+    toast.success("Your payroll data and automatic backups on this computer are now encrypted. You can add an app password on Sync & backup.", { duration: 15_000 });
+  }
+  if (s.encryptError) {
+    toast.warning(`Your payroll data couldn't be encrypted yet (${s.encryptError}). It opened as before; the app tries again next time it starts.`, { duration: 20_000 });
+  }
+}
+
 function DataGate() {
+  const queryClient = useQueryClient();
+  // The desktop app's data is encrypted: before anything opens it, the key has to be unlocked (electron/main.mjs).
+  const security = useQuery({
+    queryKey: SECURITY_STATUS_KEY,
+    queryFn: () => desktop?.security.status() ?? null,
+    staleTime: Infinity,
+    retry: false,
+  });
+  const unlocked = !desktop || security.data?.state === "unlocked";
   const ready = useQuery({
     queryKey: ["local-db-ready"],
+    enabled: unlocked,
     queryFn: async () => {
       await localDb();
+      reportEncryption(queryClient.getQueryData<SecurityStatus | null>(SECURITY_STATUS_KEY));
       void warnIfUnclean();
       await autoBackup();
       // The desktop app asks before its window closes, so the last changes get backed up too.
@@ -78,6 +101,10 @@ function DataGate() {
     }
   }, [mode, isSuccess, session]);
 
+  if (security.data && security.data.state !== "unlocked") {
+    return <LockScreen status={security.data} onUnlocked={(s) => queryClient.setQueryData(SECURITY_STATUS_KEY, s)} />;
+  }
+  if (security.isError) return <RecoveryScreen error={security.error} />;
   if (ready.isPending) {
     return <div className="flex min-h-screen items-center justify-center bg-background text-sm text-muted-foreground">Opening your payroll data…</div>;
   }

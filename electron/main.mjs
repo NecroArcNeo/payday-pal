@@ -7,14 +7,21 @@
 // to Microsoft's cloud (and could copy the database mid-write). Copies meant to
 // leave the computer are the downloaded backup files, which are encrypted.
 // The page reaches both only through the bridge in preload.cjs.
+//
+// Both are encrypted on the disk (secure-fs.mjs for the database, sealed files for backups) with a data key
+// kept in keyring.json (keyring.mjs). Without an app password, Windows unlocks that key for this user account
+// and the app opens as usual; with one, nothing in the folder can be read until it's typed. Until the key is
+// unlocked, every database and backup call is refused.
 
-import { app, BrowserWindow, ipcMain, Menu, net, protocol, shell } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, net, protocol, safeStorage, shell } from "electron";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { PGlite, types } from "@electric-sql/pglite";
 import { DURABLE_START_PARAMS, DurableNodeFS } from "./durable-fs.mjs";
+import * as keyring from "./keyring.mjs";
+import { encryptFolder, folderKeyMatches, folderState, SecureNodeFS } from "./secure-fs.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const CLIENT_DIR = path.join(here, "..", "dist", "client");
@@ -30,6 +37,11 @@ const BACKUP_DIR = path.join(app.getPath("userData"), "Backups");
 // Says whether the database is open. Still "open" at startup means the last session never closed it:
 // a crash, a power cut or a forced quit.
 const SESSION_FILE = path.join(app.getPath("userData"), "session.json");
+const KEYRING_FILE = path.join(app.getPath("userData"), "keyring.json");
+// While an unencrypted database (from before encryption) is converted: the encrypted copy is built beside it,
+// checked, and only then swapped in.
+const ENCRYPTING_DIR = `${DATA_DIR}.encrypting`;
+const UNENCRYPTED_DIR = `${DATA_DIR}-unencrypted`;
 const lastSession = (() => {
   try { return JSON.parse(fs.readFileSync(SESSION_FILE, "utf8")); } catch { return null; }
 })();
@@ -50,10 +62,18 @@ protocol.registerSchemesAsPrivileged([
 let dbPromise;
 function database() {
   dbPromise ??= (async () => {
+    const key = await requireUnlocked();
+    // Encrypted unless an unencrypted folder couldn't be converted (then it opens as before, and converting
+    // is tried again at the next start).
+    const state = folderState(DATA_DIR);
+    if (state === "encrypted" && !folderKeyMatches(DATA_DIR, key)) {
+      throw new Error("The database folder was encrypted with a different key than this computer's keyring.json holds.");
+    }
     const db = new PGlite({
       // Every commit is flushed to the disk before the app reports it saved (durable-fs.mjs), so a power cut
-      // or system crash can't lose it or leave the database half-written.
-      fs: new DurableNodeFS(DATA_DIR),
+      // or system crash can't lose it or leave the database half-written. SecureNodeFS keeps that and adds
+      // the encryption.
+      fs: state === "plain" ? new DurableNodeFS(DATA_DIR) : new SecureNodeFS(DATA_DIR, key),
       startParams: DURABLE_START_PARAMS,
       // Match what Supabase/PostgREST returns (and the browser build): numbers for numeric, strings for dates and times.
       parsers: {
@@ -75,6 +95,7 @@ function database() {
 
 /** Closes the database (if it opened) and moves its folder aside, never deleting it. Returns where it went. */
 async function setAsideDatabase() {
+  await requireUnlocked();
   for (const tx of transactions.values()) tx.rollback(new Error("The database is being replaced"));
   if (dbPromise) {
     try { await (await dbPromise).close(); } catch { /* it never opened */ }
@@ -159,8 +180,249 @@ function rollbackFor(ownerId) {
   for (const tx of transactions.values()) if (tx.owner === ownerId) tx.rollback(new Error("The page closed"));
 }
 
+// ---------------------------------------------------------------- security
+
+let ring = null; // keyring.json's contents
+let dataKey = null; // only while unlocked
+let securityError = null; // why the keyring can't be used at all
+let deviceFailed = false; // there's no password, but Windows couldn't unlock the key (another computer or account)
+let justEncrypted = false; // this start converted an unencrypted database: the page says so once
+let encryptError = null; // converting failed: the data stays as it was, and it's tried again next start
+let failures = 0; // wrong passwords or keys in a row
+
+let rewrapDevice = false; // Windows rotated its key: the device wrap should be made again with the new one
+/** Windows' protection for this user account (DPAPI); `protect` is null where the system has none. */
+async function device() {
+  if (!(await safeStorage.isAsyncEncryptionAvailable())) return { protect: null, unprotect: async () => { throw new Error("No safe storage"); } };
+  return {
+    protect: (s) => safeStorage.encryptStringAsync(s),
+    unprotect: async (b) => {
+      const { result, shouldReEncrypt } = await safeStorage.decryptStringAsync(b);
+      rewrapDevice ||= shouldReEncrypt;
+      return result;
+    },
+  };
+}
+
+function saveKeyring(next) {
+  writeDurably(KEYRING_FILE, JSON.stringify(next, null, 2));
+  ring = next;
+}
+
+/** A conversion stopped part-way (the app was closed or the power went): finish it, or undo it. */
+function finishInterruptedSwap() {
+  if (!fs.existsSync(UNENCRYPTED_DIR)) return;
+  if (!fs.existsSync(DATA_DIR)) {
+    // The encrypted copy was checked before the original moved, so it's safe to put in place.
+    fs.renameSync(fs.existsSync(ENCRYPTING_DIR) ? ENCRYPTING_DIR : UNENCRYPTED_DIR, DATA_DIR);
+  }
+  if (folderState(DATA_DIR) === "encrypted") fs.rmSync(UNENCRYPTED_DIR, { recursive: true, force: true });
+}
+
+/** An unencrypted database from before: encrypt a copy, check every file reads back the same, then swap. */
+function encryptExistingDatabase() {
+  if (folderState(DATA_DIR) !== "plain") return false;
+  fs.rmSync(ENCRYPTING_DIR, { recursive: true, force: true }); // an attempt that stopped before its check
+  encryptFolder(DATA_DIR, ENCRYPTING_DIR, dataKey);
+  fs.renameSync(DATA_DIR, UNENCRYPTED_DIR);
+  fs.renameSync(ENCRYPTING_DIR, DATA_DIR);
+  fs.rmSync(UNENCRYPTED_DIR, { recursive: true, force: true });
+  return true;
+}
+
+/** Backups from before encryption: sealed in place, each checked before it replaces the original. */
+function sealOldBackups() {
+  for (const id of backupIds()) {
+    const file = backupFile(id);
+    let raw;
+    try { raw = JSON.parse(fs.readFileSync(file, "utf8")); } catch { continue; } // damaged: left alone, as listing does
+    if (keyring.isSealed(raw)) continue;
+    const sealed = sealBackup(raw);
+    if (JSON.stringify(keyring.unseal(dataKey, sealed)) !== JSON.stringify(raw)) throw new Error(`Backup ${id} didn't seal correctly`);
+    writeDurably(file, JSON.stringify(sealed));
+    infoCache.delete(file);
+  }
+}
+
+/** Once the key is known: convert what's still unencrypted. A failure leaves everything as it was. */
+function afterUnlock() {
+  failures = 0;
+  try {
+    justEncrypted = encryptExistingDatabase() || justEncrypted;
+    sealOldBackups();
+    encryptError = null;
+  } catch (e) {
+    encryptError = e instanceof Error ? e.message : String(e);
+    fs.rmSync(ENCRYPTING_DIR, { recursive: true, force: true });
+  }
+}
+
+/** Reads the keyring (making one on first run) and unlocks it if there's no password. */
+async function prepareSecurity() {
+  try {
+    finishInterruptedSwap();
+    let raw = null;
+    try {
+      raw = JSON.parse(fs.readFileSync(KEYRING_FILE, "utf8"));
+    } catch (e) {
+      if (e.code !== "ENOENT") throw new Error(`keyring.json can't be read (${e.message})`);
+    }
+    if (raw && !keyring.validKeyring(raw)) throw new Error("keyring.json is damaged");
+    if (!raw) {
+      // Never make a new key for data that already has one: it couldn't open it.
+      if (folderState(DATA_DIR) === "encrypted") throw new Error("keyring.json, which holds the key to this computer's payroll data, is missing");
+      const made = await keyring.createKeyring((await device()).protect);
+      saveKeyring(made.ring);
+      dataKey = made.dataKey;
+    } else {
+      ring = raw;
+      try {
+        dataKey = await keyring.unlockWithDevice(ring, (await device()).unprotect);
+      } catch {
+        deviceFailed = true;
+      }
+      if (dataKey && rewrapDevice) saveKeyring(await keyring.removePassword(ring, dataKey, (await device()).protect));
+    }
+    if (dataKey) afterUnlock();
+  } catch (e) {
+    securityError = e instanceof Error ? e.message : String(e);
+  }
+}
+
+/** Set up once the app is ready (safeStorage needs that); every database and backup call waits for it. */
+let securityReady = null;
+async function requireUnlocked() {
+  await securityReady;
+  if (securityError) throw new Error(securityError);
+  if (!dataKey) throw new Error("The app is locked");
+  return dataKey;
+}
+
+function securityStatus() {
+  return {
+    state: securityError ? "error" : dataKey ? "unlocked" : "locked",
+    error: securityError,
+    ...(ring ? keyring.keyringStatus(ring) : { password: false, recovery: false, cloud: false, keyringId: null }),
+    deviceFailed,
+    encrypted: fs.existsSync(DATA_DIR) ? folderState(DATA_DIR) !== "plain" : true,
+    justEncrypted,
+    encryptError,
+  };
+}
+
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+/** A wrong guess makes the next answer slower (up to 30 s), so guessing through the app takes forever. */
+async function guarded(check) {
+  try {
+    return await check();
+  } catch (e) {
+    if (!(e instanceof keyring.WrongKeyError)) throw e;
+    failures++;
+    await wait(Math.min(30_000, 500 * 2 ** (failures - 1)));
+    throw e;
+  }
+}
+
+/**
+ * Unlocks with `open` (checking a password, recovery key or escrow key). After a forgotten password,
+ * `newPassword` replaces it (null: no password from now on).
+ */
+async function unlockWith(open, newPassword) {
+  await securityReady;
+  if (securityError) throw new Error(securityError);
+  if (dataKey) return securityStatus();
+  if (newPassword) checkedPassword(newPassword);
+  const key = await guarded(open);
+  if (newPassword !== undefined) {
+    saveKeyring(newPassword ? await keyring.setPassword(ring, key, newPassword) : await keyring.removePassword(ring, key, (await device()).protect));
+  }
+  dataKey = key;
+  deviceFailed = false;
+  afterUnlock();
+  return securityStatus();
+}
+
+const MIN_PASSWORD_LENGTH = 8; // as backup-crypto.ts
+function checkedPassword(password) {
+  if (typeof password !== "string" || password.length < MIN_PASSWORD_LENGTH) throw new Error(`The password needs at least ${MIN_PASSWORD_LENGTH} characters`);
+  return password;
+}
+
+/** Changes need the current password, if there is one: someone at an unlocked computer can't quietly change it. */
+async function confirmCurrent(current) {
+  const key = await requireUnlocked();
+  if (ring.wraps.password) await guarded(() => keyring.unlockWithPassword(ring, String(current ?? "")));
+  failures = 0;
+  return key;
+}
+
+handle("security:status", async () => {
+  await securityReady;
+  return securityStatus();
+});
+handle("security:unlock", (_e, password) => unlockWith(() => keyring.unlockWithPassword(ring, String(password))));
+handle("security:recover", (_e, text, newPassword) => unlockWith(() => keyring.unlockWithRecovery(ring, String(text)), newPassword ?? null));
+handle("security:recover-cloud", (_e, escrowKey, newPassword) => unlockWith(() => keyring.unlockWithEscrow(ring, String(escrowKey)), newPassword ?? null));
+/** Sets or changes the password. The first time, also makes the recovery key, returned to show once. */
+handle("security:set-password", async (_e, current, next) => {
+  checkedPassword(next);
+  const key = await confirmCurrent(current);
+  let updated = await keyring.setPassword(ring, key, next);
+  let recoveryKey = null;
+  if (!updated.wraps.recovery) ({ ring: updated, text: recoveryKey } = keyring.newRecoveryKey(updated, key));
+  saveKeyring(updated);
+  return { status: securityStatus(), recoveryKey };
+});
+handle("security:remove-password", async (_e, current) => {
+  const key = await confirmCurrent(current);
+  saveKeyring(await keyring.removePassword(ring, key, (await device()).protect));
+  return securityStatus();
+});
+handle("security:new-recovery-key", async (_e, current) => {
+  const key = await confirmCurrent(current);
+  const { ring: updated, text } = keyring.newRecoveryKey(ring, key);
+  saveKeyring(updated);
+  return { status: securityStatus(), recoveryKey: text };
+});
+/** Email reset on: returns the escrow key for the page to put in the cloud account, filed under the keyring's id. */
+handle("security:enable-cloud-reset", async (_e, current) => {
+  const key = await confirmCurrent(current);
+  const { ring: updated, escrowKey } = keyring.enableEscrow(ring, key);
+  saveKeyring(updated);
+  return { status: securityStatus(), escrowKey };
+});
+/**
+ * When the key can't be had (keyring.json lost or damaged, or the password and recovery key both forgotten):
+ * moves the database and keyring aside, never deleting them, and starts again with a new key and no data, to
+ * restore a backup file into. With the old keyring.json and its password, the old folder can still be opened.
+ */
+handle("security:start-over", async () => {
+  await securityReady;
+  if (dataKey) throw new Error("The app is already unlocked");
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  if (fs.existsSync(DATA_DIR)) fs.renameSync(DATA_DIR, path.join(path.dirname(DATA_DIR), `database-locked-${stamp}`));
+  if (fs.existsSync(KEYRING_FILE)) fs.renameSync(KEYRING_FILE, path.join(path.dirname(KEYRING_FILE), `keyring-${stamp}.json`));
+  securityError = null;
+  deviceFailed = false;
+  ring = null;
+  await prepareSecurity();
+  return securityStatus();
+});
+handle("security:disable-cloud-reset", async () => {
+  await requireUnlocked();
+  saveKeyring(keyring.disableEscrow(ring));
+  return securityStatus();
+});
+
 // ---------------------------------------------------------------- backups
-// One file per backup: <id>.json holding { id, created_at, reason, counts, snapshot }.
+// One file per backup: <id>.json holding { id, created_at, reason, counts, snapshot }, sealed with the data key
+// (keyring.mjs): everything but the snapshot stays readable, so listing needs no decryption.
+
+/** A backup record, sealed: its details readable, its snapshot not. */
+function sealBackup(record) {
+  const { snapshot: _skip, ...header } = record;
+  return keyring.seal(dataKey, header, record);
+}
 
 const backupFile = (id) => path.join(BACKUP_DIR, `${String(id).padStart(6, "0")}.json`);
 function backupIds() {
@@ -181,33 +443,39 @@ function writeDurably(file, text) {
   fs.renameSync(tmp, file);
 }
 
-handle("backups:add", (_e, record) => {
+handle("backups:add", async (_e, record) => {
+  await requireUnlocked();
   fs.mkdirSync(BACKUP_DIR, { recursive: true });
   const id = (backupIds().at(-1) ?? 0) + 1;
-  writeDurably(backupFile(id), JSON.stringify({ id, ...record }));
+  writeDurably(backupFile(id), JSON.stringify(sealBackup({ id, ...record })));
   return id;
 });
-handle("backups:get", (_e, id) => {
+handle("backups:get", async (_e, id) => {
+  const key = await requireUnlocked();
   const file = backupFile(id);
-  return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : undefined;
+  if (!fs.existsSync(file)) return undefined;
+  const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+  return keyring.isSealed(raw) ? keyring.unseal(key, raw) : raw;
 });
 // Each file's details (everything but the snapshot), read once per file version. The folder is the
 // truth: files added, changed or removed outside the app show up on the next listing.
 const infoCache = new Map();
-handle("backups:list", () => backupIds().map((id) => {
+handle("backups:list", async () => (await requireUnlocked(), backupIds()).map((id) => {
   const file = backupFile(id);
   try {
     const stamp = fs.statSync(file).mtimeMs;
     const hit = infoCache.get(file);
     if (hit?.stamp === stamp) return hit.info;
-    const { snapshot: _skip, ...info } = JSON.parse(fs.readFileSync(file, "utf8"));
+    const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+    const { snapshot: _skip, ...info } = keyring.isSealed(raw) ? keyring.sealedHeader(raw) : raw;
     infoCache.set(file, { stamp, info });
     return info;
   } catch {
     return null; // a damaged file is left alone and skipped
   }
 }).filter(Boolean));
-handle("backups:delete", (_e, ids) => {
+handle("backups:delete", async (_e, ids) => {
+  await requireUnlocked();
   for (const id of ids) {
     fs.rmSync(backupFile(id), { force: true });
     infoCache.delete(backupFile(id));
@@ -300,6 +568,7 @@ app.on("second-instance", () => {
 });
 
 app.whenReady().then(() => {
+  securityReady = Promise.resolve().then(prepareSecurity);
   if (app.isPackaged) Menu.setApplicationMenu(null);
   serveApp();
   createWindow();

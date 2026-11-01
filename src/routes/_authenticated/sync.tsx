@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { AppShell, btnGhost, btnPrimary } from "@/components/AppShell";
+import { SecurityPanel } from "@/components/SecurityPanel";
 import { useFieldDefs, usePrivateFields, useSession } from "@/lib/payroll";
 import { EMPLOYEE_SECTIONS } from "@/lib/employee-fields";
 import { useLabels } from "@/lib/labels";
@@ -285,6 +286,8 @@ function SyncPage() {
       <PrivateFields busy={!!busy} onChange={(keys) => run("private", async () => {
         await setPrivateFields(await localDb(), keys);
       })} />
+
+      <SecurityPanel />
 
       <section className="glass-panel space-y-3 p-5">
         <div className="font-display font-extrabold tracking-tight">Backup files</div>

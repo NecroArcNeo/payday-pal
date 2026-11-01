@@ -113,6 +113,13 @@
       "when": 1793904000000,
       "tag": "0015_frozen_pay",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1793990400000,
+      "tag": "0016_key_escrow",
+      "breakpoints": true
     }
   ]
 }
