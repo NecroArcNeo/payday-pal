@@ -25,6 +25,7 @@ import { usePref } from "@/lib/prefs";
 import { PayLock } from "@/components/PayLock";
 import { setRecordsLocked } from "@/lib/pay-freeze";
 import { SortControl } from "@/components/SortControl";
+import { CopyWeek } from "@/components/CopyWeek";
 import { sortRecords, validSort, type Sort, type SortKey } from "@/lib/record-sort";
 
 /** One shift's times for "Add each shift's usual hours", as typed (break in minutes). */
@@ -300,12 +301,15 @@ function RecordsPage() {
       <form onSubmit={add} className="glass-panel space-y-4 p-5">
         <div className="flex items-center justify-between">
           <div className="font-display font-extrabold tracking-tight">New record</div>
+          <div className="flex items-center gap-2">
+          <CopyWeek />
           <div className="flex rounded-xl bg-secondary p-1 text-xs font-medium ring-1 ring-border">
             {(["clock", "hours"] as const).map((m) => (
               <button type="button" key={m} onClick={() => setMode(m)} className={`rounded-lg px-3 py-1.5 ${mode === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>
                 {m === "clock" ? "Clock in / out" : "Daily hours"}
               </button>
             ))}
+          </div>
           </div>
         </div>
         <div>

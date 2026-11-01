@@ -15,7 +15,8 @@ const STORE = "backups";
 
 export type BackupReason = "before-pull" | "before-push-cloud-copy" | "before-restore" | "before-import" | "before-import-cloud-copy"
   | "before-bulk-edit" | "before-bulk-edit-cloud-copy" | "before-bulk-delete" | "before-bulk-delete-cloud-copy"
-  | "before-record-edit" | "before-record-edit-cloud-copy" | "before-record-delete" | "before-record-delete-cloud-copy" | "before-update" | "automatic" | "manual";
+  | "before-record-edit" | "before-record-edit-cloud-copy" | "before-record-delete" | "before-record-delete-cloud-copy"
+  | "before-copy-week" | "before-copy-week-cloud-copy" | "before-update" | "automatic" | "manual";
 export const reasonLabel: Record<BackupReason, string> = {
   "before-pull": "This device, before pulling from cloud",
   "before-push-cloud-copy": "Cloud copy, before pushing over it",
@@ -30,6 +31,8 @@ export const reasonLabel: Record<BackupReason, string> = {
   "before-record-edit-cloud-copy": "Cloud copy, before editing several time records",
   "before-record-delete": "This device, before deleting several time records",
   "before-record-delete-cloud-copy": "Cloud copy, before deleting several time records",
+  "before-copy-week": "This device, before copying a week's shifts",
+  "before-copy-week-cloud-copy": "Cloud copy, before copying a week's shifts",
   "before-update": "This device, before an app update changed how data is stored",
   automatic: "Automatic backup",
   manual: "Saved by you (kept until you delete it)",

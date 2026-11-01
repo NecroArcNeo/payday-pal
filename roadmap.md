@@ -27,6 +27,8 @@
 - [x] **Data encrypted on this device + optional app password** (desktop app; done Oct 31, 2026). The database is encrypted block by block as Postgres writes it (AES-XTS, about 0.1 ms per save), automatic backups are sealed; one random data key, unlocked by Windows for the account when there's no password, or by the password (asked at start), a recovery key shown once, or optionally an emailed code through the cloud account. The unencrypted database and backups convert on first start. Not covered: Chromium's own storage (prefs, templates, cloud sign-in token) and exported files (payroll CSV: names and pay, no ID numbers)
 - [ ] At launch (external setup, deferred): test email reset against the real Supabase project: apply migration 0016, and put the code (`{{ .Token }}`) in the "Magic Link" email template
 - [x] Sort time records (Time records, Timesheet, Dashboard) and Payroll by date, employee, hours or total pay, with a flip button (done Oct 30, 2026)
+- [x] **Copy a week** on Time records (done Oct 31, 2026): a week's shifts for the next 1–8 weeks (or earlier), chosen days and people; skips shifts already there and locked days, asks about days with another record, backs up first, one Ctrl+Z undoes it
+- [ ] Ideas for later (Oct 31, 2026): payroll run checklist (flag missing clock-outs, overlaps, long days, then lock and export), paste rows from Excel into Time records, payslips (PDF), Ctrl+K quick search, automatic backup copy to a folder/USB, open where I left off, saved weekly patterns
 - [ ] Optional: speed — memoize table rows (opening an edit with 500 rows is slow on old PCs); check PGlite updates (0.5.12+)
 - [x] Timesheet export with selectable templates (done Oct 28, 2026: your own Excel templates)
 
