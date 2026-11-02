@@ -30,6 +30,8 @@
 - [x] **Copy a week** on Time records (done Oct 31, 2026): a week's shifts for the next 1–8 weeks (or earlier), chosen days and people; skips shifts already there and locked days, asks about days with another record, backs up first, one Ctrl+Z undoes it
 - [x] **Typing dates** (done Oct 31, 2026): every date box reads what's typed (1101, 11/1, 11/01/27, Nov 1, today…), shows the date it read, has a calendar button; no year means the nearest one, so future dates work
 - [x] **Works offline** (done Nov 1, 2026): the fonts ship with the app instead of loading from Google Fonts; nothing but the cloud features uses the internet
+- [x] **Things to check before paying** (done Nov 1, 2026): the Payroll page lists records that look like mistakes (very long day, no break, very short, overlapping, long break, past midnight on a day shift, rate 0, paid 0, resigned, before hire date), each with Open and "It's fine"; limits editable; locking mentions what's still open
+- [ ] Next from the UI kit (Nov 1, 2026): badges on Time records, person hover card and side panel, right-click menu on records, Ctrl+K, dashboard charts and profile tabs, progress bars and loading placeholders, resizable Employees list; then remove the unused UI components
 - [ ] Ideas for later (Oct 31, 2026): payroll run checklist (flag missing clock-outs, overlaps, long days, then lock and export), paste rows from Excel into Time records, payslips (PDF), Ctrl+K quick search, automatic backup copy to a folder/USB, open where I left off, saved weekly patterns
 - [ ] Optional: speed — memoize table rows (opening an edit with 500 rows is slow on old PCs); check PGlite updates (0.5.12+)
 - [x] Timesheet export with selectable templates (done Oct 28, 2026: your own Excel templates)

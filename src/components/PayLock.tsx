@@ -21,9 +21,10 @@ function lastSunday() {
 
 /**
  * Shows what's locked as paid, and locks the period shown (or changes the lock). The database enforces it (schema 10).
- * Without `periodEnd` (the Time records page), locking asks for the day.
+ * Without `periodEnd` (the Time records page), locking asks for the day. `warnings`: things to check still open in the
+ * period (RecordWarnings), mentioned before locking it; they never stop it.
  */
-export function PayLock({ periodEnd }: { periodEnd?: string | undefined }) {
+export function PayLock({ periodEnd, warnings = 0 }: { periodEnd?: string | undefined; warnings?: number | undefined }) {
   const qc = useQueryClient();
   const dataMode = useDataMode();
   const { data: settings } = usePayrollSettings();
@@ -45,7 +46,7 @@ export function PayLock({ periodEnd }: { periodEnd?: string | undefined }) {
   const lockPeriod = async (end: string) => {
     const answer = await askChoice({
       title: `Lock everything up to ${weekday(end)} ${end} as paid?`,
-      detail: `${WHAT} ${STILL}${unlocked ? ` ${RELOCK}` : ""}${new Date(`${end}T00:00:00Z`).getUTCDay() !== 0 ? " Tip: lock through a Sunday, so a week's overtime and salary can't change from days after the lock." : ""}`,
+      detail: `${warnings ? `${warnings} thing${warnings === 1 ? "" : "s"} to check in this period ${warnings === 1 ? "hasn't" : "haven't"} been looked at yet (listed on this page). ` : ""}${WHAT} ${STILL}${unlocked ? ` ${RELOCK}` : ""}${new Date(`${end}T00:00:00Z`).getUTCDay() !== 0 ? " Tip: lock through a Sunday, so a week's overtime and salary can't change from days after the lock." : ""}`,
       choices: [{ id: "cancel", label: "Cancel" }, { id: "lock", label: "Lock as paid", primary: true }],
     });
     if (answer?.id === "lock") await save(end, `Locked through ${weekday(end)} ${end}`);

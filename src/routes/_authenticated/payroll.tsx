@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { db } from "@/lib/db/mode";
@@ -26,6 +26,7 @@ import { SortControl } from "@/components/SortControl";
 import { usePref } from "@/lib/prefs";
 import { validSort, type Sort, type SortKey } from "@/lib/record-sort";
 import { DateInput } from "@/components/DateInput";
+import { RecordWarnings, useRecordWarnings } from "@/components/RecordWarnings";
 
 export const Route = createFileRoute("/_authenticated/payroll")({
   head: () => ({ meta: [{ title: "Payroll — Meridian Payroll" }] }),
@@ -82,7 +83,8 @@ function PayrollPage() {
   const showShift = visible.includes("shift");
 
   const categories = [...new Set(adjustments.map((a) => a.category))].sort();
-  const inPeriod = records.filter((r) => r.work_date >= from && r.work_date <= to);
+  const inPeriod = useMemo(() => records.filter((r) => r.work_date >= from && r.work_date <= to), [records, from, to]);
+  const checked = useRecordWarnings(inPeriod, employees, shifts, rateHistory);
   const empIds = new Set([...inPeriod.map((r) => r.employee_id), ...adjustments.map((a) => a.employee_id)]);
   const byEmp = new Map<string, typeof records>();
   for (const r of records) byEmp.set(r.employee_id, [...(byEmp.get(r.employee_id) ?? []), r]);
@@ -141,7 +143,8 @@ function PayrollPage() {
         <span className="text-muted-foreground">→</span>
         <DateInput className={`${inputCls} max-w-[11rem]`} value={to} onChange={(v) => setTo(v)} />
       </div>
-      {to && <PayLock periodEnd={to} />}
+      {to && <PayLock periodEnd={to} warnings={checked.open.length} />}
+      {inPeriod.length > 0 && <RecordWarnings checked={checked} employees={employees} />}
 
       {showSettings && settings && (
         <>

@@ -39,8 +39,18 @@ const fromUsual = (t: UsualTimes): GroupTimes => ({
 /** Bulk-edit row keys to the label alias keys used everywhere else (src/lib/labels.ts). */
 const RECORD_LABEL_KEYS: Record<string, string> = { employee_id: "employee", shift_id: "shift", pay: "manual_pay" };
 
+/** Links can open the list on some days, for one employee (the Payroll page's "things to check" do). */
+type RecordsSearch = { from?: string; to?: string; emp?: string; mode?: EntryMode };
+const isDay = (v: unknown): v is string => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
+
 export const Route = createFileRoute("/_authenticated/records")({
   head: () => ({ meta: [{ title: "Time records — Meridian Payroll" }] }),
+  validateSearch: (s: Record<string, unknown>): RecordsSearch => ({
+    ...(isDay(s["from"]) ? { from: s["from"] } : {}),
+    ...(isDay(s["to"]) ? { to: s["to"] } : {}),
+    ...(typeof s["emp"] === "string" && s["emp"] ? { emp: s["emp"] } : {}),
+    ...(s["mode"] === "hours" || s["mode"] === "clock" ? { mode: s["mode"] } : {}),
+  }),
   component: RecordsPage,
 });
 
@@ -53,8 +63,11 @@ function RecordsPage() {
   const qc = useQueryClient();
   const dataMode = useDataMode();
   const { data: employees = [] } = useEmployees();
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
+  const search = Route.useSearch();
+  const [from, setFrom] = useState(search.from ?? "");
+  const [to, setTo] = useState(search.to ?? "");
+  // Just this employee, when opened from a link; cleared with the chip by the filters.
+  const [onlyEmp, setOnlyEmp] = useState(search.emp ?? null);
 
   const [mode, setMode] = useState<"clock" | "hours">("clock");
   const { data: shifts = [] } = useShifts();
@@ -212,7 +225,7 @@ function RecordsPage() {
   };
 
   // ---- the list: filtered in the database, loaded a page at a time
-  const [listMode, setListMode] = useState<EntryMode>("clock");
+  const [listMode, setListMode] = useState<EntryMode>(search.mode ?? "clock");
   const [limit, setLimit] = useState(PAGE);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulk, setBulk] = useState<null | "selected" | "all">(null);
@@ -222,9 +235,9 @@ function RecordsPage() {
     from: from || undefined, to: to || undefined, mode: listMode,
     // The database sorts by everything but pay, which only the app works out (below).
     sort: sort.by === "pay" ? undefined : { by: sort.by, desc: sort.desc },
-    employeeIds: isFiltering(listQ) ? employees.filter((e) => matchesEmployee(e, listQ)).map((e) => e.id) : undefined,
+    employeeIds: onlyEmp || isFiltering(listQ) ? employees.filter((e) => (!onlyEmp || e.id === onlyEmp) && matchesEmployee(e, listQ)).map((e) => e.id) : undefined,
     shifts: shiftsShown ? { ids: shiftsShown, employeeIds: employees.filter((e) => shiftsShown.includes(shiftFor(e.shift_id, shifts).id ?? "")).map((e) => e.id) } : undefined,
-  }), [from, to, listMode, sort.by, sort.desc, listQ, shiftsShown, employees, shifts]);
+  }), [from, to, listMode, sort.by, sort.desc, listQ, onlyEmp, shiftsShown, employees, shifts]);
   const filterKey = JSON.stringify(filter);
   // A new filter starts again from the first page, with nothing selected.
   useEffect(() => { setLimit(PAGE); setSelected(new Set()); setBulk(null); }, [filterKey]);
@@ -260,9 +273,12 @@ function RecordsPage() {
   const toggleRow = (id: string) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const toggleAllRows = () => setSelected((s) => (rows.length && rows.every((r) => s.has(r.id)) ? new Set() : new Set(rows.map((r) => r.id))));
   const refresh = () => qc.invalidateQueries({ queryKey: ["records"] });
+  const onlyEmployee = onlyEmp ? employees.find((e) => e.id === onlyEmp) : undefined;
+  const onlyName = onlyEmployee ? fullName(onlyEmployee) : "one employee";
   const describeFilter = [
     listMode === "clock" ? "clock in/out" : "daily-hours",
     from || to ? `from ${from ? `${weekday(from)} ${from}` : "the start"} to ${to ? `${weekday(to)} ${to}` : "the latest"}` : "",
+    onlyEmp ? `for ${onlyName}` : "",
     isFiltering(listQ) ? `for employees matching ${describeEmployeeFilter(listQ)}` : "",
     facetActive(listShifts) ? `on shift ${describeFacet(listShifts, (id) => shifts.find((x) => x.id === id)?.name ?? "deleted")}` : "",
   ].filter(Boolean).join(" ");
@@ -478,6 +494,11 @@ function RecordsPage() {
         <DateInput className={`${inputCls} max-w-[11rem]`} value={to} onChange={(v) => setTo(v)} aria-label="To date" />
         {shifts.length > 1 && (
           <FacetFilter options={shifts.map((sh) => ({ value: sh.id, label: sh.name }))} value={listShifts} onChange={setListShifts} allLabel="All shifts" label="shift" />
+        )}
+        {onlyEmp && (
+          <button type="button" onClick={() => setOnlyEmp(null)} title="Show everyone again" className="flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground">
+            Only {onlyName}<X className="h-3.5 w-3.5" />
+          </button>
         )}
         <SearchInput value={listQ} onChange={setListQ} employees={employees} placeholder="Filter by employee name, ID, position, department…" className="min-w-[16rem] flex-1" />
       </div>
