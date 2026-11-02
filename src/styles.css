@@ -288,3 +288,9 @@
   .dark .marked-row { background-color: color-mix(in oklch, var(--row-mark) 22%, transparent); }
   .marked-row > td:first-child { box-shadow: inset 4px 0 0 var(--row-mark); }
 }
+
+/* The Time records side panel (RecordPanel) is fixed to the right; on screens wide enough to keep the table usable
+   beside it, the page narrows by the panel's width instead of being covered. */
+@media (min-width: 1280px) {
+  html.record-panel-open main { padding-right: 27rem; }
+}
