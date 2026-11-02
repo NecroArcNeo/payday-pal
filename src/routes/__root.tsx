@@ -94,12 +94,6 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       // ?v= changes whenever the icon does, so browsers drop the icon they cached for localhost.
       { rel: "icon", href: "/favicon.svg?v=2", type: "image/svg+xml" },
       { rel: "icon", href: "/favicon.ico?v=2", sizes: "48x48" },
-      { rel: "preconnect", href: "https://fonts.googleapis.com" },
-      { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
-      {
-        rel: "stylesheet",
-        href: "https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600..800&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap",
-      },
     ],
     scripts: [{ children: themeScript }],
   }),
