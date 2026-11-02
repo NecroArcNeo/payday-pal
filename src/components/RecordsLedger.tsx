@@ -14,6 +14,8 @@ import { DataTable } from "./DataTable";
 import { breakRangeText, formatBreak, useBreakUnit, validBreak } from "@/lib/breaks";
 import { EditableLabel } from "@/components/EditableLabel";
 import { DateInput } from "@/components/DateInput";
+import { EmployeeLink } from "@/components/EmployeeLink";
+import { MarkTags, MarksPanel, markedRow, RowMarksButton, useRowMarks } from "@/components/RowMarks";
 
 export type EntryMode = "clock" | "hours";
 
@@ -41,12 +43,15 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
   const { data: shifts = [] } = useShifts();
   const [breakUnit] = useBreakUnit();
   const empById = new Map(employees.map((e) => [e.id, e]));
+  const markOf = useRowMarks(rows, employees, pay, lockedThrough);
+  const [marksOpen, setMarksOpen] = useState(false);
 
   return (
     <div className="glass-panel overflow-hidden">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
         <div className="font-display font-extrabold tracking-tight">{title}</div>
         <div className="flex flex-wrap items-center gap-3">
+        <RowMarksButton open={marksOpen} onToggle={() => setMarksOpen((o) => !o)} />
         {mode === "clock" && <span className="flex items-center gap-2 text-xs text-muted-foreground">Breaks in <BreakUnitToggle /></span>}
         <div className="flex rounded-xl bg-secondary p-1 text-xs font-medium ring-1 ring-border">
           {(["clock", "hours"] as const).map((m) => (
@@ -58,6 +63,7 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
         </div>
         </div>
       </div>
+      {marksOpen && <MarksPanel onClose={() => setMarksOpen(false)} />}
       <div className="overflow-x-auto">
         <DataTable id="records" className="w-full text-sm" stickyHeader>
           <thead className="grid-head">
@@ -86,13 +92,15 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
                 No {mode === "clock" ? "clock in/out" : "daily hours"} records match.
               </td></tr>
             )}
-            {rows.map((r) => editing === r.id ? (
-              <EditRow key={r.id} record={r} employees={employees} shifts={shifts} onCancel={() => setEditing(null)} onSaved={() => { setEditing(null); onChanged(); }} />
-            ) : (
-              <tr key={r.id} className={`border-b border-border last:border-0 hover:bg-secondary ${selected.has(r.id) ? "bg-accent/40" : ""}`}>
+            {rows.map((r) => {
+              if (editing === r.id) return <EditRow key={r.id} record={r} employees={employees} shifts={shifts} onCancel={() => setEditing(null)} onSaved={() => { setEditing(null); onChanged(); }} />;
+              const mark = markOf(r);
+              const look = markedRow(mark);
+              return (
+              <tr key={r.id} className={`border-b border-border last:border-0 hover:bg-secondary ${look.className} ${selected.has(r.id) ? "bg-accent/40" : ""}`} style={look.style} title={look.title}>
                 <td className="pl-5"><input type="checkbox" aria-label="Select record" checked={selected.has(r.id)} onChange={() => onToggle(r.id)} /></td>
-                <td className="px-3 py-3 font-body">{r.employees ? fullName(r.employees) : "—"}</td>
-                <td className="whitespace-nowrap px-3 py-3"><span className="inline-block w-9 font-body text-muted-foreground">{weekday(r.work_date)}</span>{r.work_date}</td>
+                <td className="px-3 py-3 font-body">{r.employees ? <EmployeeLink id={r.employee_id} name={fullName(r.employees)} /> : "—"}</td>
+                <td className="whitespace-nowrap px-3 py-3"><span className="inline-block w-9 font-body text-muted-foreground">{weekday(r.work_date)}</span>{r.work_date}<MarkTags tags={mark.tags} /></td>
                 <RecordShiftCell shiftId={r.shift_id} employeeShiftId={empById.get(r.employee_id)?.shift_id} shifts={shifts} />
                 {mode === "clock" && (
                   <>
@@ -121,7 +129,8 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
                   </div>
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </DataTable>
       </div>

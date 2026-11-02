@@ -184,6 +184,29 @@ export function sheetPdf(sheet: RenderedSheet, title: string): Uint8Array {
   return new Uint8Array(doc.output("arraybuffer"));
 }
 
+/**
+ * A chart as a PDF: the chart picture on an A4 landscape page (scaled to fit, never enlarged past print sharpness),
+ * then the numbers, if given, laid out like the plain timesheet export on the pages after it.
+ */
+export function chartPdf(chart: HTMLCanvasElement, title: string, table: RenderedSheet | null): Uint8Array {
+  const doc = new jsPDF({ unit: "pt", format: "a4", orientation: "landscape", compress: true });
+  doc.setProperties({ title, creator: "Meridian Payroll" });
+  const room = { w: PAGE.h - PAGE.margin * 2, h: PAGE.w - PAGE.margin * 2 };
+  // The canvas is drawn at 2 pixels per screen pixel; screen pixels are 0.75 pt.
+  const natural = { w: (chart.width / 2) * PT, h: (chart.height / 2) * PT };
+  const scale = Math.min(room.w / natural.w, room.h / natural.h, 1.5);
+  doc.addImage(chart, "PNG", PAGE.margin, PAGE.margin, natural.w * scale, natural.h * scale, undefined, "FAST");
+  if (table) {
+    const layout = pdfLayout(table);
+    for (const page of layout.pages) {
+      if (!page.rows.length) continue;
+      doc.addPage("a4", layout.landscape ? "landscape" : "portrait");
+      doc.addImage(drawPage(table, layout, page), "PNG", PAGE.margin, PAGE.margin, layout.width * PT * layout.scale, page.height * PT * layout.scale, undefined, "FAST");
+    }
+  }
+  return new Uint8Array(doc.output("arraybuffer"));
+}
+
 // ---------------------------------------------------------------- the plain table, as a sheet
 
 const THIN = "1px solid #bfbfbf";
@@ -191,8 +214,9 @@ const THIN = "1px solid #bfbfbf";
  * The plain export's rows (title lines, a header, the day-by-day rows, totals) laid out as a sheet: a header row
  * in bold on grey, thin lines between rows, numbers on the right, columns as wide as their widest entry.
  * `headerRow` is the table's header line; the lines above it and after the table's end are label/value pairs.
+ * Numbers go on the right; so do the table's text cells in `rightCols` (figures already written as "$1,234.50").
  */
-export function plainSheet(lines: (string | number)[][], headerRow: number, measure: (text: string, bold: boolean) => number): RenderedSheet {
+export function plainSheet(lines: (string | number)[][], headerRow: number, measure: (text: string, bold: boolean) => number, rightCols: number[] = []): RenderedSheet {
   const ncols = Math.max(...lines.map((l) => l.length), 1);
   const widths = Array.from({ length: ncols }, (_, c) =>
     Math.min(260, Math.max(48, ...lines.map((l, ri) => (ri === headerRow || (c > 0 && ri > headerRow) ? measure(String(l[c] ?? ""), ri === headerRow) + 12 : 0)))));
@@ -212,7 +236,7 @@ export function plainSheet(lines: (string | number)[][], headerRow: number, meas
             : inTable ? { borderBottom: THIN, valign: "middle" }
             : ri === 0 ? { bold: true, fontSize: 14, valign: "middle" }
             : { bold: ci === 0, valign: "middle" };
-          return { row: ri + 1, col: ci + 1, text: String(v), look, rowSpan: 1, colSpan: 1, numeric: typeof v === "number" };
+          return { row: ri + 1, col: ci + 1, text: String(v), look, rowSpan: 1, colSpan: 1, numeric: typeof v === "number" || ((inTable || ri === headerRow) && rightCols.includes(ci)) };
         }),
       };
     }),

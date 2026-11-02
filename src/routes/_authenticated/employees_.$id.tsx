@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -12,18 +12,30 @@ import { changeEmployeeRate } from "@/lib/rate-change";
 import { shiftFor } from "@/lib/pay";
 import { EMPLOYEE_SECTIONS as sections } from "@/lib/employee-fields";
 import { ArrowLeft, X } from "lucide-react";
+import { DEFAULT_SETTINGS, ReportChart } from "@/components/ReportChart";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+
+const TABS = { details: "Details", rates: "Pay rates", chart: "Pay & hours" } as const;
+type Tab = keyof typeof TABS;
+/** `?tab=` opens the profile on a tab, so going back (or a link) returns to the one you were on. */
+type ProfileSearch = { tab?: Tab };
 
 export const Route = createFileRoute("/_authenticated/employees_/$id")({
   head: () => ({ meta: [{ title: "Employee profile — Meridian Payroll" }] }),
+  validateSearch: (s: Record<string, unknown>): ProfileSearch => (typeof s["tab"] === "string" && s["tab"] in TABS && s["tab"] !== "details" ? { tab: s["tab"] as Tab } : {}),
   component: ProfilePage,
   notFoundComponent: () => <div className="p-8">Employee not found.</div>,
   errorComponent: ({ error }) => <div className="p-8">{(error as Error).message}</div>,
 });
 
 const required = ["employee_code", "first_name", "last_name"];
+/** The profile's chart starts on pay per month over the last 6 months; changes are remembered (one choice for every profile). */
+const PROFILE_CHART = { ...DEFAULT_SETTINGS, range: "last_6_months" as const, group: "month" as const };
 
 function ProfilePage() {
   const { id } = Route.useParams();
+  const tab = Route.useSearch().tab ?? "details";
+  const navigate = useNavigate({ from: Route.fullPath });
   const qc = useQueryClient();
   const { data: employees = [], isLoading } = useEmployees();
   const emp = employees.find((e) => e.id === id);
@@ -74,8 +86,25 @@ function ProfilePage() {
         <Link to="/employees" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" /> All employees</Link>
         <Link to="/timesheet" search={{ employee: emp.id }} className="text-sm text-muted-foreground underline hover:text-foreground">View timesheet</Link>
       </div>
-      <ProfileForm source={source} employees={employees} submitLabel="Save profile" onSave={save} />
-      <RateHistory employeeId={id} history={history} currentRate={Number(emp.hourly_rate)} />
+      {/* The tab is in the address (replace: switching tabs isn't a step for Back). */}
+      <Tabs value={tab} onValueChange={(v) => navigate({ search: v === "details" ? {} : { tab: v as Tab }, replace: true })}>
+        <TabsList>
+          {Object.entries(TABS).map(([k, label]) => <TabsTrigger key={k} value={k}>{label}</TabsTrigger>)}
+        </TabsList>
+        {/* Kept mounted while hidden, so unsaved edits survive a look at another tab. */}
+        <TabsContent value="details" forceMount className="mt-4 data-[state=inactive]:hidden">
+          <ProfileForm source={source} employees={employees} submitLabel="Save profile" onSave={save} />
+        </TabsContent>
+        <TabsContent value="rates" className="mt-4">
+          <RateHistory employeeId={id} history={history} currentRate={Number(emp.hourly_rate)} />
+        </TabsContent>
+        <TabsContent value="chart" className="mt-4 space-y-3">
+          <div className="flex justify-end">
+            <Link to="/reports" search={{ emp: emp.id }} className="text-sm text-muted-foreground underline hover:text-foreground">Open in Reports</Link>
+          </div>
+          <ReportChart prefKey="profile" employeeIds={[emp.id]} single defaults={PROFILE_CHART} height={260} subject={fullName(emp)} />
+        </TabsContent>
+      </Tabs>
     </AppShell>
   );
 }
@@ -102,7 +131,7 @@ Its days will be paid ${prev ? money(Number(prev.hourly_rate)) : "at the next ra
   return (
     <div className="glass-panel p-5">
       <div className="font-display font-extrabold tracking-tight">Pay rate history</div>
-      <p className="mt-1 text-xs text-muted-foreground">Each day is paid the rate in force that day. Change the hourly rate above to add one; you'll be asked from which day.</p>
+      <p className="mt-1 text-xs text-muted-foreground">Each day is paid the rate in force that day. Change the hourly rate on the Details tab to add one; you'll be asked from which day.</p>
       {rows.length === 0 ? (
         <p className="mt-3 text-sm text-muted-foreground">No changes yet: every day is paid {money(currentRate)}.</p>
       ) : (

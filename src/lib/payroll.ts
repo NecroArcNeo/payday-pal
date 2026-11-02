@@ -162,11 +162,24 @@ export function useAllRecords(from: string, to: string) {
  * match the Payroll page. Undefined while loading.
  */
 export function useRecordPay(rows: Pick<TimeRecord, "work_date">[]): Map<string, PayLine> | undefined {
-  const mode = useDataMode();
   const { data: employees } = useEmployees();
   const { data: shifts } = useShifts();
   const { data: settings } = usePayrollSettings();
   const { data: rates } = usePayRates();
+  const context = useWeekRecords(rows);
+  return useMemo(() => {
+    if (!context || !employees || !shifts || !settings || !rates) return undefined;
+    const rules = { threshold: settings.ot_threshold, otMultiplier: settings.ot_multiplier, weekendOvertime: settings.weekend_overtime };
+    return payByRecord(context, employees, shifts, rules, rates);
+  }, [context, employees, shifts, settings, rates]);
+}
+
+/**
+ * Every record (everyone's) in the whole Mon–Sun weeks these rows fall in: what weekly overtime, and checks that look
+ * at a whole day, need. One load shared by everything that asks for the same weeks.
+ */
+export function useWeekRecords(rows: Pick<TimeRecord, "work_date">[]) {
+  const mode = useDataMode();
   let first = "", last = "";
   for (const r of rows) {
     if (!first || r.work_date < first) first = r.work_date;
@@ -179,9 +192,5 @@ export function useRecordPay(rows: Pick<TimeRecord, "work_date">[]): Map<string,
     enabled: !!from,
     placeholderData: keepPreviousData,
   });
-  return useMemo(() => {
-    if (!context || !employees || !shifts || !settings || !rates) return undefined;
-    const rules = { threshold: settings.ot_threshold, otMultiplier: settings.ot_multiplier, weekendOvertime: settings.weekend_overtime };
-    return payByRecord(context, employees, shifts, rules, rates);
-  }, [context, employees, shifts, settings, rates]);
+  return context;
 }

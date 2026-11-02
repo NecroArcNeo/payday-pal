@@ -279,3 +279,12 @@
   .data-grid.is-sized th,
   .data-grid.is-sized td { overflow: hidden; text-overflow: ellipsis; }
 }
+
+/* Time records rows coloured by kind (src/components/RowMarks.tsx sets --row-mark): a wash of the colour and a stripe
+   down the left edge. In the components layer, so hover and the selected colour (utilities) still show over it, and
+   the stripe keeps the row's colour visible while it's selected. */
+@layer components {
+  .marked-row { background-color: color-mix(in oklch, var(--row-mark) 15%, transparent); }
+  .dark .marked-row { background-color: color-mix(in oklch, var(--row-mark) 22%, transparent); }
+  .marked-row > td:first-child { box-shadow: inset 4px 0 0 var(--row-mark); }
+}

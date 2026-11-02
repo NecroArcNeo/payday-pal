@@ -2,6 +2,7 @@ import { useState } from "react";
 import { fullName, money, useEmployees, usePayRates, useRecordPay, useShifts, weekday, type RecordWithEmp } from "@/lib/payroll";
 import { rateOn } from "@/lib/pay-rates";
 import { RecordPayCells, RecordPayHeaders, RecordShiftCell } from "@/components/RecordPay";
+import { EmployeeLink } from "@/components/EmployeeLink";
 import { BreakHeader, BreakUnitToggle } from "@/components/BreakField";
 import { DataTable } from "./DataTable";
 import { formatBreak, useBreakUnit } from "@/lib/breaks";
@@ -81,7 +82,7 @@ export function RecordsTable({ records, title = "Time records", onDelete, showNa
               const rate = rateOn(rateHistory?.get(r.employee_id), r.employees?.hourly_rate ?? 0, r.work_date);
               return (
                 <tr key={r.id} className="border-b border-border last:border-0 hover:bg-secondary">
-                  {showName && <td className="px-5 py-3 font-body">{r.employees ? fullName(r.employees) : "—"}</td>}
+                  {showName && <td className="px-5 py-3 font-body">{r.employees ? <EmployeeLink id={r.employee_id} name={fullName(r.employees)} /> : "—"}</td>}
                   <td className="whitespace-nowrap px-3 py-3"><span className="inline-block w-9 font-body text-muted-foreground">{weekday(r.work_date)}</span>{r.work_date}</td>
                   <RecordShiftCell shiftId={r.shift_id} employeeShiftId={empById.get(r.employee_id)?.shift_id} shifts={shifts} />
                   {mode === "clock" && (

@@ -60,6 +60,9 @@ function contentWidth(cell: HTMLTableCellElement) {
       for (const r of range.getClientRects()) take(r);
     } else if ((n as Element).childElementCount === 0 && !(n as Element).textContent?.trim() || n instanceof HTMLInputElement || n instanceof HTMLSelectElement || n instanceof HTMLButtonElement) {
       take((n as Element).getBoundingClientRect());
+    } else if (getComputedStyle(n as Element).display === "inline-block") {
+      // A box in the line (a tag): its padding and border take room too, not just its text.
+      take((n as Element).getBoundingClientRect());
     }
   }
   if (left === Infinity) return 0;

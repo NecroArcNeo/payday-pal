@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { AlertTriangle, CheckCircle2, Settings2 } from "lucide-react";
+import { EmployeeLink } from "@/components/EmployeeLink";
 import { btnGhost, btnPrimary, inputCls } from "@/components/AppShell";
 import { fullName, weekday, type Employee, type Shift, type TimeRecord } from "@/lib/payroll";
 import { usePref } from "@/lib/prefs";
@@ -50,7 +51,7 @@ export function RecordWarnings({ checked, employees }: { checked: Checked; emplo
       <li key={w.key} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-2.5 text-sm">
         <span className={`w-36 shrink-0 rounded-md px-2 py-0.5 text-center text-[11px] font-medium ring-1 ${isFine ? "bg-secondary text-muted-foreground ring-border" : "bg-amber-500/10 text-amber-800 ring-amber-500/30 dark:text-amber-300"}`}>{CHECK_NAMES[w.kind]}</span>
         <span className="w-32 shrink-0 font-mono text-[12px] text-muted-foreground">{weekday(w.date)} {w.date}{last !== w.date ? " …" : ""}</span>
-        <span className="w-44 shrink-0 truncate font-medium">{names.get(w.employeeId) ?? "Unknown employee"}</span>
+        <span className="w-44 shrink-0 truncate font-medium">{names.has(w.employeeId) ? <EmployeeLink id={w.employeeId} name={names.get(w.employeeId)!} /> : "Unknown employee"}</span>
         <span className={`min-w-[12rem] flex-1 ${isFine ? "text-muted-foreground" : ""}`}>{w.detail}</span>
         <span className="flex shrink-0 gap-2">
           <Link to="/records" search={{ from: w.date, to: last, emp: w.employeeId, mode: rs[0]?.entry_mode === "hours" ? "hours" : "clock" }} className={btnGhost}>Open</Link>

@@ -27,6 +27,7 @@ import { usePref } from "@/lib/prefs";
 import { validSort, type Sort, type SortKey } from "@/lib/record-sort";
 import { DateInput } from "@/components/DateInput";
 import { RecordWarnings, useRecordWarnings } from "@/components/RecordWarnings";
+import { EmployeeLink } from "@/components/EmployeeLink";
 
 export const Route = createFileRoute("/_authenticated/payroll")({
   head: () => ({ meta: [{ title: "Payroll — Meridian Payroll" }] }),
@@ -197,7 +198,7 @@ function PayrollPage() {
               {list.length > 0 && shown.length === 0 && <tr><td colSpan={20} className="px-5 py-10 text-center font-body text-muted-foreground">No one paid this period matches {describeEmployeeFilter(q)}.</td></tr>}
               {shown.map((r) => (
                 <tr key={r.e.id} className="border-b border-border last:border-0 hover:bg-secondary">
-                  <td className="px-5 py-3 font-body">{fullName(r.e)}{r.e.pay_type === "salary" && <span className="ml-2 rounded bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground ring-1 ring-border">Salary</span>}</td>
+                  <td className="px-5 py-3 font-body"><EmployeeLink id={r.e.id} name={fullName(r.e)} />{r.e.pay_type === "salary" && <span className="ml-2 rounded bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground ring-1 ring-border">Salary</span>}</td>
                   {infoCols.map((c) => <td key={c.key} className="px-3 py-3 font-body">{c.get(r.e) || "—"}</td>)}
                   {showDays && <td className="px-3 py-3 text-right">{r.days}</td>}
                   {showShift && <td className="px-3 py-3 font-body">{r.shift.name}{r.shift.multiplier !== 1 && <span className="text-muted-foreground"> ×{r.shift.multiplier}</span>}</td>}
@@ -323,7 +324,7 @@ function ExtrasPanel({ employees, adjustments, defaultDate, onChange }: {
           <tbody className="font-mono text-[13px]">
             {adjustments.map((a) => (
               <tr key={a.id} className="border-t border-border hover:bg-secondary">
-                <td className="px-5 py-2 font-body">{name(a.employee_id)}</td>
+                <td className="px-5 py-2 font-body">{employees.some((e) => e.id === a.employee_id) ? <EmployeeLink id={a.employee_id} name={name(a.employee_id)} /> : "—"}</td>
                 <td className="px-3 py-2">{a.pay_date}</td>
                 <td className="px-3 py-2 font-body">{a.category}</td>
                 <td className="px-3 py-2 font-body text-muted-foreground">{a.note ?? ""}</td>

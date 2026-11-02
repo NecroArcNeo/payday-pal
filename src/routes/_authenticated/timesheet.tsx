@@ -25,6 +25,7 @@ import { SortControl } from "@/components/SortControl";
 import { usePref } from "@/lib/prefs";
 import { sortRecords, validSort, type Sort, type SortKey } from "@/lib/record-sort";
 import { DateInput } from "@/components/DateInput";
+import { EmployeeLink } from "@/components/EmployeeLink";
 
 const SORT_KEYS = ["date", "hours", "pay"] as const satisfies readonly SortKey[];
 /** A timesheet reads in time order. */
@@ -189,7 +190,7 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <div className="font-display text-xl font-extrabold tracking-tight">
-              {fullName(emp)} <span className="font-mono text-sm font-normal text-muted-foreground">{emp.employee_code}</span>
+              <EmployeeLink id={emp.id} name={fullName(emp)} /> <span className="font-mono text-sm font-normal text-muted-foreground">{emp.employee_code}</span>
               {!emp.active && <span className="ml-2 rounded bg-secondary px-1.5 py-0.5 align-middle text-[10px] font-normal text-muted-foreground ring-1 ring-border">Resigned</span>}
             </div>
             <div className="text-sm text-muted-foreground">

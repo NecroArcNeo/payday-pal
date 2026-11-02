@@ -16,6 +16,7 @@ const adminNav = [
   { to: "/timesheet", label: "Timesheet" },
   { to: "/import", label: "Import" },
   { to: "/payroll", label: "Payroll" },
+  { to: "/reports", label: "Reports" },
   { to: "/sync", label: "Sync & backup" },
 ] as const;
 type NavTo = (typeof adminNav)[number]["to"];

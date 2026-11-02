@@ -17,6 +17,7 @@ import { Route as AuthenticatedEmployeesRouteImport } from './routes/_authentica
 import { Route as AuthenticatedImportRouteImport } from './routes/_authenticated/import'
 import { Route as AuthenticatedPayrollRouteImport } from './routes/_authenticated/payroll'
 import { Route as AuthenticatedRecordsRouteImport } from './routes/_authenticated/records'
+import { Route as AuthenticatedReportsRouteImport } from './routes/_authenticated/reports'
 import { Route as AuthenticatedSyncRouteImport } from './routes/_authenticated/sync'
 import { Route as AuthenticatedTimesheetRouteImport } from './routes/_authenticated/timesheet'
 import { Route as AuthenticatedEmployeesIdRouteImport } from './routes/_authenticated/employees_.$id'
@@ -61,6 +62,11 @@ const AuthenticatedRecordsRoute = AuthenticatedRecordsRouteImport.update({
   path: '/records',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedReportsRoute = AuthenticatedReportsRouteImport.update({
+  id: '/reports',
+  path: '/reports',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
 const AuthenticatedSyncRoute = AuthenticatedSyncRouteImport.update({
   id: '/sync',
   path: '/sync',
@@ -92,6 +98,7 @@ export interface FileRoutesByFullPath {
   '/import': typeof AuthenticatedImportRoute
   '/payroll': typeof AuthenticatedPayrollRoute
   '/records': typeof AuthenticatedRecordsRoute
+  '/reports': typeof AuthenticatedReportsRoute
   '/sync': typeof AuthenticatedSyncRoute
   '/timesheet': typeof AuthenticatedTimesheetRoute
   '/employees/$id': typeof AuthenticatedEmployeesIdRoute
@@ -105,6 +112,7 @@ export interface FileRoutesByTo {
   '/import': typeof AuthenticatedImportRoute
   '/payroll': typeof AuthenticatedPayrollRoute
   '/records': typeof AuthenticatedRecordsRoute
+  '/reports': typeof AuthenticatedReportsRoute
   '/sync': typeof AuthenticatedSyncRoute
   '/timesheet': typeof AuthenticatedTimesheetRoute
   '/employees/$id': typeof AuthenticatedEmployeesIdRoute
@@ -120,6 +128,7 @@ export interface FileRoutesById {
   '/_authenticated/import': typeof AuthenticatedImportRoute
   '/_authenticated/payroll': typeof AuthenticatedPayrollRoute
   '/_authenticated/records': typeof AuthenticatedRecordsRoute
+  '/_authenticated/reports': typeof AuthenticatedReportsRoute
   '/_authenticated/sync': typeof AuthenticatedSyncRoute
   '/_authenticated/timesheet': typeof AuthenticatedTimesheetRoute
   '/_authenticated/employees_/$id': typeof AuthenticatedEmployeesIdRoute
@@ -135,6 +144,7 @@ export interface FileRouteTypes {
     | '/import'
     | '/payroll'
     | '/records'
+    | '/reports'
     | '/sync'
     | '/timesheet'
     | '/employees/$id'
@@ -148,6 +158,7 @@ export interface FileRouteTypes {
     | '/import'
     | '/payroll'
     | '/records'
+    | '/reports'
     | '/sync'
     | '/timesheet'
     | '/employees/$id'
@@ -162,6 +173,7 @@ export interface FileRouteTypes {
     | '/_authenticated/import'
     | '/_authenticated/payroll'
     | '/_authenticated/records'
+    | '/_authenticated/reports'
     | '/_authenticated/sync'
     | '/_authenticated/timesheet'
     | '/_authenticated/employees_/$id'
@@ -232,6 +244,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedRecordsRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/reports': {
+      id: '/_authenticated/reports'
+      path: '/reports'
+      fullPath: '/reports'
+      preLoaderRoute: typeof AuthenticatedReportsRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/sync': {
       id: '/_authenticated/sync'
       path: '/sync'
@@ -269,6 +288,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedImportRoute: typeof AuthenticatedImportRoute
   AuthenticatedPayrollRoute: typeof AuthenticatedPayrollRoute
   AuthenticatedRecordsRoute: typeof AuthenticatedRecordsRoute
+  AuthenticatedReportsRoute: typeof AuthenticatedReportsRoute
   AuthenticatedSyncRoute: typeof AuthenticatedSyncRoute
   AuthenticatedTimesheetRoute: typeof AuthenticatedTimesheetRoute
   AuthenticatedEmployeesIdRoute: typeof AuthenticatedEmployeesIdRoute
@@ -281,6 +301,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedImportRoute: AuthenticatedImportRoute,
   AuthenticatedPayrollRoute: AuthenticatedPayrollRoute,
   AuthenticatedRecordsRoute: AuthenticatedRecordsRoute,
+  AuthenticatedReportsRoute: AuthenticatedReportsRoute,
   AuthenticatedSyncRoute: AuthenticatedSyncRoute,
   AuthenticatedTimesheetRoute: AuthenticatedTimesheetRoute,
   AuthenticatedEmployeesIdRoute: AuthenticatedEmployeesIdRoute,
