@@ -7,6 +7,7 @@ import { localDb } from "@/lib/db/local";
 import { getPrivateFields } from "@/lib/db/privacy";
 import { payByRecord, weekEnd, weekStart, type PayLine } from "@/lib/pay";
 import type { EmployeeDefaults } from "@/lib/employee-fields";
+import { dayAfter, dayBefore, type NearestRecords } from "@/lib/period-hint";
 
 export type Employee = Tables<"employees">;
 export type TimeRecord = Tables<"time_records">;
@@ -154,6 +155,28 @@ export function useShifts() {
 export function useAllRecords(from: string, to: string) {
   const mode = useDataMode();
   return useQuery({ queryKey: ["records", "all", from, to, mode], queryFn: () => storeFor(mode).listRecordsMatching({ from, to }) });
+}
+
+/**
+ * The nearest record day on each side of a period, and how many records lie on that side, for the Payroll page's
+ * hint when the period is empty. One row per side from the paged query (sorted toward the period), so it's two small
+ * reads on either store, run only when `enabled`.
+ */
+export function useNearestRecords(from: string, to: string, enabled: boolean) {
+  const mode = useDataMode();
+  return useQuery({
+    queryKey: ["records", "nearest", from, to, mode],
+    enabled,
+    queryFn: async (): Promise<NearestRecords> => {
+      const store = storeFor(mode);
+      const [before, after] = await Promise.all([
+        store.listRecordsPage({ to: dayBefore(from), sort: { by: "date", desc: true } }, 0, 1),
+        store.listRecordsPage({ from: dayAfter(to), sort: { by: "date", desc: false } }, 0, 1),
+      ]);
+      const side = (p: typeof before) => (p.rows[0] ? { date: p.rows[0].work_date, count: p.total } : null);
+      return { before: side(before), after: side(after) };
+    },
+  });
 }
 
 /**

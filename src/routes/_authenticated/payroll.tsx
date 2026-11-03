@@ -28,6 +28,7 @@ import { validSort, type Sort, type SortKey } from "@/lib/record-sort";
 import { DateInput } from "@/components/DateInput";
 import { RecordWarnings, useRecordWarnings } from "@/components/RecordWarnings";
 import { EmployeeLink } from "@/components/EmployeeLink";
+import { PeriodHint } from "@/components/PeriodHint";
 
 export const Route = createFileRoute("/_authenticated/payroll")({
   head: () => ({ meta: [{ title: "Payroll — Meridian Payroll" }] }),
@@ -58,7 +59,7 @@ function PayrollPage() {
   const qc = useQueryClient();
   // Load whole Mon–Sun weeks around the period, so weekly overtime is right even when the period starts mid-week.
   const isDate = (d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d);
-  const { data: records = [] } = useAllRecords(isDate(from) ? weekStart(from) : from, isDate(to) ? weekEnd(to) : to);
+  const { data: records = [], isSuccess: recordsLoaded } = useAllRecords(isDate(from) ? weekStart(from) : from, isDate(to) ? weekEnd(to) : to);
   const { data: shifts = [] } = useShifts();
   const { data: employees = [] } = useEmployees();
   const { data: rateHistory } = usePayRates();
@@ -144,6 +145,8 @@ function PayrollPage() {
         <span className="text-muted-foreground">→</span>
         <DateInput className={`${inputCls} max-w-[11rem]`} value={to} onChange={(v) => setTo(v)} />
       </div>
+      {/* Once the period's records are in and no one is paid, say why and offer the nearest week with records. */}
+      {recordsLoaded && list.length === 0 && isDate(from) && isDate(to) && <PeriodHint from={from} to={to} onPick={(f, t) => { setFrom(f); setTo(t); }} />}
       {to && <PayLock periodEnd={to} warnings={checked.open.length} />}
       {inPeriod.length > 0 && <RecordWarnings checked={checked} employees={employees} />}
 
