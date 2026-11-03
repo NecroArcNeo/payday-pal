@@ -35,8 +35,11 @@
 - [x] **Reports** (done Nov 1, 2026): new tab with charts of pay, hours, overtime, extra pay, people, days worked or pay per hour over any period, per day/week/month/year, split by department, shift or person; bars, stacked, line, area or pie; cards with the previous period; numbers table with CSV. The same chart for one person on their profile, and gross pay for the last 12 weeks on the Dashboard
 - [x] **Profile tabs, name cards, comparisons, saving charts** (done Nov 1, 2026): the profile is split into Details · Pay rates · Pay & hours (`?tab=`); resting on a name shows rate, shift and this week; Reports compare with the previous period, the same time last year or chosen dates; charts save as a picture or a PDF with their numbers
 - [x] **Row colours and tags on Time records** (done Nov 1, 2026): overtime rows orange by default; things to check, manual pay, weekend, other shift, unlocked, locked, resigned can each colour the row, be a tag, or be off (Colours button)
+- [x] Payroll period hint: an empty period says where the nearest records are (Nov 2, 2026)
+- [x] Fixed: test databases missing files (`could not open file "base/5/6104"`). Not the app or a force-kill: PGlite dated a new database's files January 1970 (seconds read as milliseconds), and Windows' temp-file cleanup deleted the "old" files in test folders under Temp. The file layer now leaves those dates out and repairs 1970 dates on open (`repairFileDates`) (Nov 2, 2026)
 - [x] Side panel on Time records: click a row to see how its pay is worked out and edit it (Nov 1, 2026)
-- [ ] Next from the UI kit (Nov 1, 2026): right-click menu on records, Ctrl+K, progress bars and loading placeholders, resizable Employees list; then remove the unused UI components
+- [x] Right-click menu on Time records rows, and Ctrl+K search (Nov 2, 2026)
+- [ ] Next from the UI kit (Nov 1, 2026): progress bars and loading placeholders, resizable Employees list; then remove the unused UI components
 - [ ] Ideas for later (Oct 31, 2026): payroll run checklist (flag missing clock-outs, overlaps, long days, then lock and export), paste rows from Excel into Time records, payslips (PDF), Ctrl+K quick search, automatic backup copy to a folder/USB, open where I left off, saved weekly patterns
 - [ ] Optional: speed — memoize table rows (opening an edit with 500 rows is slow on old PCs); check PGlite updates (0.5.12+)
 - [x] Timesheet export with selectable templates (done Oct 28, 2026: your own Excel templates)
