@@ -62,3 +62,23 @@ export function planCopy({ records, from, to, weeks, days, employeeIds, lockedTh
   }
   return plan;
 }
+
+/**
+ * "Copy to next week" for chosen records (the right-click menu, or several selected): each one a week later, by
+ * planCopy's rules. They can come from different weeks, so each day is planned by itself, and what one day adds
+ * counts as already there for the next (two identical records give one copy, as Copy a week does).
+ */
+export function planNextWeek(records: CopySource[], lockedThrough: string | null | undefined, existing: RecordKey[]): CopyPlan {
+  const plan: CopyPlan = { add: [], duplicates: 0, locked: 0 };
+  const there = [...existing];
+  const byDay = new Map<string, CopySource[]>();
+  for (const r of records) byDay.set(r.work_date, [...(byDay.get(r.work_date) ?? []), r]);
+  for (const [day, rs] of [...byDay].sort(([a], [b]) => a.localeCompare(b))) {
+    const p = planCopy({ records: rs, from: day, to: addDays(day, 7), weeks: 1, days: [0], employeeIds: rs.map((r) => r.employee_id), lockedThrough, existing: there });
+    plan.add.push(...p.add);
+    plan.duplicates += p.duplicates;
+    plan.locked += p.locked;
+    there.push(...(p.add as RecordKey[]));
+  }
+  return plan;
+}

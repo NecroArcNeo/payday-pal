@@ -20,12 +20,13 @@ import { describeRecord, sameDayClashes, type Clash } from "@/lib/record-clash";
 import { addDays, computeHours, datesBetween, fullName, isoDate, useEmployees, usePayrollSettings, useRecordPay, useShifts, weekday, type Employee, type RecordWithEmp, type TimeRecord } from "@/lib/payroll";
 import { shiftFor } from "@/lib/pay";
 import { describeTimes, usualTimes, usualTimesFor, type UsualTimes } from "@/lib/shift-times";
-import { Check, Lock, LockOpen, Pencil, Plus, Trash2, X } from "lucide-react";
+import { CalendarPlus, Check, Lock, LockOpen, Pencil, Plus, Trash2, X } from "lucide-react";
 import { usePref } from "@/lib/prefs";
 import { PayLock } from "@/components/PayLock";
 import { setRecordsLocked } from "@/lib/pay-freeze";
 import { SortControl } from "@/components/SortControl";
 import { CopyWeek } from "@/components/CopyWeek";
+import { useCopyToNextWeek } from "@/components/RecordMenu";
 import { sortRecords, validSort, type Sort, type SortKey } from "@/lib/record-sort";
 import { DateInput } from "@/components/DateInput";
 
@@ -51,6 +52,10 @@ export const Route = createFileRoute("/_authenticated/records")({
     ...(typeof s["emp"] === "string" && s["emp"] ? { emp: s["emp"] } : {}),
     ...(s["mode"] === "hours" || s["mode"] === "clock" ? { mode: s["mode"] } : {}),
   }),
+  // The page reads the address only when it starts (from, to, emp and mode become its own filters), so arriving
+  // with a different address while already here (Ctrl+K's "Time records for …") starts it again. It never writes the
+  // address itself, so this only happens on purpose.
+  remountDeps: ({ search }) => search,
   component: RecordsPage,
 });
 
@@ -288,6 +293,8 @@ function RecordsPage() {
   const onLockedDay = pickedRows.filter((r) => lockedThrough && r.work_date <= lockedThrough);
   const stillLocked = onLockedDay.filter((r) => !r.unlocked);
   const reopened = onLockedDay.filter((r) => r.unlocked);
+  const copyToNextWeek = useCopyToNextWeek();
+  const empById = useMemo(() => new Map(employees.map((e) => [e.id, e])), [employees]);
   const setUnlocked = async (rs: typeof pickedRows, unlocked: boolean) => {
     const { error } = await setRecordsLocked(db(), rs, !unlocked);
     if (error) { toast.error(error.message); return; }
@@ -517,9 +524,10 @@ function RecordsPage() {
       {selected.size > 0 && (
         <div className="glass-panel flex flex-wrap items-center justify-between gap-3 px-5 py-3 text-sm">
           <span className="font-semibold">{selected.size} selected</span>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             {stillLocked.length > 0 && <button onClick={() => setUnlocked(stillLocked, true)} className={btnGhost} title="Lets just these records change while the rest of their days stay locked"><LockOpen className="mr-1 inline h-4 w-4" />Unlock {stillLocked.length === pickedRows.length ? "selected" : `${stillLocked.length} locked`}</button>}
             {reopened.length > 0 && <button onClick={() => setUnlocked(reopened, false)} className={btnGhost}><Lock className="mr-1 inline h-4 w-4" />Lock {reopened.length === pickedRows.length ? "selected" : reopened.length} again</button>}
+            <button onClick={() => copyToNextWeek(pickedRows, empById, lockedThrough)} className={btnGhost} title="Each selected record again 7 days later, by Copy a week's rules"><CalendarPlus className="mr-1 inline h-4 w-4" />Copy to next week</button>
             <button onClick={() => setBulk("selected")} className={btnPrimary}><Pencil className="mr-1 inline h-4 w-4" />Edit selected</button>
             <button onClick={() => deleteMany("selected")} className={`${btnGhost} hover:!text-destructive`}><Trash2 className="mr-1 inline h-4 w-4" />Delete selected</button>
             <button onClick={() => setSelected(new Set())} className={btnGhost} aria-label="Clear selection"><X className="h-4 w-4" /></button>

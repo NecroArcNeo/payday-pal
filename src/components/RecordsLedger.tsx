@@ -14,6 +14,8 @@ import { EditableLabel } from "@/components/EditableLabel";
 import { EmployeeLink } from "@/components/EmployeeLink";
 import { MarkTags, MarksPanel, markedRow, RowMarksButton, useRowMarks } from "@/components/RowMarks";
 import { RecordPanel } from "@/components/RecordPanel";
+import { RecordMenu } from "@/components/RecordMenu";
+import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 
 export type EntryMode = "clock" | "hours";
 
@@ -64,6 +66,9 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
   };
   // Escape closes the panel; ↑/↓ step through the list, except while typing in a field (where they move the caret
   // or change a number).
+  // The right-click menu: one menu for the whole table (not one per row), told which row was right-clicked.
+  const [menuId, setMenuId] = useState<string | null>(null);
+  const menuRecord = menuId ? rows.find((r) => r.id === menuId) : undefined;
   const moveRef = useRef(move);
   moveRef.current = move;
   useEffect(() => {
@@ -119,7 +124,15 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
               <th className="w-20" />
             </tr>
           </thead>
-          <tbody className="font-mono text-[13px]">
+          <ContextMenu modal={false} onOpenChange={(o) => { if (!o) setMenuId(null); }}>
+          <ContextMenuTrigger asChild>
+          <tbody className="font-mono text-[13px]"
+            // Which row the menu is for. Outside a record row (the "no records" line) there's no menu, and the
+            // browser's own isn't wanted either, so the event stops here (Radix skips a prevented event).
+            onContextMenu={(e) => {
+              const id = (e.target as HTMLElement).closest<HTMLElement>("tr[data-record]")?.dataset["record"];
+              if (id) setMenuId(id); else e.preventDefault();
+            }}>
             {rows.length === 0 && (
               <tr><td colSpan={cols} className="px-5 py-10 text-center font-body text-muted-foreground">
                 No {mode === "clock" ? "clock in/out" : "daily hours"} records match.
@@ -168,6 +181,13 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
               );
             })}
           </tbody>
+          </ContextMenuTrigger>
+          {menuRecord && (
+            <RecordMenu record={menuRecord} employees={empById} selection={rows.filter((r) => selected.has(r.id))} lockedThrough={lockedThrough}
+              onOpen={() => open(menuRecord.id)} onToggle={() => onToggle(menuRecord.id)} onDelete={() => onDelete(menuRecord.id)}
+              onSetUnlocked={(u) => setUnlocked(menuRecord.id, u)} />
+          )}
+          </ContextMenu>
         </DataTable>
       </div>
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-5 py-3 text-xs text-muted-foreground">

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { planCopy, type CopyRequest, type CopySource } from "./copy-week";
+import { planCopy, planNextWeek, type CopyRequest, type CopySource } from "./copy-week";
 
 const clock = (employee_id: string, work_date: string, clock_in = "09:00:00", clock_out = "17:00:00"): CopySource =>
   ({ employee_id, work_date, entry_mode: "clock", clock_in, clock_out, lunch_minutes: 30, hours: 7.5, shift_id: null, note: null });
@@ -59,5 +59,23 @@ describe("copying a week", () => {
 
   it("refuses weeks that don't start on the same weekday", () => {
     expect(() => planCopy({ ...base, to: "2026-01-06" })).toThrow(/same weekday/);
+  });
+});
+
+describe("copying chosen records to next week", () => {
+  it("moves each one 7 days on, even when they come from different weeks", () => {
+    const { add } = planNextWeek([clock("a", "2025-12-31"), daily("b", "2026-01-03", 6), clock("a", "2026-01-12")], null, []);
+    expect(add.map((r) => `${r.employee_id} ${r.work_date}`)).toEqual(["a 2026-01-07", "b 2026-01-10", "a 2026-01-19"]);
+  });
+
+  it("leaves out shifts already there and locked days, and counts them", () => {
+    const plan = planNextWeek([clock("a", "2025-12-29"), clock("a", "2025-12-31"), clock("b", "2026-01-05")], "2026-01-05", [clock("a", "2026-01-07")]);
+    expect(plan.add.map((r) => `${r.employee_id} ${r.work_date}`)).toEqual(["b 2026-01-12"]);
+    expect([plan.duplicates, plan.locked]).toEqual([1, 1]);
+  });
+
+  it("gives two identical records one copy", () => {
+    const plan = planNextWeek([clock("a", "2025-12-29"), clock("a", "2025-12-29")], null, []);
+    expect([plan.add.length, plan.duplicates]).toEqual([1, 1]);
   });
 });
