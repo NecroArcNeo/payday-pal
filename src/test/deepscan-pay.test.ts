@@ -61,16 +61,24 @@ describe("deep scan: pay invariants", () => {
         const e = employees.find((x) => x.id === emp)!;
         const mine = recs.filter((x) => x.employee_id === emp);
         if (e.pay_type === "salary") {
-          // A salaried week pays threshold × rate × shift across its non-manual days (rate and shift fixed here).
+          // A salaried week pays threshold × rate × shift shared by hours; a manual day is paid its amount instead of
+          // its share, so the other days get the week × their share of its hours (rate and shift fixed here).
           const weeks = new Map<string, typeof mine>();
           for (const x of mine) weeks.set(weekStart(x.work_date), [...(weeks.get(weekStart(x.work_date)) ?? []), x]);
+          const h = (x: PayRecord) => Math.max(0, Number(x.hours) || 0);
           for (const w of weeks.values()) {
             const paid = w.filter((x) => x.pay_override === null && x.shift_id === null);
             if (paid.length !== w.filter((x) => x.pay_override === null).length || !paid.length) continue;
             const rate = rateOn(rates.get(emp), e.hourly_rate, paid[0]!.work_date);
             if (!paid.every((x) => rateOn(rates.get(emp), e.hourly_rate, x.work_date) === rate)) continue;
+            const all = w.reduce((s, x) => s + h(x), 0);
+            const share = all > 0 ? paid.reduce((s, x) => s + h(x), 0) / all : paid.length / w.length;
             const sum = paid.reduce((s, x) => s + lines.get(x.id)!.pay, 0);
-            expect(close(sum, rules.threshold * rate), ctx).toBe(true);
+            expect(close(sum, rules.threshold * rate * share), ctx).toBe(true);
+            const total = w.reduce((s, x) => s + lines.get(x.id)!.pay, 0);
+            const manual = w.filter((x) => x.pay_override !== null).reduce((s, x) => s + Number(x.pay_override), 0);
+            // Never more than a full week plus the manual amounts.
+            expect(total, ctx).toBeLessThanOrEqual(rules.threshold * rate + manual + 1e-6);
           }
           continue;
         }

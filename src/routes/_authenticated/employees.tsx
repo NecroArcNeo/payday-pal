@@ -320,12 +320,17 @@ function BulkEditPanel({ employees, defs, shifts, onClose, onDone }: { employees
     setBusy(true);
     try {
       await backupBefore("bulk-edit");
-      for (const [id, plan] of ratePlans) {
-        const err = await writeRateHistory(id, plan);
-        if (err) { toast.error(`Stopped partway: ${err}. A backup was saved in Sync & backup.`); onDone(); return; }
-      }
-      const { error, updated } = await db().updateMany("employees", rows as never);
-      if (error) { toast.error(error.message); if (updated) onDone(); return; }
+      // The rates' history and the employees together: one undo step, and all or nothing (a failure throws, and
+      // undoable puts back what was already written).
+      const updated = await undoable(`edited ${rows.length} employee${rows.length === 1 ? "" : "s"}`, async () => {
+        for (const [id, plan] of ratePlans) {
+          const err = await writeRateHistory(id, plan);
+          if (err) throw new Error(err);
+        }
+        const r = await db().updateMany("employees", rows as never);
+        if (r.error) throw r.error;
+        return r.updated;
+      });
       toast.success(`Updated ${updated} employee${updated === 1 ? "" : "s"}. A backup was saved in Sync & backup.`);
       onDone();
     } catch (e) {

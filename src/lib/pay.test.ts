@@ -137,9 +137,12 @@ describe("salary", () => {
   });
 
   it("counts only the part of a week inside the period, and lets a manual day replace its share", () => {
+    // The week (800) by hours: Mon 5/20, Tue 5/20, Wed 10/20. Wed is paid its manual 50 instead of its 400.
     const recs = [day("2026-10-19", 5), day("2026-10-20", 5), day("2026-10-21", 10, { pay_override: 50 })];
     const r = salary(recs, { from: "2026-10-20" });
-    expect(r.lines.map((l) => l.pay)).toEqual([400, 50]);
-    expect([r.regPay, r.manualPay, r.total]).toEqual([400, 50, 450]);
+    expect(r.lines.map((l) => l.pay)).toEqual([200, 50]);
+    expect([r.regPay, r.manualPay, r.total]).toEqual([200, 50, 250]);
+    const week = salary(recs);
+    expect(week.total).toBe(200 + 200 + 50);
   });
 });

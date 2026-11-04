@@ -142,13 +142,14 @@ export function livePay(records: PayRecord[], opts: PayOptions): Map<string, Pay
     const weeks = new Map<string, PayRecord[]>();
     for (const r of sorted) weeks.set(weekStart(r.work_date), [...(weeks.get(weekStart(r.work_date)) ?? []), r]);
     for (const recs of weeks.values()) {
-      const paid = recs.filter((r) => !isManual(r));
-      const hours = paid.reduce((s, r) => s + hoursOf(r), 0);
+      // Every day's share of the week by its hours, manual days included: a manual day is paid its amount instead of
+      // its share, so the other days keep only their own shares (the week isn't paid in full on top of it).
+      const hours = recs.reduce((s, r) => s + hoursOf(r), 0);
       for (const r of recs) {
         const manual = isManual(r);
-        const share = manual ? 0 : hours > 0 ? hoursOf(r) / hours : 1 / paid.length;
+        const share = hours > 0 ? hoursOf(r) / hours : 1 / recs.length;
         // A raise mid-week pays each day's share of the week at that day's rate.
-        const regPay = rateFor(r) * opts.rules.threshold * share * multiplierOf(r);
+        const regPay = manual ? 0 : rateFor(r) * opts.rules.threshold * share * multiplierOf(r);
         out.set(r.id, { id: r.id, regular: hoursOf(r), overtime: 0, weekend: isWeekend(r.work_date), manual, salary: true, regPay, otPay: 0, pay: manual ? Number(r.pay_override) : regPay });
       }
     }

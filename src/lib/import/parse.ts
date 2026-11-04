@@ -2,6 +2,8 @@ import * as XLSX from "xlsx";
 import type { Employee, FieldDef } from "@/lib/payroll";
 import { withDefaults, type EmployeeDefaults } from "@/lib/employee-fields";
 import { fieldType, toType } from "@/lib/field-types";
+import { readTypedDate } from "@/lib/typed-date";
+import { readAmount } from "@/lib/amount";
 
 // File import: the user maps sheet columns to app fields and picks a row range;
 // these functions read the workbook, guess a starting mapping, and turn the
@@ -210,7 +212,10 @@ const validYmd = (y: number, m: number, d: number) => {
   return y >= 1900 && y <= 2200 && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d ? `${y}-${pad(m)}-${pad(d)}` : null;
 };
 
-export function parseDate(cell: Cell | undefined, order: DateOrder): string | null {
+const localToday = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
+
+/** A date cell as YYYY-MM-DD, or null. Text without a year ("Oct 5", "5/10") is the nearest such day to `today`. */
+export function parseDate(cell: Cell | undefined, order: DateOrder, today = localToday()): string | null {
   if (!cell) return null;
   if (cell.serial !== undefined && cell.serial >= 1) {
     const p = XLSX.SSF.parse_date_code(cell.serial);
@@ -227,8 +232,26 @@ export function parseDate(cell: Cell | undefined, order: DateOrder): string | nu
     if (order === "ymd") return null;
     return order === "dmy" ? validYmd(y, +m[2]!, +m[1]!) : validYmd(y, +m[1]!, +m[2]!);
   }
-  const d = new Date(v);
-  return isNaN(d.getTime()) ? null : validYmd(d.getFullYear(), d.getMonth() + 1, d.getDate());
+  // Month and day without a year ("10/5"), or with the month named ("Oct 5", "5 October 2026"): read the way a typed
+  // date is. Never the browser's own date parser, which reads "Oct 5" as 2001, "5" or "Week 3" as a date, and
+  // "2026-11" a day early west of UTC.
+  if (order !== "ymd" && (/^\d{1,2}[/.-]\d{1,2}$/.test(v) || /[a-z]{3}/i.test(v))) {
+    const named = /[a-z]{3}/i.test(v);
+    const hasYear = /\d{4}/.test(v) || (v.match(/\d+/g) ?? []).length >= (named ? 2 : 3);
+    // Without a year, only the month and day are wanted: read against a leap year, so Feb 29 reads too.
+    const read = readTypedDate(v, hasYear ? today : "2024-07-01", order);
+    if (!read) return null;
+    const [m, d] = [+read.slice(5, 7), +read.slice(8, 10)];
+    if (hasYear) return validYmd(+read.slice(0, 4), m, d);
+    // No year: a timesheet records work done, so the latest such day on or before today (Jan 2, read in November, is
+    // this January's; Feb 29 the last leap year's).
+    for (let y = +today.slice(0, 4); y > +today.slice(0, 4) - 8; y--) {
+      const iso = validYmd(y, m, d);
+      if (iso && iso <= today) return iso;
+    }
+    return null;
+  }
+  return null;
 }
 
 /** A custom category's value from a cell, converted to its type where possible (else the text as it is). */
@@ -259,19 +282,14 @@ export function parseTime(cell: Cell | undefined): string | null {
   return `${pad(h)}:${pad(min)}`;
 }
 
-const toNumber = (s: string) => {
-  const t = s.replace(/[$€£\s]/g, "");
-  // "7,5" (comma decimal) but not "1,234.50" (thousands).
-  const n = Number(/^\d+,\d{1,2}$/.test(t) ? t.replace(",", ".") : t.replace(/,/g, ""));
-  return t === "" ? NaN : n;
-};
+const toNumber = readAmount;
 
 /** Hours worked: "7.5", "7,5", "7:30", "7h 30m", or an Excel time/duration cell. */
 export function parseHours(cell: Cell | undefined): number | null {
   if (!cell || !cell.text) return null;
   if (cell.serial !== undefined) return Math.round(cell.serial * 24 * 100) / 100;
   const v = cell.text.trim().toLowerCase();
-  let m = v.match(/^(\d{1,3}):(\d{2})$/);
+  let m = v.match(/^(\d{1,3}):([0-5]\d)$/);
   if (m) return +m[1]! + +m[2]! / 60;
   m = v.match(/^(\d{1,3})\s*h(?:rs?|ours?)?\s*(?:(\d{1,2})\s*m(?:in)?s?)?$/);
   if (m) return +m[1]! + (m[2] ? +m[2] / 60 : 0);
@@ -284,7 +302,7 @@ export function parseMinutes(cell: Cell | undefined): number | null {
   if (!cell || !cell.text) return 0;
   if (cell.serial !== undefined) return Math.round(cell.serial * 1440);
   const v = cell.text.trim().toLowerCase();
-  const m = v.match(/^(\d{1,2}):(\d{2})$/);
+  const m = v.match(/^(\d{1,2}):([0-5]\d)$/);
   if (m) return +m[1]! * 60 + +m[2]!;
   const n = toNumber(v.replace(/m(in(ute)?s?)?$/, ""));
   return Number.isFinite(n) ? Math.round(n) : null;

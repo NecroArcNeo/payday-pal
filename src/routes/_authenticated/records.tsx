@@ -29,6 +29,7 @@ import { CopyWeek } from "@/components/CopyWeek";
 import { useCopyToNextWeek } from "@/components/RecordMenu";
 import { sortRecords, validSort, type Sort, type SortKey } from "@/lib/record-sort";
 import { DateInput } from "@/components/DateInput";
+import { readAmount } from "@/lib/amount";
 
 /** One shift's times for "Add each shift's usual hours", as typed (break in minutes). */
 type GroupTimes = { clock_in: string; clock_out: string; lunch_minutes: string; hours: string };
@@ -176,7 +177,7 @@ function RecordsPage() {
       const h = Number(c.hours);
       if (mode === "hours" && (c.hours.trim() === "" || !Number.isFinite(h) || h < 0 || h > 24)) { toast.error(`${c.what}hours must be 0–24`); return; }
     }
-    const pay = f.pay.trim() === "" ? null : Number(f.pay.replace(/[$,\s]/g, ""));
+    const pay = f.pay.trim() === "" ? null : readAmount(f.pay);
     if (pay !== null && (!Number.isFinite(pay) || pay < 0 || pay > 100000)) { toast.error("Day pay must be an amount from $0 to $100,000, or empty"); return; }
     const manual = pay === null ? {} : { pay_override: Math.round(pay * 100) / 100 };
     // Only store a shift when it differs from the person's usual one.
@@ -600,7 +601,7 @@ function BulkRecordEdit({ mode, employees, label, load, onClose, onDone }: {
   } else if (on["hours"]) changes.push(`hours → ${v.hours}`);
   if (on["shift_id"]) changes.push(v.shift_id ? `shift → ${shifts.find((x) => x.id === v.shift_id)?.name ?? "?"}` : "shift → each person's usual");
   if (on["note"]) changes.push(v.note.trim() ? `note → “${v.note.trim()}”` : "clear note");
-  const payNum = Number(v.pay.replace(/[$,\s]/g, ""));
+  const payNum = readAmount(v.pay);
   if (on["pay"]) changes.push(v.pay.trim() ? `day pay → ${Number.isFinite(payNum) ? `$${payNum.toFixed(2)}` : "?"} (manual)` : "calculate day pay from hours");
 
   const apply = async () => {

@@ -72,7 +72,9 @@ export function PayLock({ periodEnd, warnings = 0 }: { periodEnd?: string | unde
   // Setting the lock again locks every record unlocked one by one.
   const relock = () => save(locked, `Locked ${unlocked} record${unlocked === 1 ? "" : "s"} again`);
 
-  const canLockPeriod = !!periodEnd && (!locked || periodEnd > locked);
+  // Never days still to come (as the dialog's date can't be after today): locking the rest of this week would refuse
+  // its shifts as "already paid". Until the period has ended, "Lock days as paid…" offers up to today instead.
+  const canLockPeriod = !!periodEnd && periodEnd <= isoDate(new Date()) && (!locked || periodEnd > locked);
   return (
     <div className="glass-panel flex flex-wrap items-center justify-between gap-3 px-5 py-3 text-sm">
       <span className="flex items-center gap-2">
@@ -83,7 +85,7 @@ export function PayLock({ periodEnd, warnings = 0 }: { periodEnd?: string | unde
       </span>
       <span className="flex gap-2">
         {unlocked > 0 && <button type="button" onClick={relock} className={btnGhost}><Lock className="mr-1 inline h-4 w-4" />Lock {unlocked === 1 ? "it" : `all ${unlocked}`} again</button>}
-        {(locked || !periodEnd) && <button type="button" onClick={changeLock} className={btnGhost}>{locked ? "Change lock…" : <><Lock className="mr-1 inline h-4 w-4" />Lock days as paid…</>}</button>}
+        {(locked || !canLockPeriod) && <button type="button" onClick={changeLock} className={btnGhost}>{locked ? "Change lock…" : <><Lock className="mr-1 inline h-4 w-4" />Lock days as paid…</>}</button>}
         {canLockPeriod && (
           <button type="button" onClick={() => lockPeriod(periodEnd)} className={btnPrimary} title={isWeekend(periodEnd) ? undefined : "The period doesn't end on a weekend; check it's the right end date"}>
             <Lock className="mr-1 inline h-4 w-4" />Lock through {weekday(periodEnd)} {periodEnd}

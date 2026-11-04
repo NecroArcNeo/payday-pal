@@ -187,3 +187,19 @@ describe("undo with days locked as paid", () => {
     expect((await store.remove("employees", emp.id)).error?.message).toMatch(/locked as paid/);
   });
 });
+
+describe("an undoable action that fails partway", () => {
+  it("puts back what it already wrote, and leaves no undo step", async () => {
+    const { db, history, store, emp, all } = await setup();
+    const before = { e: await all("employees"), p: await all("pay_rates") };
+    const steps = history.nextUndo;
+    await expect(history.record("saved a profile", async () => {
+      expect((await store.insert("pay_rates", { employee_id: emp.id, effective_from: "0001-01-01", hourly_rate: 20 })).error).toBeNull();
+      await store.update("employees", emp.id, { first_name: "Half" });
+      throw new Error("the lock refused the next entry");
+    })).rejects.toThrow("the lock refused");
+    expect({ e: await all("employees"), p: await all("pay_rates") }).toEqual(before);
+    expect(history.nextUndo).toBe(steps);
+    void db;
+  });
+});

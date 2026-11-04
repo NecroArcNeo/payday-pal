@@ -2,6 +2,7 @@ import * as XLSX from "xlsx";
 import { strToU8 } from "fflate";
 import type { PayLine } from "@/lib/pay";
 import { colLetters, colNumber, fillTemplate, parseAddress, TemplateError, templateSheets, type CellValue } from "./xlsx-template";
+import { centsAddingUp, readAmount } from "@/lib/amount";
 
 // What a timesheet export holds, and the user's own Excel templates: which cell gets each value, and
 // which columns the day-by-day rows fill. Templates are kept on this device (template-store.ts), not in the
@@ -80,6 +81,7 @@ export const weekStartOf = (from: string, start: WeekStart = 1) => {
   return x.toISOString().slice(0, 10);
 };
 const round2 = (n: number) => Math.round(n * 100) / 100;
+
 const dayList = (from: string, to: string) => {
   const out: string[] = [];
   for (let d = new Date(`${from}T00:00:00Z`); d.toISOString().slice(0, 10) <= to; d.setUTCDate(d.getUTCDate() + 1)) out.push(d.toISOString().slice(0, 10));
@@ -122,11 +124,19 @@ export function timesheetData(input: {
   for (const c of input.categories ?? []) {
     const raw = custom[c.id];
     const text = raw === undefined || raw === null ? "" : String(raw);
-    const n = Number(text.replace(/[$,\s]/g, ""));
+    const n = readAmount(text);
     values[`custom:${c.id}`] = c.field_type === "date" && /^\d{4}-\d{2}-\d{2}$/.test(text) ? { date: text }
       : (c.field_type === "number" || c.field_type === "money") && text.trim() && Number.isFinite(n) ? n : text;
   }
+  // Each row's exact pay, so the rounded rows can be made to add up to the totals above.
+  const exact = new WeakMap<Record<RowField, CellValue>, Record<"regular_pay" | "overtime_pay" | "pay", number>>();
+  const exactSum = (rs: SheetRecord[], f: (l: PayLine) => number) => rs.reduce((s, r) => s + (line(r) ? f(line(r)!) : 0), 0);
   const row = (date: string, rs: SheetRecord[]): Record<RowField, CellValue> => {
+    const out = cells(date, rs);
+    if (rs.length) exact.set(out, { regular_pay: exactSum(rs, (l) => l.regPay), overtime_pay: exactSum(rs, (l) => l.otPay), pay: exactSum(rs, (l) => l.pay) });
+    return out;
+  };
+  const cells = (date: string, rs: SheetRecord[]): Record<RowField, CellValue> => {
     const clock = rs.filter((r) => r.entry_mode === "clock" && r.clock_in && r.clock_out);
     const breaks = rs.reduce((s, r) => s + (r.entry_mode === "clock" ? r.lunch_minutes : 0), 0);
     const rates = [...new Set(rs.map((r) => r.rate))];
@@ -162,6 +172,12 @@ export function timesheetData(input: {
       const rs = records.filter((r) => r.work_date === d);
       return per === "day" || !rs.length ? [row(d, rs)] : rs.map((r) => row(d, [r]));
     });
+  const totals = { regular_pay: values.regular_pay, overtime_pay: values.overtime_pay, pay: values.hours_pay } as Record<"regular_pay" | "overtime_pay" | "pay", number>;
+  for (const k of ["regular_pay", "overtime_pay", "pay"] as const) {
+    const filled = rows.filter((r) => exact.has(r));
+    const shared = centsAddingUp(filled.map((r) => exact.get(r)![k]), Math.round(totals[k] * 100));
+    filled.forEach((r, i) => { r[k] = shared[i]!; });
+  }
   return { values, rows };
 }
 
@@ -215,6 +231,9 @@ export const PLAIN_HEADER_ROW = 3;
  * A plain table: who and when, then a row per record (or day), then the totals. `compact` leaves out the
  * day-by-day columns that are empty all period (for a PDF, where every column costs width).
  */
+/** Column headers where the template editor's name explains more than a file's header should. */
+const PLAIN_HEADERS: Partial<Record<RowField, string>> = { weekend: "Weekend" };
+
 export function plainTable(data: TimesheetData, compact = false): (string | number)[][] {
   const v = data.values;
   const show = (c: CellValue | undefined): string | number => (c === null || c === undefined ? "" : typeof c === "object" ? ("date" in c ? c.date : c.time) : c);
@@ -223,7 +242,7 @@ export function plainTable(data: TimesheetData, compact = false): (string | numb
     ["Timesheet", show(v.employee_name), show(v.employee_code)],
     ["Period", show(v.period_from), show(v.period_to)],
     [],
-    cols.map((c) => ROW_FIELDS[c]),
+    cols.map((c) => PLAIN_HEADERS[c] ?? ROW_FIELDS[c]),
     ...data.rows.map((r) => cols.map((c) => show(r[c]))),
     [],
     ["Total hours", show(v.total_hours)], ["Regular hours", show(v.regular_hours)], ["Overtime hours", show(v.overtime_hours)],

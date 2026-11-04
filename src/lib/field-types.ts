@@ -1,6 +1,7 @@
 // The kinds of value a custom employee category (employee_field_defs.field_type) can hold.
 // Values are always stored as strings in employees.custom_fields; the type decides the input, display and checks.
 import { isEmail } from "@/lib/email";
+import { readAmount } from "@/lib/amount";
 
 export const FIELD_TYPES = [
   { value: "text", label: "Text" },
@@ -53,7 +54,7 @@ export function toType(type: string | null | undefined, value: string): string {
   if (!v) return "";
   switch (fieldType(type)) {
     case "number": case "money": {
-      const n = Number(v.replace(/[$€£,\s]/g, ""));
+      const n = readAmount(v);
       return Number.isFinite(n) && /\d/.test(v) ? String(n) : v;
     }
     case "yesno": {

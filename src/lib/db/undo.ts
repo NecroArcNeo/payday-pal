@@ -34,22 +34,34 @@ export class UndoHistory {
 
   constructor(private getDb: () => Promise<SqlDb>) {}
 
-  /** Runs `fn` as one undoable step. Steps started inside it join it (the outermost label wins). */
+  /**
+   * Runs `fn` as one undoable step. Steps started inside it join it (the outermost label wins). If `fn` throws after
+   * writing something (a rate's history saved, then the lock refusing the next entry), what it wrote is undone at
+   * once, so an action made of several writes either fully happens or not at all.
+   */
   async record<T>(label: string, fn: () => Promise<T>): Promise<T> {
     if (this.depth > 0) return fn();
     this.depth++;
     const sql = await this.getDb().catch((e) => { this.depth--; throw e; });
     let ops: UndoOp[] = [];
+    let failed = false;
     try {
       await sql.query("delete from _undo_log");
       await sql.query("select meridian_set('undo_log', 'on')");
       return await fn();
+    } catch (e) {
+      failed = true;
+      throw e;
     } finally {
       try {
         await sql.query("select meridian_set('undo_log', '')");
         ops = (await sql.query<{ tbl: TableName; op: UndoOp["op"]; old: string | null; new: string | null }>("select tbl, op, old, new from _undo_log order by seq")).rows
           .map((r) => ({ tbl: r.tbl, op: r.op, old: logged(r.tbl, r.old), new: logged(r.tbl, r.new) }));
         await sql.query("delete from _undo_log");
+        // Put back what a failed action wrote; if even that fails, keep it as a step so Ctrl+Z can try again.
+        if (failed && ops.length) {
+          try { await this.replay({ label, ops }, "undo"); ops = []; } catch { /* kept below */ }
+        }
       } finally {
         this.depth--;
       }
@@ -91,32 +103,7 @@ export class UndoHistory {
     if (!step) return null;
     this.depth++;
     try {
-      const sql = await this.getDb();
-      await sql.transaction(async (tx) => {
-        await tx.query("select meridian_set('replaying', 'on')");
-        // A run can depend on one that comes later (undoing a shift's delete restores the employees moved off it,
-        // which needs the shift back first), so a run that fails on a key or a row's state waits for a later pass;
-        // only when a whole pass makes no progress has the data really changed since.
-        let pending = runs(plan(step, what));
-        while (pending.length) {
-          const waiting: Change[][] = [];
-          let reason: unknown = new StaleUndoError(what, step.label);
-          for (const run of pending) {
-            await tx.query("savepoint undo_run");
-            try {
-              if (await apply(tx, run)) { await tx.query("release savepoint undo_run"); continue; }
-            } catch (e) {
-              if (!/foreign key|unique constraint/i.test((e as Error).message)) throw e;
-              reason = e;
-            }
-            await tx.query("rollback to savepoint undo_run");
-            await tx.query("release savepoint undo_run");
-            waiting.push(run);
-          }
-          if (waiting.length === pending.length) throw reason instanceof StaleUndoError ? reason : new StaleUndoError(what, step.label);
-          pending = waiting;
-        }
-      });
+      await this.replay(step, what);
     } catch (e) {
       // Stale history can't come right again; anything else (a lock, say) may, so the step stays.
       if (e instanceof StaleUndoError) this.clear();
@@ -128,6 +115,36 @@ export class UndoHistory {
     (what === "undo" ? this.redoStack : this.undoStack).push(step);
     this.changed();
     return step.label;
+  }
+
+  /** Writes a step's rows back ("undo") or again ("redo"), in one transaction. */
+  private async replay(step: UndoStep, what: "undo" | "redo") {
+    const sql = await this.getDb();
+    await sql.transaction(async (tx) => {
+      await tx.query("select meridian_set('replaying', 'on')");
+      // A run can depend on one that comes later (undoing a shift's delete restores the employees moved off it,
+      // which needs the shift back first), so a run that fails on a key or a row's state waits for a later pass;
+      // only when a whole pass makes no progress has the data really changed since.
+      let pending = runs(plan(step, what));
+      while (pending.length) {
+        const waiting: Change[][] = [];
+        let reason: unknown = new StaleUndoError(what, step.label);
+        for (const run of pending) {
+          await tx.query("savepoint undo_run");
+          try {
+            if (await apply(tx, run)) { await tx.query("release savepoint undo_run"); continue; }
+          } catch (e) {
+            if (!/foreign key|unique constraint/i.test((e as Error).message)) throw e;
+            reason = e;
+          }
+          await tx.query("rollback to savepoint undo_run");
+          await tx.query("release savepoint undo_run");
+          waiting.push(run);
+        }
+        if (waiting.length === pending.length) throw reason instanceof StaleUndoError ? reason : new StaleUndoError(what, step.label);
+        pending = waiting;
+      }
+    });
   }
 }
 

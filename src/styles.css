@@ -294,3 +294,9 @@
 @media (min-width: 1280px) {
   html.record-panel-open main { padding-right: 27rem; }
 }
+/* Toasts sit bottom right, where the panel has its Save button: a toast there (one lasts 20 s after a crash) took the
+   click meant for Save. While the panel is open they move beside it, or above its buttons when it fills the width. */
+html.record-panel-open [data-sonner-toaster][data-x-position="right"] { right: calc(27rem + 1rem) !important; }
+@media (max-width: 54rem) {
+  html.record-panel-open [data-sonner-toaster][data-x-position="right"] { right: 1rem !important; bottom: 6rem !important; }
+}

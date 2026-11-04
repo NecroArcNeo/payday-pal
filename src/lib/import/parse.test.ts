@@ -2,7 +2,7 @@
 import * as XLSX from "xlsx";
 import { describe, expect, it } from "vitest";
 import type { Employee } from "@/lib/payroll";
-import { guessSetup, parseDate, parseHours, parseMinutes, parsePeople, parseRecords, parseTime, readWorkbook, recordKey, rowNumber } from "./parse";
+import { guessSetup, parseDate, parseHours, parseMinutes, parseMoney, parsePeople, parseRecords, parseTime, readWorkbook, recordKey, rowNumber } from "./parse";
 
 const emp = (id: string, code: string, first: string, last: string, email: string | null = null) =>
   ({ id, employee_code: code, first_name: first, last_name: last, email, hourly_rate: 20, custom_fields: {} }) as unknown as Employee;
@@ -166,3 +166,29 @@ describe("duplicates", () => {
   });
 });
 
+
+describe("reading cells that only look like dates or numbers", () => {
+  const t = (text: string) => ({ text });
+  it("never reads a year-less date as 2001, nor a number or label as a date", () => {
+    expect(parseDate(t("Oct 5"), "mdy", "2026-11-03")).toBe("2026-10-05");
+    expect(parseDate(t("5 October 2025"), "dmy", "2026-11-03")).toBe("2025-10-05");
+    expect(parseDate(t("10/5"), "mdy", "2026-11-03")).toBe("2026-10-05");
+    expect(parseDate(t("10/5"), "dmy", "2026-11-03")).toBe("2026-05-10");
+    // No year: the latest such day on or before today, since a timesheet records work done.
+    expect(parseDate(t("Jan 2"), "mdy", "2026-11-03")).toBe("2026-01-02");
+    expect(parseDate(t("12/30"), "mdy", "2026-11-03")).toBe("2025-12-30");
+    expect(parseDate(t("Nov 3"), "mdy", "2026-11-03")).toBe("2026-11-03");
+    expect(parseDate(t("Feb 29"), "mdy", "2026-11-03")).toBe("2024-02-29");
+    expect(parseDate(t("Dec 30 25"), "mdy", "2026-11-03")).toBe("2025-12-30");
+    for (const s of ["1", "12", "0", "Week 3", "2026", "2026-11", "Total", "Mon"]) expect(parseDate(t(s), "mdy", "2026-11-03"), s).toBeNull();
+  });
+  it("reads money written either way, and refuses what isn't a plain number", () => {
+    expect(parseMoney(t("1.234,56"))).toBe(1234.56);
+    expect(parseMoney(t("$1,234.56"))).toBe(1234.56);
+    expect(parseMoney(t("(50)"))).toBe(-50);
+    expect(parseMoney(t("7,5"))).toBe(7.5);
+    for (const s of ["0x10", "1e5", "Infinity", "abc"]) expect(parseMoney(t(s)), s).toBeNaN();
+    expect(parseHours(t("7:75"))).toBeNull();
+    expect(parseMinutes(t("0:75"))).toBeNull();
+  });
+});

@@ -6,7 +6,12 @@ import tsConfigPaths from "vite-tsconfig-paths";
 import { nitro } from "nitro/vite";
 
 export default defineConfig(({ command, mode }) => ({
-  server: { host: "::", port: 8080 },
+  server: {
+    host: "::", port: 8080,
+    // npm run dev's desktop window keeps its data in .dev-data (database, Chromium's files): not source, and some are
+    // held open, which crashed the file watcher (EBUSY). release/ is the installer output.
+    watch: { ignored: ["**/.dev-data/**", "**/release/**"] },
+  },
   resolve: {
     alias: { "@": `${process.cwd()}/src` },
     dedupe: ["react", "react-dom", "react/jsx-runtime", "react/jsx-dev-runtime", "@tanstack/react-query", "@tanstack/query-core"],

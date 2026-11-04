@@ -47,8 +47,10 @@ function ProfilePage() {
   if (isLoading) return <AppShell eyebrow="Profile" title="Loading…"><div /></AppShell>;
   if (!emp) return <AppShell eyebrow="Profile" title="Not found"><Link to="/employees" className="underline">Back to employees</Link></AppShell>;
 
-  // The rate history and the profile are one undo step.
-  const save = (v: ProfileValues) => undoable(`saved ${fullName(emp)}'s profile`, () => saveProfile(v));
+  // The rate history and the profile are one undo step, and all or nothing: a failure partway (the lock refusing a
+  // rate entry, say) throws, and undoable puts back whatever was already written.
+  const save = (v: ProfileValues) => undoable(`saved ${fullName(emp)}'s profile`, () => saveProfile(v))
+    .catch((e: Error) => { toast.error(`Nothing was saved: ${e.message}`); });
   const saveProfile = async ({ form, custom }: ProfileValues) => {
     for (const k of required) if (!form[k]?.trim()) { toast.error("Employee ID, first and last name are required"); return; }
     const owner = employeeWithCode(employees, form["employee_code"] ?? "", id);
@@ -58,11 +60,9 @@ function ProfilePage() {
     // A new rate: ask from which day, and keep the old one for the days before.
     const oldRate = Number(emp.hourly_rate);
     if (rate !== oldRate) {
-      try {
-        const current = await changeEmployeeRate(id, history, oldRate, rate);
-        if (current === null) return;
-        rate = current;
-      } catch (e) { toast.error(`Nothing was saved: ${(e as Error).message}`); return; }
+      const current = await changeEmployeeRate(id, history, oldRate, rate);
+      if (current === null) return;
+      rate = current;
     }
     const row: Record<string, string | number | null> = {};
     for (const s of sections) for (const f of s.fields) row[f.k] = form[f.k]?.trim() || null;
@@ -75,7 +75,7 @@ function ProfilePage() {
     for (const [k, v] of Object.entries(custom)) if (v.trim()) cf[k] = v.trim().slice(0, 1000);
     (row as Record<string, unknown>)["custom_fields"] = cf;
     const { error } = await db().update("employees", id, row as never);
-    if (error) { toast.error(friendlySaveError(error.message)); return; }
+    if (error) throw new Error(friendlySaveError(error.message));
     toast.success("Profile saved");
     qc.invalidateQueries({ queryKey: ["employees"] });
   };

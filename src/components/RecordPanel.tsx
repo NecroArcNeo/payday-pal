@@ -16,6 +16,7 @@ import { computeHours, fullName, money, usePayRates, usePayrollSettings, weekday
 import { shiftFor, shiftForRecord, type PayLine } from "@/lib/pay";
 import { rateOn } from "@/lib/pay-rates";
 import type { EntryMode } from "@/components/RecordsLedger";
+import { readAmount } from "@/lib/amount";
 
 // The Time records side panel: one record's details (how its pay is worked out, its colours and tags) and its edit
 // form, beside the list rather than over it, so the list stays usable: clicking another row or ↑/↓ moves the panel to
@@ -175,7 +176,7 @@ function RecordForm({ record, employees, shifts, locked, onChanged, onDelete, on
     if (f.entry_mode === "clock" && (!f.clock_in || !f.clock_out)) { toast.error("Clock in and clock out are required"); return; }
     if (f.entry_mode === "clock" && !validBreak(lunch)) { toast.error(breakRangeText(breakUnit)); return; }
     if (f.entry_mode === "hours" && (!Number.isFinite(h) || h < 0 || h > 24)) { toast.error("Hours must be 0–24"); return; }
-    const pay = f.pay.trim() === "" ? null : Number(f.pay.replace(/[$,\s]/g, ""));
+    const pay = f.pay.trim() === "" ? null : readAmount(f.pay);
     if (pay !== null && (!Number.isFinite(pay) || pay < 0 || pay > 100000)) { toast.error("Manual pay must be an amount from $0 to $100,000, or empty to calculate it"); return; }
     const base = { employee_id: f.employee_id, work_date: f.work_date, shift_id: f.shift_id && f.shift_id !== usual.id ? f.shift_id : null, note: f.note.trim().slice(0, 300) || null, pay_override: pay === null ? null : Math.round(pay * 100) / 100 };
     const patch = f.entry_mode === "clock"

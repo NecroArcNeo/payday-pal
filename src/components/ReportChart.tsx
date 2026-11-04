@@ -7,6 +7,7 @@ import { StatCard, btnGhost, inputCls } from "@/components/AppShell";
 import { DataTable } from "@/components/DataTable";
 import { DateInput } from "@/components/DateInput";
 import { storeFor, useDataMode } from "@/lib/db/mode";
+import { centsAddingUp } from "@/lib/amount";
 import { downloadBlob } from "@/lib/db/backups";
 import { isoDate, money, useAdjustments, useEmployees, usePayRates, usePayrollSettings, useShifts } from "@/lib/payroll";
 import { payByRecord, weekEnd, weekStart } from "@/lib/pay";
@@ -339,10 +340,15 @@ function numbersGrid(report: Report, before: Report | null, rows: CompareRow[] |
   }
   const showTotal = report.series.length > 1 && additive;
   const sum = (v: number[]) => v.reduce((a, c) => a + c, 0);
+  // Shown to the cent (or hundredth of an hour): each row's figures are rounded so they add up to its total exactly.
+  const line = (v: number[], total: number): GridCell[] => {
+    const cells = showTotal ? centsAddingUp(v, Math.round(total * 100)) : v;
+    return [...cells.map((n) => ({ n })), ...(showTotal ? [{ n: Math.round(total * 100) / 100 }] : [])];
+  };
   return {
     head: ["Period", ...report.series.map((x) => x.label), ...(showTotal ? ["Total"] : [])],
-    rows: report.buckets.map((b, i) => [b.label, ...report.values[i]!.map((n) => ({ n })), ...(showTotal ? [{ n: sum(report.values[i]!) }] : [])]),
-    foot: ["Whole period", ...report.seriesTotals.map((n) => ({ n })), ...(showTotal ? [{ n: report.total }] : [])],
+    rows: report.buckets.map((b, i) => [b.label, ...line(report.values[i]!, sum(report.values[i]!))]),
+    foot: ["Whole period", ...line(report.seriesTotals, report.total)],
     titles: report.buckets.map((b) => (b.from === b.to ? b.from : `${b.from} – ${b.to}`)),
     right: report.series.map((_, i) => i + 1).concat(showTotal ? [report.series.length + 1] : []),
   };
