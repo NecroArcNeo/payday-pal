@@ -1,15 +1,12 @@
 // @vitest-environment node
-import { PGlite, types } from "@electric-sql/pglite";
 import { describe, expect, it } from "vitest";
-import { migrate } from "./local";
+import { memoryDb } from "../../test/sqlite-db";
 import { createLocalStore } from "./store";
 import { StaleUndoError, UndoHistory, undoableStore } from "./undo";
-
-const parsers = { [types.NUMERIC]: (v: string) => Number(v), [types.DATE]: (v: string) => v, [types.TIMESTAMPTZ]: (v: string) => v };
+import { lockThrough } from "@/lib/pay-freeze";
 
 async function setup() {
-  const db = new PGlite({ parsers });
-  await migrate(db);
+  const db = await memoryDb();
   const history = new UndoHistory(async () => db);
   const store = undoableStore(createLocalStore(async () => db), history);
   expect((await store.insert("employees", { employee_code: "E1", first_name: "Ada", last_name: "Lovelace", hourly_rate: 20 })).error).toBeNull();
@@ -156,5 +153,37 @@ describe("records unlocked one by one (schema 11)", () => {
     expect((await store.remove("time_records", id)).error).toBeNull();
     await history.undo();
     expect((await all("time_records")).map((r) => r["id"])).toContain(id);
+  });
+});
+
+describe("undo with days locked as paid", () => {
+  it("undoes and redoes a first rate change made after a lock", async () => {
+    const { history, store, emp, all } = await setup();
+    await lockThrough(store, "2026-09-30");
+    expect((await store.update("employees", emp.id, { hourly_rate: 25 })).error).toBeNull();
+    expect(await all("pay_rates")).toHaveLength(2);
+    await history.undo();
+    expect(await all("pay_rates")).toEqual([]);
+    expect((await store.listEmployees())[0]!.hourly_rate).toBe(20);
+    await history.redo();
+    expect(await all("pay_rates")).toHaveLength(2);
+    expect((await store.listEmployees())[0]!.hourly_rate).toBe(25);
+  });
+
+  it("deletes an employee with rate history but no locked records, and undoes it", async () => {
+    const { history, store } = await setup();
+    await store.insert("employees", { employee_code: "E2", first_name: "Bo", last_name: "Ng", hourly_rate: 18 });
+    const bo = (await store.listEmployees()).find((e) => e.employee_code === "E2")!;
+    await store.update("employees", bo.id, { hourly_rate: 19 });
+    await lockThrough(store, "2026-12-31");
+    expect((await store.remove("employees", bo.id)).error).toBeNull();
+    await history.undo();
+    expect((await store.listEmployees()).find((e) => e.id === bo.id)?.hourly_rate).toBe(19);
+  });
+
+  it("still refuses to delete an employee whose records are locked", async () => {
+    const { store, emp } = await setup();
+    await lockThrough(store, "2026-10-31");
+    expect((await store.remove("employees", emp.id)).error?.message).toMatch(/locked as paid/);
   });
 });

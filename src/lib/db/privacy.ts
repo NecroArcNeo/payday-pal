@@ -28,13 +28,25 @@ export const customKey = (defId: string) => `custom:${defId}`;
  * an employee or the default profile after its category was deleted (so leftover values stay private too).
  */
 async function allKeys(sql: Sql) {
-  const { rows } = await sql.query<{ id: string }>(`
-    select id::text from (select id::text, created_at from employee_field_defs order by created_at, id) d
-    union all
-    (select distinct jsonb_object_keys(custom_fields) from employees where jsonb_typeof(custom_fields) = 'object'
-     union select jsonb_object_keys(employee_defaults->'custom_fields') from payroll_settings where jsonb_typeof(employee_defaults->'custom_fields') = 'object'
-     except select id::text from employee_field_defs)`);
-  return [...PRIVATE_COLUMNS, ...rows.map((r) => customKey(r.id))];
+  const defs = (await sql.query<{ id: string }>("select id from employee_field_defs order by created_at, id")).rows.map((r) => String(r.id));
+  const leftover = new Set<string>();
+  for (const { custom_fields } of (await sql.query<{ custom_fields: unknown }>("select custom_fields from employees")).rows) {
+    for (const k of Object.keys(jsonObject(custom_fields))) leftover.add(k);
+  }
+  for (const { employee_defaults } of (await sql.query<{ employee_defaults: unknown }>("select employee_defaults from payroll_settings")).rows) {
+    for (const k of Object.keys(jsonObject(jsonObject(employee_defaults)["custom_fields"]))) leftover.add(k);
+  }
+  for (const id of defs) leftover.delete(id);
+  return [...PRIVATE_COLUMNS, ...[...defs, ...leftover].map(customKey)];
+}
+
+/** A JSON column's value as an object ({} for anything else), whether it arrives as text or already parsed. */
+function jsonObject(v: unknown): Record<string, unknown> {
+  let x = v;
+  if (typeof x === "string") {
+    try { x = JSON.parse(x); } catch { return {}; }
+  }
+  return x && typeof x === "object" && !Array.isArray(x) ? (x as Record<string, unknown>) : {};
 }
 
 async function readList(sql: Sql, key: string): Promise<string[] | null> {

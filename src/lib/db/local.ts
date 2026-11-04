@@ -1,62 +1,39 @@
-import type { PGlite, Transaction } from "@electric-sql/pglite";
 import { desktop, type DesktopBridge } from "../desktop";
 import { saveBackup } from "./backups";
-import { LOCAL_MIGRATIONS } from "./schema";
-import { exportSnapshot, type Snapshot, type Sql, type SqlDb } from "./snapshot";
+import { exportSnapshot, type Snapshot, type SqlDb } from "./snapshot";
+import { SCHEMA_VERSION } from "./schema";
+import { SQLITE_BASE_VERSION, SQLITE_MIGRATIONS, SQLITE_SCHEMA } from "./sqlite-schema";
 
-export const LOCAL_DB_NAME = "meridian-payroll";
-const LOCK_NAME = "meridian-payroll-db";
-
-export class OtherTabError extends Error {
+/** The app only runs as the desktop app: the database is in its main process, reached through the bridge. */
+export class NotDesktopError extends Error {
   constructor() {
-    super("The payroll app is already open in another tab or window. Close it there, then reload this tab.");
+    super("Meridian Payroll runs in its desktop window. Start it with `npm run dev` (or the installed app), not in a browser tab.");
   }
 }
 
-/** What the app uses of the on-device database, in the browser and in the desktop app alike. */
+/** What the app uses of the on-device database. */
 export type LocalDb = SqlDb & { exec(sql: string): Promise<unknown> };
 
 let dbPromise: Promise<LocalDb> | undefined;
 
-/**
- * The on-device database: Postgres compiled to WebAssembly. In the browser it runs in this tab and is
- * stored in IndexedDB, and only one tab may hold it open (two writers on the same IndexedDB store can
- * corrupt it). In the desktop app it runs in the app's main process on a real data folder.
- */
+/** The on-device database: an encrypted SQLite file in the desktop app's main process (electron/database.mjs). */
 export function localDb(): Promise<LocalDb> {
-  if (typeof window === "undefined") return Promise.reject(new Error("The local database only runs in the browser"));
-  dbPromise ??= (desktop ? openDesktopDb(desktop) : openLocalDb()).catch((e) => {
+  if (typeof window === "undefined") return Promise.reject(new Error("The local database only runs in the app"));
+  if (!desktop) return Promise.reject(new NotDesktopError());
+  dbPromise ??= openDesktopDb(desktop).catch((e) => {
     dbPromise = undefined;
     throw e;
   });
   return dbPromise;
 }
 
-async function openLocalDb(): Promise<PGlite> {
-  await acquireTabLock();
-  const { PGlite, types } = await import("@electric-sql/pglite");
-  const db = new PGlite(`idb://${LOCAL_DB_NAME}`, {
-    // Match what Supabase/PostgREST returns: numbers for numeric, strings for dates and times.
-    parsers: {
-      [types.NUMERIC]: (v: string) => Number(v),
-      [types.DATE]: (v: string) => v,
-      [types.TIMESTAMPTZ]: (v: string) => v,
-      [types.TIMESTAMP]: (v: string) => v,
-    },
-  });
-  await db.waitReady;
-  saveAfterTransactions(db);
-  await migrate(db, backupBeforeUpdate);
-  void requestPersistentStorage();
-  return db;
-}
-
-async function openDesktopDb(bridge: DesktopBridge): Promise<LocalDb> {
+/** The bridge as a LocalDb: queries go to the main process; a transaction holds the database until it ends. */
+export function bridgeDb(bridge: DesktopBridge): LocalDb {
   const sql = (txId?: number) => ({
     query: <T>(text: string, params?: unknown[]) => bridge.db.query<T>(text, params, txId),
     exec: (text: string) => bridge.db.exec(text, txId),
   });
-  const db: LocalDb = {
+  return {
     ...sql(),
     transaction: async (fn) => {
       const id = await bridge.db.begin();
@@ -71,9 +48,13 @@ async function openDesktopDb(bridge: DesktopBridge): Promise<LocalDb> {
       return result;
     },
   };
+}
+
+async function openDesktopDb(bridge: DesktopBridge): Promise<LocalDb> {
+  const db = bridgeDb(bridge);
   await migrate(db, backupBeforeUpdate);
-  // After a crash or power cut, read every table before trusting the database; damage shows up here
-  // (and sends the user to the recovery screen) rather than halfway through some later page.
+  // After a crash or power cut, read every table before trusting the database (the main process has already checked
+  // every page); damage shows up here, on the recovery screen, rather than halfway through some later page.
   if ((await bridge.session()).uncleanSince) {
     try {
       await exportSnapshot(db);
@@ -87,61 +68,32 @@ async function openDesktopDb(bridge: DesktopBridge): Promise<LocalDb> {
 const backupBeforeUpdate = (snapshot: Snapshot) => saveBackup("before-update", snapshot);
 
 /**
- * PGlite copies the database to IndexedDB after each statement, except inside a transaction, and (as of
- * 0.5.8) it still counts COMMIT as inside, so a transaction's changes only reached IndexedDB when some later
- * query happened to run; closing the tab before that lost them. Save explicitly once every transaction
- * commits, so a write is on disk before the app reports it saved.
- */
-function saveAfterTransactions(db: PGlite) {
-  const transaction = db.transaction.bind(db);
-  db.transaction = (async <T>(fn: (tx: Transaction) => Promise<T>) => {
-    const result = await transaction(fn);
-    await db.syncToFs();
-    return result;
-  }) as PGlite["transaction"];
-}
-
-/**
- * Runs pending LOCAL_MIGRATIONS. Each one commits atomically with its version number. When an existing
- * database is about to change, `backup` saves a copy of it first (stamped with its current version,
- * which equals the number of migrations applied); if that fails, nothing is changed.
+ * Brings the database to SCHEMA_VERSION. A new one gets the whole schema at once (SQLITE_SCHEMA, version 12); later
+ * changes are SQLITE_MIGRATIONS, each committed atomically with its version number. When an existing database is
+ * about to change, `backup` saves a copy of it first (stamped with its current version); if that fails, nothing is
+ * changed.
  */
 export async function migrate(db: LocalDb, backup?: (snapshot: Snapshot) => Promise<unknown>) {
-  await db.exec(`set time zone 'UTC'; create table if not exists _migrations (version integer primary key, applied_at timestamptz not null default now())`);
+  await db.exec(`create table if not exists _migrations (version integer primary key, applied_at text not null default (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))`);
   const { rows } = await db.query<{ v: number | null }>("select max(version) as v from _migrations");
   const current = rows[0]?.v ?? 0;
-  if (backup && current > 0 && current < LOCAL_MIGRATIONS.length) await backup(await exportSnapshot(db, current));
-  for (let v = current + 1; v <= LOCAL_MIGRATIONS.length; v++) {
+  if (current === 0) {
     await db.transaction(async (tx) => {
-      await (tx as Sql & { exec(sql: string): Promise<unknown> }).exec(LOCAL_MIGRATIONS[v - 1]!);
+      await (tx as LocalDb).exec(SQLITE_SCHEMA);
+      await tx.query("insert into _migrations (version) values ($1)", [SQLITE_BASE_VERSION]);
+    });
+  } else if (current < SCHEMA_VERSION && backup) {
+    await backup(await exportSnapshot(db, current));
+  }
+  for (let v = Math.max(current, SQLITE_BASE_VERSION) + 1; v <= SCHEMA_VERSION; v++) {
+    await db.transaction(async (tx) => {
+      await (tx as LocalDb).exec(SQLITE_MIGRATIONS[v - SQLITE_BASE_VERSION - 1]!);
       await tx.query("insert into _migrations (version) values ($1)", [v]);
     });
   }
-  // Undo history lives in memory, so any log a closed session left behind (desktop: the database outlives the page) goes.
-  await db.query("select set_config('meridian.undo_log', '', false)");
+  // Undo history lives in memory, so any log a closed session left behind (the database outlives the page) goes.
+  await db.query("select meridian_set('undo_log', '')");
   await db.query("delete from _undo_log");
-}
-
-function acquireTabLock(): Promise<void> {
-  if (!("locks" in navigator)) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    navigator.locks
-      .request(LOCK_NAME, { ifAvailable: true }, (lock) => {
-        if (!lock) { reject(new OtherTabError()); return; }
-        resolve();
-        // Hold the lock for the life of the tab.
-        return new Promise<void>(() => {});
-      })
-      .catch(reject);
-  });
-}
-
-/** Asks the browser not to evict this site's storage under disk pressure. (The desktop app's data is ordinary files.) */
-export async function requestPersistentStorage(): Promise<boolean | null> {
-  if (desktop) return true;
-  if (!navigator.storage?.persist) return null;
-  if (await navigator.storage.persisted()) return true;
-  return navigator.storage.persist();
 }
 
 // Kept here too for existing imports; they live in meta.ts so privacy.ts and snapshot.ts can use them without a cycle.

@@ -1,47 +1,47 @@
 // Meridian Payroll desktop app (Electron main process).
 //
 // The pages are the static build in dist/client, served from app://meridian/.
-// The payroll database runs here, in Node, as a real Postgres data folder under
-// the app's own AppData folder. Automatic backups are JSON files beside it.
+// The payroll database runs here, in Node: one SQLite file (database.mjs) in a folder
+// under the app's own AppData folder. Automatic backups are JSON files beside it.
 // Neither goes in Documents: OneDrive may sync it, which would copy ID numbers
 // to Microsoft's cloud (and could copy the database mid-write). Copies meant to
 // leave the computer are the downloaded backup files, which are encrypted.
 // The page reaches both only through the bridge in preload.cjs.
 //
-// Both are encrypted on the disk (secure-fs.mjs for the database, sealed files for backups) with a data key
+// Both are encrypted on the disk (SQLCipher for the database, sealed files for backups) with a data key
 // kept in keyring.json (keyring.mjs). Without an app password, Windows unlocks that key for this user account
 // and the app opens as usual; with one, nothing in the folder can be read until it's typed. Until the key is
 // unlocked, every database and backup call is refused.
 
 import { app, BrowserWindow, ipcMain, Menu, net, protocol, safeStorage, shell } from "electron";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { PGlite, types } from "@electric-sql/pglite";
-import { DURABLE_START_PARAMS, DurableNodeFS } from "./durable-fs.mjs";
+import { openDatabase, runQuery, transactionGate } from "./database.mjs";
 import * as keyring from "./keyring.mjs";
-import { encryptFolder, folderKeyMatches, folderState, SecureNodeFS } from "./secure-fs.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const CLIENT_DIR = path.join(here, "..", "dist", "client");
 const ORIGIN = "app://meridian";
+// `npm run dev`: the pages come from the Vite dev server (hot reload) instead of dist/client.
+const DEV_URL = process.env.MERIDIAN_DEV_URL;
+const PAGE_ORIGIN = DEV_URL ? new URL(DEV_URL).origin : ORIGIN;
 
 app.setName("Meridian Payroll");
 // MERIDIAN_HOME puts everything in one other folder (for testing, or running from a USB stick).
 const HOME = process.env.MERIDIAN_HOME;
 // The same folder in development and when installed (the package name would otherwise pick it in development).
 app.setPath("userData", HOME ? path.join(HOME, "app") : path.join(app.getPath("appData"), "Meridian Payroll"));
+// The database folder: payroll.db, plus SQLite's write-ahead log beside it while it's open.
 const DATA_DIR = path.join(app.getPath("userData"), "database");
+const DB_FILE = path.join(DATA_DIR, "payroll.db");
 const BACKUP_DIR = path.join(app.getPath("userData"), "Backups");
 // Says whether the database is open. Still "open" at startup means the last session never closed it:
 // a crash, a power cut or a forced quit.
 const SESSION_FILE = path.join(app.getPath("userData"), "session.json");
 const KEYRING_FILE = path.join(app.getPath("userData"), "keyring.json");
-// While an unencrypted database (from before encryption) is converted: the encrypted copy is built beside it,
-// checked, and only then swapped in.
-const ENCRYPTING_DIR = `${DATA_DIR}.encrypting`;
-const UNENCRYPTED_DIR = `${DATA_DIR}-unencrypted`;
 const lastSession = (() => {
   try { return JSON.parse(fs.readFileSync(SESSION_FILE, "utf8")); } catch { return null; }
 })();
@@ -58,48 +58,55 @@ protocol.registerSchemesAsPrivileged([
 
 // ---------------------------------------------------------------- database
 
-/** @type {Promise<PGlite> | undefined} */
-let dbPromise;
-function database() {
-  dbPromise ??= (async () => {
-    const key = await requireUnlocked();
-    // Encrypted unless an unencrypted folder couldn't be converted (then it opens as before, and converting
-    // is tried again at the next start).
-    const state = folderState(DATA_DIR);
-    if (state === "encrypted" && !folderKeyMatches(DATA_DIR, key)) {
-      throw new Error("The database folder was encrypted with a different key than this computer's keyring.json holds.");
-    }
-    const db = new PGlite({
-      // Every commit is flushed to the disk before the app reports it saved (durable-fs.mjs), so a power cut
-      // or system crash can't lose it or leave the database half-written. SecureNodeFS keeps that and adds
-      // the encryption.
-      fs: state === "plain" ? new DurableNodeFS(DATA_DIR) : new SecureNodeFS(DATA_DIR, key),
-      startParams: DURABLE_START_PARAMS,
-      // Match what Supabase/PostgREST returns (and the browser build): numbers for numeric, strings for dates and times.
-      parsers: {
-        [types.NUMERIC]: (v) => Number(v),
-        [types.DATE]: (v) => v,
-        [types.TIMESTAMPTZ]: (v) => v,
-        [types.TIMESTAMP]: (v) => v,
-      },
-    });
-    await db.waitReady;
-    writeDurably(SESSION_FILE, JSON.stringify({ open: true, startedAt: new Date().toISOString() }));
-    return db;
-  })().catch((e) => {
-    dbPromise = undefined; // try again next time (e.g. after the recovery screen moves a damaged folder aside)
-    throw e;
-  });
-  return dbPromise;
+/** The SQLCipher key: derived from the data key, so one key never serves two purposes. 64 hex characters. */
+const databaseKey = (key) => Buffer.from(crypto.hkdfSync("sha256", key, Buffer.alloc(0), "meridian database", 32)).toString("hex");
+
+/** A database folder from before SQLite (Postgres' files): moved aside, never deleted, so a backup can be restored. */
+let movedOldDatabase = null;
+function setAsideOldDatabase() {
+  if (!fs.existsSync(path.join(DATA_DIR, "PG_VERSION"))) return;
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  movedOldDatabase = path.join(path.dirname(DATA_DIR), `database-pglite-${stamp}`);
+  fs.renameSync(DATA_DIR, movedOldDatabase);
 }
+
+/** The open connection, and what clears its one-transaction flags (database.mjs). Opened on first use. */
+let opened = null;
+function database() {
+  if (opened) return opened;
+  if (!dataKey) throw new Error("The app is locked");
+  setAsideOldDatabase();
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  let conn;
+  try {
+    conn = openDatabase(DB_FILE, databaseKey(dataKey));
+    // Reads every page and checks it (its HMAC included), so damage shows up now, on the recovery screen, rather
+    // than halfway through a payroll run. A few milliseconds for a payroll-sized file.
+    const check = conn.db.pragma("quick_check", { simple: true });
+    if (check !== "ok") throw new Error(`The database file is damaged (${String(check).replace(/\s+/g, " ").slice(0, 100)}…)`);
+  } catch (e) {
+    try { conn?.db.close(); } catch { /* already unusable */ }
+    const why = e instanceof Error ? e.message : String(e);
+    throw new Error(/not a database|malformed|corrupt/i.test(why) ? `The database file is damaged or was changed outside the app (${why})` : why);
+  }
+  opened = conn;
+  writeDurably(SESSION_FILE, JSON.stringify({ open: true, startedAt: new Date().toISOString() }));
+  return opened;
+}
+
+// One transaction at a time, as one connection allows (transactionGate, database.mjs): while the page has one open, its
+// other queries (and any other transaction) wait for it to end. A page that reloads or crashes mid-transaction is
+// rolled back, so a page that's gone can't hold the database.
+const gate = transactionGate(() => database());
+const rollbackAll = () => gate.rollback();
 
 /** Closes the database (if it opened) and moves its folder aside, never deleting it. Returns where it went. */
 async function setAsideDatabase() {
   await requireUnlocked();
-  for (const tx of transactions.values()) tx.rollback(new Error("The database is being replaced"));
-  if (dbPromise) {
-    try { await (await dbPromise).close(); } catch { /* it never opened */ }
-    dbPromise = undefined;
+  rollbackAll();
+  if (opened) {
+    try { opened.db.close(); } catch { /* it never opened properly */ }
+    opened = null;
   }
   if (!fs.existsSync(DATA_DIR)) return null;
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
@@ -108,11 +115,7 @@ async function setAsideDatabase() {
   return aside;
 }
 
-/** Open transactions by id, each owned by the page (webContents) that began it. */
-const transactions = new Map();
-let nextTx = 1;
-
-/** Runs a handler and returns its result or a plain error, so the page sees Postgres' own message. */
+/** Runs a handler and returns its result or a plain error, so the page sees SQLite's own message. */
 function handle(channel, fn) {
   ipcMain.handle(channel, async (event, ...args) => {
     try {
@@ -123,61 +126,31 @@ function handle(channel, fn) {
   });
 }
 
-function target(txId) {
-  if (txId == null) return database();
-  const tx = transactions.get(txId);
-  if (!tx) throw new Error("The transaction has already finished");
-  return tx.sql;
-}
-
 handle("db:query", async (_e, sql, params, txId) => {
-  const { rows, affectedRows } = await (await target(txId)).query(sql, params);
-  return { rows, affectedRows };
+  await requireUnlocked();
+  return gate.run(txId, (db) => runQuery(db, sql, params ?? []));
 });
 handle("db:exec", async (_e, sql, txId) => {
-  await (await target(txId)).exec(sql);
-  return null;
+  await requireUnlocked();
+  return gate.run(txId, (db) => { db.exec(sql); return null; });
 });
-// PGlite runs a transaction as a callback; this one stays open until the page ends it.
-// Other queries wait for it, just as they do in the browser build.
 handle("db:begin", async (event) => {
-  const db = await database();
-  const id = nextTx++;
+  await requireUnlocked();
   const owner = event.sender.id;
   const page = pageGeneration(owner);
-  let opened;
-  const started = new Promise((r) => { opened = r; });
-  const tx = { sql: null, owner, commit: null, rollback: null, done: null };
-  tx.done = db.transaction((sql) => new Promise((commit, rollback) => {
-    // The page may have reloaded while this waited its turn; then nobody will ever end it.
-    if (pageGeneration(owner) !== page) { rollback(new Error("The page closed")); return; }
-    Object.assign(tx, { sql, commit, rollback });
-    transactions.set(id, tx);
-    opened();
-  }));
-  tx.done.catch(() => {}).finally(() => transactions.delete(id));
-  await Promise.race([started, tx.done]); // throws if the transaction couldn't start
-  return id;
+  // The page may have reloaded while this waited its turn; then nobody would ever end it.
+  return gate.begin(owner, () => pageGeneration(owner) === page);
 });
 handle("db:end", async (_e, txId, commit) => {
-  const tx = transactions.get(txId);
-  if (!tx) throw new Error("The transaction has already finished");
-  if (commit) tx.commit();
-  else tx.rollback(new Error("rolled back"));
-  try {
-    await tx.done;
-  } catch (e) {
-    if (commit) throw e;
-  }
+  gate.end(txId, commit);
   return null;
 });
 
-/** A page that reloads or crashes mid-transaction never finishes it: roll back so the database isn't held. */
 const generations = new Map();
 const pageGeneration = (ownerId) => generations.get(ownerId) ?? 0;
 function rollbackFor(ownerId) {
   generations.set(ownerId, pageGeneration(ownerId) + 1);
-  for (const tx of transactions.values()) if (tx.owner === ownerId) tx.rollback(new Error("The page closed"));
+  if (gate.owner === ownerId) rollbackAll();
 }
 
 // ---------------------------------------------------------------- security
@@ -186,8 +159,7 @@ let ring = null; // keyring.json's contents
 let dataKey = null; // only while unlocked
 let securityError = null; // why the keyring can't be used at all
 let deviceFailed = false; // there's no password, but Windows couldn't unlock the key (another computer or account)
-let justEncrypted = false; // this start converted an unencrypted database: the page says so once
-let encryptError = null; // converting failed: the data stays as it was, and it's tried again next start
+let encryptError = null; // sealing old backups failed: they stay as they were, and it's tried again next start
 let failures = 0; // wrong passwords or keys in a row
 
 let rewrapDevice = false; // Windows rotated its key: the device wrap should be made again with the new one
@@ -209,27 +181,6 @@ function saveKeyring(next) {
   ring = next;
 }
 
-/** A conversion stopped part-way (the app was closed or the power went): finish it, or undo it. */
-function finishInterruptedSwap() {
-  if (!fs.existsSync(UNENCRYPTED_DIR)) return;
-  if (!fs.existsSync(DATA_DIR)) {
-    // The encrypted copy was checked before the original moved, so it's safe to put in place.
-    fs.renameSync(fs.existsSync(ENCRYPTING_DIR) ? ENCRYPTING_DIR : UNENCRYPTED_DIR, DATA_DIR);
-  }
-  if (folderState(DATA_DIR) === "encrypted") fs.rmSync(UNENCRYPTED_DIR, { recursive: true, force: true });
-}
-
-/** An unencrypted database from before: encrypt a copy, check every file reads back the same, then swap. */
-function encryptExistingDatabase() {
-  if (folderState(DATA_DIR) !== "plain") return false;
-  fs.rmSync(ENCRYPTING_DIR, { recursive: true, force: true }); // an attempt that stopped before its check
-  encryptFolder(DATA_DIR, ENCRYPTING_DIR, dataKey);
-  fs.renameSync(DATA_DIR, UNENCRYPTED_DIR);
-  fs.renameSync(ENCRYPTING_DIR, DATA_DIR);
-  fs.rmSync(UNENCRYPTED_DIR, { recursive: true, force: true });
-  return true;
-}
-
 /** Backups from before encryption: sealed in place, each checked before it replaces the original. */
 function sealOldBackups() {
   for (const id of backupIds()) {
@@ -244,23 +195,20 @@ function sealOldBackups() {
   }
 }
 
-/** Once the key is known: convert what's still unencrypted. A failure leaves everything as it was. */
+/** Once the key is known: seal backups still unsealed. A failure leaves them as they were. */
 function afterUnlock() {
   failures = 0;
   try {
-    justEncrypted = encryptExistingDatabase() || justEncrypted;
     sealOldBackups();
     encryptError = null;
   } catch (e) {
     encryptError = e instanceof Error ? e.message : String(e);
-    fs.rmSync(ENCRYPTING_DIR, { recursive: true, force: true });
   }
 }
 
 /** Reads the keyring (making one on first run) and unlocks it if there's no password. */
 async function prepareSecurity() {
   try {
-    finishInterruptedSwap();
     let raw = null;
     try {
       raw = JSON.parse(fs.readFileSync(KEYRING_FILE, "utf8"));
@@ -270,8 +218,10 @@ async function prepareSecurity() {
     if (raw && !keyring.validKeyring(raw)) throw new Error("keyring.json is damaged");
     if (!raw) {
       // Never make a new key for data that already has one: it couldn't open it.
-      if (folderState(DATA_DIR) === "encrypted") throw new Error("keyring.json, which holds the key to this computer's payroll data, is missing");
-      const made = await keyring.createKeyring((await device()).protect);
+      if (fs.existsSync(DB_FILE)) throw new Error("keyring.json, which holds the key to this computer's payroll data, is missing");
+      const { protect } = await device();
+      const made = await keyring.createKeyring(protect);
+      if (protect) await windowsKeySaved();
       saveKeyring(made.ring);
       dataKey = made.dataKey;
     } else {
@@ -289,6 +239,22 @@ async function prepareSecurity() {
   }
 }
 
+/**
+ * Windows' protection (safeStorage) encrypts with a key Chromium keeps in the "Local State" file, which it writes some
+ * seconds after first use. A keyring saved before that, then a crash or power cut, would leave a device wrap nothing can
+ * open (and with no password yet, no recovery key either): the data would be locked for good. So the first keyring
+ * waits until that key is on the disk. Dying while waiting loses nothing: no keyring or data exists yet.
+ */
+async function windowsKeySaved(timeoutMs = 120_000) {
+  const file = path.join(app.getPath("userData"), "Local State");
+  for (const started = Date.now(); Date.now() - started < timeoutMs; await wait(250)) {
+    try {
+      if (JSON.parse(fs.readFileSync(file, "utf8"))?.os_crypt?.encrypted_key) return;
+    } catch { /* not written yet, or mid-write */ }
+  }
+  throw new Error("Windows didn't finish setting up the protection for this computer's key. Close the app and open it again.");
+}
+
 /** Set up once the app is ready (safeStorage needs that); every database and backup call waits for it. */
 let securityReady = null;
 async function requireUnlocked() {
@@ -304,8 +270,8 @@ function securityStatus() {
     error: securityError,
     ...(ring ? keyring.keyringStatus(ring) : { password: false, recovery: false, cloud: false, keyringId: null }),
     deviceFailed,
-    encrypted: fs.existsSync(DATA_DIR) ? folderState(DATA_DIR) !== "plain" : true,
-    justEncrypted,
+    encrypted: true,
+    justEncrypted: false,
     encryptError,
   };
 }
@@ -484,7 +450,7 @@ handle("backups:delete", async (_e, ids) => {
 });
 
 handle("desktop:info", () => ({ dataDir: DATA_DIR, backupDir: BACKUP_DIR, computerName: os.hostname() }));
-handle("desktop:session", () => ({ uncleanSince: lastSession?.open ? lastSession.startedAt ?? null : null }));
+handle("desktop:session", () => ({ uncleanSince: lastSession?.open ? lastSession.startedAt ?? null : null, movedOldDatabase }));
 handle("db:set-aside", () => setAsideDatabase());
 handle("desktop:open-folder", async (_e, which) => {
   const dir = which === "backups" ? BACKUP_DIR : DATA_DIR;
@@ -549,7 +515,7 @@ function createWindow() {
   const id = contents.id;
   contents.setWindowOpenHandler(({ url }) => { openOutside(url); return { action: "deny" }; });
   contents.on("will-navigate", (e, url) => {
-    if (!url.startsWith(ORIGIN)) { e.preventDefault(); openOutside(url); }
+    if (!url.startsWith(PAGE_ORIGIN)) { e.preventDefault(); openOutside(url); }
   });
   contents.on("did-start-navigation", (details) => {
     if (!details.isMainFrame || details.isSameDocument) return;
@@ -558,7 +524,7 @@ function createWindow() {
   });
   contents.on("render-process-gone", () => rollbackFor(id));
   contents.on("destroyed", () => rollbackFor(id));
-  void win.loadURL(`${ORIGIN}/dashboard`);
+  void win.loadURL(`${DEV_URL ?? ORIGIN}/dashboard`);
 }
 
 app.on("second-instance", () => {
@@ -576,15 +542,13 @@ app.whenReady().then(() => {
 
 app.on("window-all-closed", () => app.quit());
 
-// Close the database cleanly before exiting.
-let closed = false;
-app.on("will-quit", (e) => {
-  if (closed || !dbPromise) return;
-  e.preventDefault();
-  for (const tx of transactions.values()) tx.rollback(new Error("The app is closing"));
-  dbPromise
-    .then((db) => db.close())
-    .then(() => writeDurably(SESSION_FILE, JSON.stringify({ open: false, closedAt: new Date().toISOString() })))
-    .catch(() => {})
-    .finally(() => { closed = true; app.quit(); });
+// Close the database cleanly before exiting: SQLite folds its write-ahead log back into the file.
+app.on("will-quit", () => {
+  if (!opened) return;
+  rollbackAll();
+  try {
+    opened.db.close();
+    opened = null;
+    writeDurably(SESSION_FILE, JSON.stringify({ open: false, closedAt: new Date().toISOString() }));
+  } catch { /* the next start checks the file anyway */ }
 });

@@ -9,17 +9,14 @@ files:
   - electron/**
   - dist/client/**
   - build/icon.ico
-  # The pages are already bundled into dist/client; the main process only needs PGlite.
+  # The pages are already bundled into dist/client; the main process only needs SQLite (SQLCipher).
   - "!node_modules/**"
-  - node_modules/@electric-sql/pglite/package.json
-  - node_modules/@electric-sql/pglite/dist/**
-  - "!node_modules/@electric-sql/pglite/dist/**/*.map"
-  - "!node_modules/@electric-sql/pglite/dist/**/*.d.ts"
-  - "!node_modules/@electric-sql/pglite/dist/**/*.d.cts"
-  - "!node_modules/@electric-sql/pglite/dist/*.tar.gz"
-# PGlite reads its WebAssembly and data files from disk; keep them as real files.
+  - node_modules/better-sqlite3-multiple-ciphers/package.json
+  - node_modules/better-sqlite3-multiple-ciphers/lib/**
+  - node_modules/better-sqlite3-multiple-ciphers/prebuilds/win32-x64.node
+# A native module is loaded from a real file, not from inside the app archive.
 asarUnpack:
-  - node_modules/@electric-sql/pglite/**
+  - node_modules/better-sqlite3-multiple-ciphers/**
 win:
   target: nsis
   icon: build/icon.ico

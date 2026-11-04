@@ -2,7 +2,8 @@ import type { Tables, TablesInsert, TablesUpdate } from "@/integrations/supabase
 import { supabase } from "@/integrations/supabase/client";
 import { localDb } from "./local";
 import { getPrivateFields, stripPrivate } from "./privacy";
-import { tableColumns, type Row, type Sql, type SqlDb } from "./snapshot";
+import { decodeRow, encodeRow } from "./codec";
+import { insertEncoded, tableColumns, type Row, type Sql, type SqlDb } from "./snapshot";
 import type { TableName } from "./schema";
 import type { FrozenPay } from "@/lib/pay";
 import { localUndo, undoableStore } from "./undo";
@@ -79,10 +80,14 @@ async function attempt(fn: () => Promise<unknown>): Promise<Result> {
 }
 
 // ---------------------------------------------------------------- local
+// SQLite (electron/database.mjs). Values go in through the codec (codec.ts: true → 1, objects → JSON text, money
+// rounded to the cent…) and rows come back through it, in the same shapes the cloud and the snapshots use. Lists of
+// ids are bound as JSON arrays and read with json_each.
 
-const RECORD_WHERE = `($1::date is null or r.work_date >= $1::date) and ($2::date is null or r.work_date <= $2::date)
-  and ($3::text is null or r.entry_mode = $3) and ($4::uuid[] is null or r.employee_id = any($4::uuid[]))
-  and ($5::uuid[] is null or r.shift_id = any($5::uuid[]) or (r.shift_id is null and r.employee_id = any($6::uuid[])))`;
+const ids = (list: string[] | undefined | null) => (list ? JSON.stringify(list) : null);
+const RECORD_WHERE = `($1 is null or r.work_date >= $1) and ($2 is null or r.work_date <= $2)
+  and ($3 is null or r.entry_mode = $3) and ($4 is null or r.employee_id in (select value from json_each($4)))
+  and ($5 is null or r.shift_id in (select value from json_each($5)) or (r.shift_id is null and r.employee_id in (select value from json_each($6))))`;
 /** ORDER BY for a page of records (`r` joined to its employee `e`): the asked key, then newest first, then id so pages never overlap. */
 function recordOrder(sort: Sort<StoreSortKey> | undefined) {
   const dir = sort?.desc === false ? "asc" : "desc";
@@ -94,13 +99,29 @@ function recordOrder(sort: Sort<StoreSortKey> | undefined) {
     case "hours": return `r.hours ${dir} nulls last, ${newest}`;
   }
 }
-const recordParams = (f: RecordFilter) => [f.from || null, f.to || null, f.mode ?? null, f.employeeIds ?? null, f.shifts?.ids ?? null, f.shifts?.employeeIds ?? []];
+const recordParams = (f: RecordFilter) => [f.from || null, f.to || null, f.mode ?? null, ids(f.employeeIds), ids(f.shifts?.ids), ids(f.shifts?.employeeIds ?? [])];
 
-async function knownColumns(sql: Sql, table: TableName, keys: string[]) {
-  const cols = await tableColumns(sql, table);
+/** A record with its employee's name and rate, as the cloud's `employees(...)` join gave it. */
+const WITH_EMPLOYEE = `select r.*, e.id as e_id, e.first_name as e_first_name, e.last_name as e_last_name,
+  e.employee_code as e_employee_code, e.hourly_rate as e_hourly_rate
+  from time_records r left join employees e on e.id = r.employee_id`;
+function withEmployee(row: Row): RecordWithEmp {
+  const { e_id, e_first_name, e_last_name, e_employee_code, e_hourly_rate, ...record } = row;
+  return {
+    ...decodeRow<Tables<"time_records">>("time_records", record),
+    employees: e_id == null ? null : { first_name: e_first_name, last_name: e_last_name, employee_code: e_employee_code, hourly_rate: e_hourly_rate } as RecordWithEmp["employees"],
+  };
+}
+
+async function list<T>(sql: Sql, table: TableName, query: string, params: unknown[] = []): Promise<T[]> {
+  return (await sql.query<Row>(query, params)).rows.map((r) => decodeRow<T>(table, r));
+}
+
+function knownColumns(table: TableName, keys: string[]) {
+  const cols = tableColumns(table);
   const bad = keys.filter((k) => !cols.includes(k));
   if (bad.length) throw new Error(`Unknown column(s) for ${table}: ${bad.join(", ")}`);
-  return keys.map((k) => `"${k}"`).join(", ");
+  return keys;
 }
 
 /** Inserts rows grouped by which columns they set, so omitted columns get their defaults. */
@@ -111,25 +132,42 @@ async function insertRows(sql: Sql, table: TableName, rows: Row[], conflictColum
     groups.set(key, [...(groups.get(key) ?? []), r]);
   }
   for (const [key, group] of groups) {
-    const keys = key.split(",");
-    const list = await knownColumns(sql, table, keys);
+    const keys = knownColumns(table, key.split(","));
     let conflict = "";
     if (conflictColumn) {
       const sets = keys.filter((k) => k !== "id" && k !== conflictColumn).map((k) => `"${k}" = excluded."${k}"`);
       conflict = `on conflict ("${conflictColumn}") ${sets.length ? `do update set ${sets.join(", ")}` : "do nothing"}`;
     }
-    await sql.query(
-      `insert into ${table} (${list}) select ${list} from jsonb_populate_recordset(null::${table}, $1::jsonb) ${conflict}`,
-      [JSON.stringify(group)],
-    );
+    await insertEncoded(sql, table, keys, group, conflict);
   }
+}
+
+async function updateRow(sql: Sql, table: TableName, id: string, patch: Row) {
+  const keys = knownColumns(table, Object.keys(patch).filter((k) => k !== "id" && patch[k] !== undefined));
+  if (!keys.length) return;
+  const enc = encodeRow(table, patch);
+  await sql.query(`update ${table} set ${keys.map((k, i) => `"${k}" = $${i + 1}`).join(", ")} where id = $${keys.length + 1}`, [...keys.map((k) => enc[k] ?? null), id]);
 }
 
 async function saveFrozen(sql: Sql, rows: FrozenRow[]) {
   if (!rows.length) return;
   await sql.query(
-    "update time_records r set frozen_pay = f.pay from jsonb_to_recordset($1::jsonb) as f(id uuid, pay jsonb) where r.id = f.id",
+    `update time_records set frozen_pay = f.pay
+     from (select json_extract(value, '$.id') as id, json(json_extract(value, '$.pay')) as pay from json_each($1)) f
+     where time_records.id = f.id`,
     [JSON.stringify(rows)],
+  );
+}
+
+const now = () => new Date().toISOString();
+/** The settings row's upsert, setting only `cols` (the rest keep their values, or their defaults on a new row). */
+async function saveSettingsColumns(sql: Sql, values: Row) {
+  const enc = encodeRow("payroll_settings", { ...values, updated_at: now() });
+  const cols = Object.keys(enc);
+  await sql.query(
+    `insert into payroll_settings (id, ${cols.join(", ")}) values (1, ${cols.map((_, i) => `$${i + 1}`).join(", ")})
+     on conflict (id) do update set ${cols.map((c) => `${c} = excluded.${c}`).join(", ")}`,
+    cols.map((c) => enc[c]),
   );
 }
 
@@ -137,146 +175,99 @@ export function createLocalStore(getDb: () => Promise<SqlDb>): DataStore {
   return {
     kind: "local",
     async listEmployees() {
-      const db = await getDb();
-      return (await db.query<Employee>("select * from employees order by last_name")).rows;
+      return list<Employee>(await getDb(), "employees", "select * from employees order by last_name");
     },
     async listRecords(from, to) {
       const db = await getDb();
-      const { rows } = await db.query<RecordWithEmp>(
-        `select r.*, case when e.id is null then null else jsonb_build_object(
-            'first_name', e.first_name, 'last_name', e.last_name, 'employee_code', e.employee_code, 'hourly_rate', e.hourly_rate) end as employees
-         from time_records r left join employees e on e.id = r.employee_id
-         where ($1::date is null or r.work_date >= $1::date) and ($2::date is null or r.work_date <= $2::date)
+      const { rows } = await db.query<Row>(
+        `${WITH_EMPLOYEE} where ($1 is null or r.work_date >= $1) and ($2 is null or r.work_date <= $2)
          order by r.work_date desc limit ${RECORD_LIMIT}`,
         [from ?? null, to ?? null],
       );
-      return rows;
+      return rows.map(withEmployee);
     },
     async listRecordsPage(filter, offset, limit) {
       const db = await getDb();
       return db.transaction(async (tx) => {
-        const { rows } = await tx.query<RecordWithEmp>(
-          `select r.*, case when e.id is null then null else jsonb_build_object(
-              'first_name', e.first_name, 'last_name', e.last_name, 'employee_code', e.employee_code, 'hourly_rate', e.hourly_rate) end as employees
-           from time_records r left join employees e on e.id = r.employee_id
-           where ${RECORD_WHERE} order by ${recordOrder(filter.sort)} limit $7 offset $8`,
+        const { rows } = await tx.query<Row>(
+          `${WITH_EMPLOYEE} where ${RECORD_WHERE} order by ${recordOrder(filter.sort)} limit $7 offset $8`,
           [...recordParams(filter), limit, offset],
         );
-        const { rows: n } = await tx.query<{ n: number }>(`select count(*)::int as n from time_records r where ${RECORD_WHERE}`, recordParams(filter));
-        return { rows, total: n[0]?.n ?? 0 };
+        const { rows: n } = await tx.query<{ n: number }>(`select count(*) as n from time_records r where ${RECORD_WHERE}`, recordParams(filter));
+        return { rows: rows.map(withEmployee), total: n[0]?.n ?? 0 };
       });
     },
     async listRecordsMatching(filter) {
-      const db = await getDb();
-      return (await db.query<Tables<"time_records">>(`select r.* from time_records r where ${RECORD_WHERE} order by r.work_date desc, r.id`, recordParams(filter))).rows;
+      return list<Tables<"time_records">>(await getDb(), "time_records", `select r.* from time_records r where ${RECORD_WHERE} order by r.work_date desc, r.id`, recordParams(filter));
     },
     async listFieldDefs() {
-      const db = await getDb();
-      return (await db.query<Tables<"employee_field_defs">>("select * from employee_field_defs order by sort_order, created_at")).rows;
+      return list<Tables<"employee_field_defs">>(await getDb(), "employee_field_defs", "select * from employee_field_defs order by sort_order, created_at");
     },
     async listShifts() {
-      const db = await getDb();
-      return (await db.query<Tables<"shifts">>("select * from shifts order by sort_order, created_at")).rows;
+      return list<Tables<"shifts">>(await getDb(), "shifts", "select * from shifts order by sort_order, created_at");
     },
     async listAdjustments(from, to) {
-      const db = await getDb();
-      return (await db.query<Tables<"pay_adjustments">>(
-        `select * from pay_adjustments where ($1::date is null or pay_date >= $1::date) and ($2::date is null or pay_date <= $2::date)
-         order by pay_date desc`,
-        [from ?? null, to ?? null],
-      )).rows;
+      return list<Tables<"pay_adjustments">>(await getDb(), "pay_adjustments",
+        `select * from pay_adjustments where ($1 is null or pay_date >= $1) and ($2 is null or pay_date <= $2) order by pay_date desc`,
+        [from ?? null, to ?? null]);
     },
     async listPayRates() {
-      const db = await getDb();
-      return (await db.query<Tables<"pay_rates">>("select * from pay_rates order by employee_id, effective_from")).rows;
+      return list<Tables<"pay_rates">>(await getDb(), "pay_rates", "select * from pay_rates order by employee_id, effective_from");
     },
     async listRecordKeys(from, to) {
-      const db = await getDb();
-      return (await db.query<RecordKey>(`select ${RECORD_KEY_COLUMNS} from time_records where work_date between $1::date and $2::date`, [from, to])).rows;
+      return list<RecordKey>(await getDb(), "time_records", `select ${RECORD_KEY_COLUMNS} from time_records where work_date between $1 and $2`, [from, to]);
     },
     async getSettings() {
-      const db = await getDb();
-      return (await db.query<Tables<"payroll_settings">>("select * from payroll_settings limit 1")).rows[0] ?? null;
+      return (await list<Tables<"payroll_settings">>(await getDb(), "payroll_settings", "select * from payroll_settings limit 1"))[0] ?? null;
     },
     insert: (table, rows) => attempt(async () => {
       const db = await getDb();
       // All-or-nothing, like a bulk insert to the cloud.
       await db.transaction((tx) => insertRows(tx, table, (Array.isArray(rows) ? rows : [rows]) as Row[]));
     }),
-    update: (table, id, patch) => attempt(async () => {
-      const db = await getDb();
-      const keys = Object.keys(patch).filter((k) => k !== "id" && (patch as Row)[k] !== undefined);
-      if (!keys.length) return;
-      const list = await knownColumns(db, table, keys);
-      await db.query(`update ${table} set (${list}) = (select ${list} from jsonb_populate_record(null::${table}, $1::jsonb)) where id = $2`, [JSON.stringify(patch), id]);
-    }),
+    update: (table, id, patch) => attempt(async () => updateRow(await getDb(), table, id, patch as Row)),
     remove: (table, id) => attempt(async () => {
-      const db = await getDb();
-      await db.query(`delete from ${table} where id = $1`, [id]);
+      await (await getDb()).query(`delete from ${table} where id = $1`, [id]);
     }),
     async updateMany(table, rows) {
       const r = await attempt(async () => {
         const db = await getDb();
         await db.transaction(async (tx) => {
-          for (const { id, patch } of rows) {
-            const keys = Object.keys(patch).filter((k) => k !== "id" && (patch as Row)[k] !== undefined);
-            if (!keys.length) continue;
-            const list = await knownColumns(tx, table, keys);
-            await tx.query(`update ${table} set (${list}) = (select ${list} from jsonb_populate_record(null::${table}, $1::jsonb)) where id = $2`, [JSON.stringify(patch), id]);
-          }
+          for (const { id, patch } of rows) await updateRow(tx, table, id, patch as Row);
         });
       });
       return { ...r, updated: r.error ? 0 : rows.length };
     },
-    removeMany: (table, ids) => attempt(async () => {
-      const db = await getDb();
-      await db.query(`delete from ${table} where id = any($1::uuid[])`, [ids]);
+    removeMany: (table, list) => attempt(async () => {
+      await (await getDb()).query(`delete from ${table} where id in (select value from json_each($1))`, [JSON.stringify(list)]);
     }),
     upsertEmployeesByCode: (rows) => attempt(async () => {
       const db = await getDb();
       await db.transaction((tx) => insertRows(tx, "employees", rows as Row[], "employee_code"));
     }),
-    saveSettings: (s) => attempt(async () => {
-      const db = await getDb();
-      await db.query(
-        `insert into payroll_settings (id, ot_threshold, ot_multiplier, weekend_overtime, visible_columns, updated_at) values (true, $1, $2, $4, $3, now())
-         on conflict (id) do update set ot_threshold = excluded.ot_threshold, ot_multiplier = excluded.ot_multiplier, weekend_overtime = excluded.weekend_overtime,
-           visible_columns = excluded.visible_columns, updated_at = excluded.updated_at`,
-        [s.ot_threshold, s.ot_multiplier, s.visible_columns, s.weekend_overtime],
-      );
-    }),
-    saveEmployeeDefaults: (d) => attempt(async () => {
-      const db = await getDb();
-      await db.query(
-        `insert into payroll_settings (id, employee_defaults, updated_at) values (true, $1::jsonb, now())
-         on conflict (id) do update set employee_defaults = excluded.employee_defaults, updated_at = excluded.updated_at`,
-        [JSON.stringify(d)],
-      );
-    }),
+    saveSettings: (s) => attempt(async () => saveSettingsColumns(await getDb(), {
+      ot_threshold: s.ot_threshold, ot_multiplier: s.ot_multiplier, weekend_overtime: s.weekend_overtime, visible_columns: s.visible_columns,
+    })),
+    saveEmployeeDefaults: (d) => attempt(async () => saveSettingsColumns(await getDb(), { employee_defaults: d })),
     setLockedThrough: (date, freeze = []) => attempt(async () => {
       const db = await getDb();
       await db.transaction(async (tx) => {
         await saveFrozen(tx, freeze);
-        await tx.query(
-          `insert into payroll_settings (id, locked_through, updated_at) values (true, $1::date, now())
-           on conflict (id) do update set locked_through = excluded.locked_through, updated_at = excluded.updated_at`,
-          [date],
-        );
-        await tx.query("update time_records set unlocked = false where unlocked");
-        await tx.query("update time_records set frozen_pay = null where frozen_pay is not null and ($1::date is null or work_date > $1::date)", [date]);
+        await saveSettingsColumns(tx, { locked_through: date });
+        await tx.query("update time_records set unlocked = 0 where unlocked");
+        await tx.query("update time_records set frozen_pay = null where frozen_pay is not null and ($1 is null or work_date > $1)", [date]);
       });
     }),
-    setRecordsUnlocked: (ids, unlocked, freeze = []) => attempt(async () => {
+    setRecordsUnlocked: (list, unlocked, freeze = []) => attempt(async () => {
       const db = await getDb();
       await db.transaction(async (tx) => {
         if (!unlocked) await saveFrozen(tx, freeze);
-        await tx.query("update time_records set unlocked = $2 where id = any($1::uuid[]) and unlocked <> $2", [ids, unlocked]);
-        if (unlocked) await tx.query("update time_records set frozen_pay = null where id = any($1::uuid[]) and frozen_pay is not null", [ids]);
+        await tx.query("update time_records set unlocked = $2 where id in (select value from json_each($1)) and unlocked <> $2", [JSON.stringify(list), unlocked ? 1 : 0]);
+        if (unlocked) await tx.query("update time_records set frozen_pay = null where id in (select value from json_each($1)) and frozen_pay is not null", [JSON.stringify(list)]);
       });
     }),
     async countUnlockedRecords() {
-      const db = await getDb();
-      return (await db.query<{ n: number }>("select count(*)::int as n from time_records where unlocked")).rows[0]?.n ?? 0;
+      return (await (await getDb()).query<{ n: number }>("select count(*) as n from time_records where unlocked")).rows[0]?.n ?? 0;
     },
   };
 }

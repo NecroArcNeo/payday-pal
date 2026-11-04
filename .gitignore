@@ -34,3 +34,6 @@ dist-ssr
 
 # Desktop installers (npm run dist:win)
 release
+
+# `npm run dev`: the desktop window's test data (never real payroll data)
+.dev-data/

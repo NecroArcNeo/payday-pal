@@ -37,6 +37,11 @@
 - [x] **Row colours and tags on Time records** (done Nov 1, 2026): overtime rows orange by default; things to check, manual pay, weekend, other shift, unlocked, locked, resigned can each colour the row, be a tag, or be off (Colours button)
 - [x] Payroll period hint: an empty period says where the nearest records are (Nov 2, 2026)
 - [x] Fixed: test databases missing files (`could not open file "base/5/6104"`). Not the app or a force-kill: PGlite dated a new database's files January 1970 (seconds read as milliseconds), and Windows' temp-file cleanup deleted the "old" files in test folders under Temp. The file layer now leaves those dates out and repairs 1970 dates on open (`repairFileDates`) (Nov 2, 2026)
+- [x] Database moved to SQLite + SQLCipher (Nov 3, 2026): one encrypted file with a per-page HMAC instead of PGlite's ~1,000 files through our own XTS layer (secure-fs/durable-fs deleted); ~13 MB of memory instead of ~310 MB; opens in ms; `quick_check` at every start; desktop only (`npm run dev` opens the window). Also fixed: a crash in the first seconds after the very first start could lock the data for good (the keyring was saved before Windows' protection key was on disk)
+- [ ] Encrypted cloud vault: the cloud keeps only sealed snapshots it can't read; "Edit cloud directly" goes; second computers join with a link code; the recovery key can restore from the cloud (plan Step 6)
+- [ ] Remove the browser leftovers: cloud editing mode (`cloudStore`, `DataMode`), Google sign-in, the IndexedDB backups branch, the web/SSR build (plan Step 5)
+- [ ] Crash loop (kill during writes ~200 times, each restart passes `integrity_check`) and a tampered-file test in the desktop app (plan Step 7)
+- [ ] Restore the browser version's exported backup file into the desktop app and check the counts match
 - [x] Side panel on Time records: click a row to see how its pay is worked out and edit it (Nov 1, 2026)
 - [x] Right-click menu on Time records rows, and Ctrl+K search (Nov 2, 2026)
 - [ ] Next from the UI kit (Nov 1, 2026): progress bars and loading placeholders, resizable Employees list; then remove the unused UI components

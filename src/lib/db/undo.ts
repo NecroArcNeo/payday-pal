@@ -1,6 +1,7 @@
+import { decodeRow, encodeRow } from "./codec";
 import { localDb } from "./local";
 import { TABLES, type TableName } from "./schema";
-import type { Row, Sql, SqlDb } from "./snapshot";
+import { canonical, tableColumns, type Row, type Sql, type SqlDb } from "./snapshot";
 import type { DataStore } from "./store";
 
 /** One row written: what it was before (null for an insert) and after (null for a delete), as the database logged it. */
@@ -19,7 +20,7 @@ export class StaleUndoError extends Error {
 const LIMIT = 100;
 
 /**
- * Session-only undo/redo for the local database. Each action runs with the `_undo_log` trigger on (schema 11), so the
+ * Session-only undo/redo for the local database. Each action runs with the `_undo_log` triggers on, so the
  * step holds every row it changed, before and after. Undo writes the "before" rows back, newest first; redo writes the
  * "after" rows again. Each row is checked to still be exactly what the step left (or found) first, and the whole step
  * runs in one transaction, so it either fully happens or not at all. The lock triggers apply as to any write.
@@ -41,12 +42,13 @@ export class UndoHistory {
     let ops: UndoOp[] = [];
     try {
       await sql.query("delete from _undo_log");
-      await sql.query("select set_config('meridian.undo_log', 'on', false)");
+      await sql.query("select meridian_set('undo_log', 'on')");
       return await fn();
     } finally {
       try {
-        await sql.query("select set_config('meridian.undo_log', '', false)");
-        ops = (await sql.query<UndoOp>("select tbl, op, old, new from _undo_log order by seq")).rows;
+        await sql.query("select meridian_set('undo_log', '')");
+        ops = (await sql.query<{ tbl: TableName; op: UndoOp["op"]; old: string | null; new: string | null }>("select tbl, op, old, new from _undo_log order by seq")).rows
+          .map((r) => ({ tbl: r.tbl, op: r.op, old: logged(r.tbl, r.old), new: logged(r.tbl, r.new) }));
         await sql.query("delete from _undo_log");
       } finally {
         this.depth--;
@@ -91,7 +93,7 @@ export class UndoHistory {
     try {
       const sql = await this.getDb();
       await sql.transaction(async (tx) => {
-        await tx.query("select set_config('meridian.replaying', 'on', true)");
+        await tx.query("select meridian_set('replaying', 'on')");
         // A run can depend on one that comes later (undoing a shift's delete restores the employees moved off it,
         // which needs the shift back first), so a run that fails on a key or a row's state waits for a later pass;
         // only when a whole pass makes no progress has the data really changed since.
@@ -104,10 +106,11 @@ export class UndoHistory {
             try {
               if (await apply(tx, run)) { await tx.query("release savepoint undo_run"); continue; }
             } catch (e) {
-              if (!/foreign key|duplicate key/i.test((e as Error).message)) throw e;
+              if (!/foreign key|unique constraint/i.test((e as Error).message)) throw e;
               reason = e;
             }
             await tx.query("rollback to savepoint undo_run");
+            await tx.query("release savepoint undo_run");
             waiting.push(run);
           }
           if (waiting.length === pending.length) throw reason instanceof StaleUndoError ? reason : new StaleUndoError(what, step.label);
@@ -167,6 +170,18 @@ function runs(changes: Change[]): Change[][] {
   return out;
 }
 
+/** A row image from the log (the triggers' json_object of every column), as the app's values. */
+function logged(t: TableName, json: string | null): Row | null {
+  return json === null ? null : decodeRow(t, JSON.parse(json) as Row);
+}
+
+/** The row as it is now, or null. */
+async function current(tx: Sql, t: TableName, id: unknown): Promise<Row | null> {
+  const { rows } = await tx.query<Row>(`select * from ${t} where id = $1`, [id]);
+  return rows[0] ? decodeRow(t, rows[0]) : null;
+}
+const same = (a: Row | null, b: Row | null) => a !== null && b !== null && canonical(a) === canonical(b);
+
 /**
  * Writes one run, and says whether every row ended up as the step makes it. Only rows still exactly as the step left
  * them are changed or removed, and only missing rows are put back; a row already in its new state counts as done
@@ -176,25 +191,28 @@ async function apply(tx: Sql, run: Change[]): Promise<boolean> {
   const t = run[0]!.tbl;
   if (!TABLES.includes(t)) throw new Error(`Unknown table in undo history: ${t}`);
   const kind = run[0]!.kind;
-  const json = JSON.stringify(run.map(({ now, then }) => ({ now, then })));
-  const rowOf = (k: "now" | "then") => `jsonb_populate_record(null::${t}, e->'${k}')`;
-  if (kind === "put") {
-    await tx.query(`insert into ${t} select r.* from jsonb_array_elements($1::jsonb) e, ${rowOf("then")} r where not exists (select 1 from ${t} x where x.id = r.id)`, [json]);
-  } else if (kind === "change") {
-    const cols = (await tx.query<{ c: string }>(
-      "select column_name as c from information_schema.columns where table_schema = current_schema() and table_name = $1 and column_name <> 'id'", [t],
-    )).rows.map((r) => `"${r.c}" = n."${r.c}"`);
-    await tx.query(`update ${t} x set ${cols.join(", ")} from jsonb_array_elements($1::jsonb) e, ${rowOf("then")} n where x.id = n.id and to_jsonb(x) = e->'now'`, [json]);
-  } else {
-    await tx.query(`delete from ${t} x using jsonb_array_elements($1::jsonb) e where x.id = (${rowOf("now")}).id and to_jsonb(x) = e->'now'`, [json]);
+  const cols = tableColumns(t);
+  for (const { now, then } of run) {
+    const id = (then ?? now)!["id"];
+    const row = await current(tx, t, id);
+    if (kind === "put") {
+      if (row) continue;
+      const enc = encodeRow(t, then!);
+      await tx.query(`insert into ${t} (${cols.map((c) => `"${c}"`).join(", ")}) values (${cols.map((_, i) => `$${i + 1}`).join(", ")})`, cols.map((c) => enc[c] ?? null));
+    } else if (kind === "change") {
+      if (!same(row, now)) continue;
+      const enc = encodeRow(t, then!);
+      const set = cols.filter((c) => c !== "id");
+      await tx.query(`update ${t} set ${set.map((c, i) => `"${c}" = $${i + 1}`).join(", ")} where id = $${set.length + 1}`, [...set.map((c) => enc[c] ?? null), id]);
+    } else {
+      if (same(row, now)) await tx.query(`delete from ${t} where id = $1`, [id]);
+    }
   }
-  const { rows } = await tx.query<{ n: number }>(
-    kind === "remove"
-      ? `select count(*)::int as n from ${t} x, jsonb_array_elements($1::jsonb) e where x.id = (${rowOf("now")}).id`
-      : `select count(*)::int as n from ${t} x, jsonb_array_elements($1::jsonb) e where x.id = (${rowOf("then")}).id and to_jsonb(x) = e->'then'`,
-    [json],
-  );
-  return rows[0]?.n === (kind === "remove" ? 0 : run.length);
+  for (const { now, then } of run) {
+    const row = await current(tx, t, (then ?? now)!["id"]);
+    if (kind === "remove" ? row !== null : !same(row, then)) return false;
+  }
+  return true;
 }
 
 const NOUNS: Record<TableName, [string, string]> = {

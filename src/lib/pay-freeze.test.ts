@@ -1,18 +1,14 @@
 // @vitest-environment node
-import { PGlite, types } from "@electric-sql/pglite";
 import { describe, expect, it } from "vitest";
-import { migrate } from "./db/local";
+import { memoryDb } from "../test/sqlite-db";
 import { createLocalStore } from "./db/store";
 import { UndoHistory, undoableStore } from "./db/undo";
 import { payByRecord } from "./pay";
 import type { RateEntry } from "./pay-rates";
 import { lockThrough, setRecordsLocked } from "./pay-freeze";
 
-const parsers = { [types.NUMERIC]: (v: string) => Number(v), [types.DATE]: (v: string) => v, [types.TIMESTAMPTZ]: (v: string) => v };
-
 async function setup() {
-  const db = new PGlite({ parsers });
-  await migrate(db);
+  const db = await memoryDb();
   const history = new UndoHistory(async () => db);
   const store = undoableStore(createLocalStore(async () => db), history);
   await store.insert("employees", { employee_code: "E1", first_name: "Ada", last_name: "Lovelace", hourly_rate: 20 });

@@ -56,8 +56,8 @@ export interface DesktopBridge {
   };
   /** Where the database folder and the backup files are, and the computer's name. */
   info(): Promise<{ dataDir: string; backupDir: string; computerName: string }>;
-  /** When the previous session started, if it ended without closing the database (crash, power cut, forced quit). */
-  session(): Promise<{ uncleanSince: string | null }>;
+  /** Whether the last session ended without closing the database; where a pre-SQLite database was moved at this start. */
+  session(): Promise<{ uncleanSince: string | null; movedOldDatabase: string | null }>;
   openFolder(which: "data" | "backups"): Promise<null>;
   /** Runs `beforeClose` when the window is about to close; the window waits for it (up to 30 s). Replaces any earlier one. */
   onClosing(beforeClose: () => Promise<unknown>): void;

@@ -1,7 +1,8 @@
+import { COLUMNS, decodeRow, encodeRow } from "./codec";
 import { getPrivateFields } from "./privacy";
 import { SCHEMA_VERSION, TABLES, type TableName } from "./schema";
 
-/** The subset of PGlite this module needs (also satisfied by a PGlite transaction). */
+/** What this module needs of the database (also satisfied by a transaction). */
 export interface Sql {
   query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>;
 }
@@ -48,7 +49,7 @@ const TIMESTAMP = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(Z|[+-]\d\d:?\d\d)$/;
  * Sorted keys, so two copies of a row compare equal whichever order their columns came in, and timestamps
  * as UTC, since each database writes them in its own time zone.
  */
-const canonical = (v: unknown) =>
+export const canonical = (v: unknown) =>
   JSON.stringify(v, (_k, x: unknown) => {
     if (typeof x === "string" && TIMESTAMP.test(x)) return new Date(x).toISOString();
     if (x && typeof x === "object" && !Array.isArray(x)) return Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
@@ -83,7 +84,7 @@ export function describeDiff(c: SnapshotCounts): string | null {
 }
 
 /**
- * Reads every table. jsonb_agg gives ISO timestamps, matching what the cloud returns.
+ * Reads every table, decoded (codec.ts) into the same shapes the cloud and older backups use.
  * `schemaVersion` is for a database that hasn't been updated yet (backed up before its update): the
  * snapshot is stamped with that version and leaves out tables it doesn't have, so `upgrade` can bring it up later.
  */
@@ -91,14 +92,12 @@ export async function exportSnapshot(sql: Sql, schemaVersion = SCHEMA_VERSION): 
   const data = {} as Record<TableName, Row[]>;
   for (const t of TABLES) {
     if (schemaVersion !== SCHEMA_VERSION) {
-      const { rows } = await sql.query<{ found: boolean }>("select to_regclass($1) is not null as found", [t]);
-      if (!rows[0]?.found) continue;
+      const { rows } = await sql.query("select 1 from sqlite_master where type = 'table' and name = $1", [t]);
+      if (!rows.length) continue;
     }
     const order = t === "payroll_settings" ? "id" : t === "shifts" ? "sort_order, created_at, id" : "created_at, id";
-    const { rows } = await sql.query<{ rows: Row[] }>(
-      `select coalesce(jsonb_agg(x order by ${order}), '[]'::jsonb) as rows from ${t} x`,
-    );
-    data[t] = rows[0]?.rows ?? [];
+    const { rows } = await sql.query<Row>(`select * from ${t} order by ${order}`);
+    data[t] = rows.map((r) => decodeRow(t, r));
   }
   const snapshot: Snapshot = { format: BACKUP_FORMAT, schema_version: schemaVersion, created_at: new Date().toISOString(), data };
   // An older database (before an update) may lack columns the private-field check reads; restoring such a
@@ -188,28 +187,44 @@ export async function replaceWithSnapshot(
     for (const t of TABLES) {
       const rows = s.data[t];
       if (!rows.length) continue;
-      const cols = await tableColumns(tx, t);
-      // Only columns every row has; anything else falls back to the column default.
-      const use = cols.filter((c) => rows.every((r) => c in r));
-      if (!use.includes("id")) throw new Error(`Not a valid payroll backup: rows in "${t}" have no id`);
-      const list = use.map((c) => `"${c}"`).join(", ");
-      await tx.query(`insert into ${t} (${list}) select ${list} from jsonb_populate_recordset(null::${t}, $1::jsonb)`, [JSON.stringify(rows)]);
-      const { rows: n } = await tx.query<{ n: number }>(`select count(*)::int as n from ${t}`);
+      // Each row sets the columns it has; the rest fall back to their defaults (older backups lack newer columns).
+      // Rows are grouped by which columns they have, so one row missing a column never clears it for the others.
+      const groups = new Map<string, Row[]>();
+      for (const r of rows) {
+        const use = COLUMNS[t].map((c) => c.name).filter((c) => c in r);
+        if (!use.includes("id")) throw new Error(`Not a valid payroll backup: rows in "${t}" have no id`);
+        groups.set(use.join(","), [...(groups.get(use.join(",")) ?? []), r]);
+      }
+      for (const [use, group] of groups) await insertEncoded(tx, t, use.split(","), group);
+      const { rows: n } = await tx.query<{ n: number }>(`select count(*) as n from ${t}`);
       if (n[0]?.n !== rows.length) throw new Error(`Restore check failed for "${t}": expected ${rows.length} rows, found ${n[0]?.n}`);
     }
     if (hooks.after) await hooks.after(tx);
   });
 }
 
-const columnCache = new Map<string, string[]>();
-export async function tableColumns(sql: Sql, table: TableName): Promise<string[]> {
-  const hit = columnCache.get(table);
-  if (hit) return hit;
-  const { rows } = await sql.query<{ column_name: string }>(
-    `select column_name from information_schema.columns where table_schema = current_schema() and table_name = $1 order by ordinal_position`,
-    [table],
-  );
-  const cols = rows.map((r) => r.column_name);
-  if (cols.length) columnCache.set(table, cols);
-  return cols;
+/** SQLite takes up to 32,766 values per statement; stay well under it. */
+const MAX_VALUES = 30_000;
+
+/**
+ * Inserts rows (app values, encoded here) setting exactly `columns`, in as few statements as fit.
+ * `onConflict` is appended as is (an upsert clause).
+ */
+export async function insertEncoded(sql: Sql, table: TableName, columns: string[], rows: Row[], onConflict = "") {
+  const per = Math.max(1, Math.floor(MAX_VALUES / columns.length));
+  const list = columns.map((c) => `"${c}"`).join(", ");
+  for (let i = 0; i < rows.length; i += per) {
+    const chunk = rows.slice(i, i + per);
+    const values: unknown[] = [];
+    const tuples = chunk.map((r) => {
+      const enc = encodeRow(table, Object.fromEntries(columns.map((c) => [c, r[c]])));
+      return `(${columns.map((c) => { values.push(enc[c] ?? null); return `$${values.length}`; }).join(", ")})`;
+    });
+    await sql.query(`insert into ${table} (${list}) values ${tuples.join(", ")} ${onConflict}`, values);
+  }
+}
+
+/** A table's columns, in order. */
+export function tableColumns(table: TableName): string[] {
+  return COLUMNS[table].map((c) => c.name);
 }

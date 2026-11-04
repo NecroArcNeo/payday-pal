@@ -2,7 +2,7 @@ import { createFileRoute, Outlet } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { toast } from "sonner";
-import { localDb, OtherTabError } from "@/lib/db/local";
+import { localDb, NotDesktopError } from "@/lib/db/local";
 import { listBackups, saveBackup } from "@/lib/db/backups";
 import { RecoveryScreen } from "@/components/RecoveryScreen";
 import { LockScreen } from "@/components/LockScreen";
@@ -48,15 +48,22 @@ async function warnIfUnclean() {
   );
 }
 
-/** What the data's encryption did at this start, said once: converted, or couldn't convert yet. */
+/** Backups from before encryption that couldn't be sealed yet: said once (the app tries again next start). */
 function reportEncryption(s: SecurityStatus | null | undefined) {
-  if (!s) return;
-  if (s.justEncrypted) {
-    toast.success("Your payroll data and automatic backups on this computer are now encrypted. You can add an app password on Sync & backup.", { duration: 15_000 });
+  if (s?.encryptError) {
+    toast.warning(`Some older backups couldn't be encrypted yet (${s.encryptError}). They're kept as they were; the app tries again next time it starts.`, { duration: 20_000 });
   }
-  if (s.encryptError) {
-    toast.warning(`Your payroll data couldn't be encrypted yet (${s.encryptError}). It opened as before; the app tries again next time it starts.`, { duration: 20_000 });
-  }
+}
+
+/** A database from before the move to SQLite was set aside at this start: say where, and how to get the data back. */
+async function reportOldDatabase() {
+  const moved = desktop ? (await desktop.session()).movedOldDatabase : null;
+  if (!moved) return;
+  const newest = (await listBackups().catch(() => []))[0];
+  toast.info(
+    `This version keeps your data in a new kind of file. The previous database was kept in ${moved}. ${newest ? `Restore your newest backup (${new Date(newest.created_at).toLocaleString()}) on Sync & backup to bring your data across.` : "Restore a backup file on Sync & backup to bring your data across."}`,
+    { duration: 60_000 },
+  );
 }
 
 function DataGate() {
@@ -68,7 +75,7 @@ function DataGate() {
     staleTime: Infinity,
     retry: false,
   });
-  const unlocked = !desktop || security.data?.state === "unlocked";
+  const unlocked = security.data?.state === "unlocked";
   const ready = useQuery({
     queryKey: ["local-db-ready"],
     enabled: unlocked,
@@ -76,6 +83,7 @@ function DataGate() {
       await localDb();
       reportEncryption(queryClient.getQueryData<SecurityStatus | null>(SECURITY_STATUS_KEY));
       void warnIfUnclean();
+      void reportOldDatabase();
       await autoBackup();
       // The desktop app asks before its window closes, so the last changes get backed up too.
       desktop?.onClosing(() => autoBackup(0));
@@ -101,6 +109,7 @@ function DataGate() {
     }
   }, [mode, isSuccess, session]);
 
+  if (!desktop) return <NotDesktop />;
   if (security.data && security.data.state !== "unlocked") {
     return <LockScreen status={security.data} onUnlocked={(s) => queryClient.setQueryData(SECURITY_STATUS_KEY, s)} />;
   }
@@ -108,17 +117,18 @@ function DataGate() {
   if (ready.isPending) {
     return <div className="flex min-h-screen items-center justify-center bg-background text-sm text-muted-foreground">Opening your payroll data…</div>;
   }
-  if (ready.isError) {
-    if (!(ready.error instanceof OtherTabError)) return <RecoveryScreen error={ready.error} />;
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-background px-6">
-        <div className="glass-panel max-w-md p-7 text-center">
-          <div className="font-display text-xl font-extrabold tracking-tight">Already open in another tab</div>
-          <p className="mt-2 text-sm text-muted-foreground">{ready.error.message}</p>
-          <button onClick={() => location.reload()} className="mt-5 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground">Reload</button>
-        </div>
-      </div>
-    );
-  }
+  if (ready.isError) return <RecoveryScreen error={ready.error} />;
   return <Outlet />;
+}
+
+/** Opened in a plain browser tab: the data lives in the desktop app, so say where to find it. */
+function NotDesktop() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-background px-6">
+      <div className="glass-panel max-w-md p-7 text-center">
+        <div className="font-display text-xl font-extrabold tracking-tight">Meridian runs in its desktop window</div>
+        <p className="mt-2 text-sm text-muted-foreground">{new NotDesktopError().message}</p>
+      </div>
+    </div>
+  );
 }

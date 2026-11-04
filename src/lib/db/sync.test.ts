@@ -3,8 +3,10 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { PGlite, types } from "@electric-sql/pglite";
 import { beforeEach, describe, expect, it } from "vitest";
-import { migrate } from "./local";
-import { LOCAL_MIGRATIONS, SCHEMA_VERSION } from "./schema";
+import { memoryDb } from "../../test/sqlite-db";
+import { migrate, type LocalDb } from "./local";
+import { SCHEMA_VERSION } from "./schema";
+import { SQLITE_BASE_VERSION, SQLITE_MIGRATIONS } from "./sqlite-schema";
 import { countRows, describeDiff, diffCounts, exportSnapshot, isEmpty, replaceWithSnapshot, validateSnapshot, type Snapshot } from "./snapshot";
 import { createLocalStore } from "./store";
 import { deviceIdentity, maybeAutoBackup, pull, push, restoreSnapshot, setDeviceName, setPrivateFields, SyncConflictError, type CloudSync, type SyncDeps } from "./sync";
@@ -15,11 +17,8 @@ import { customKey, getPrivateFields, PERSONAL_DETAILS, privateFieldsConfirmed, 
 const parsers = { [types.NUMERIC]: (v: string) => Number(v), [types.DATE]: (v: string) => v, [types.TIMESTAMPTZ]: (v: string) => v };
 const migration = (name: string) => readFileSync(path.resolve(__dirname, "../../../drizzle/migrations", name), "utf8");
 
-async function newLocal() {
-  const db = new PGlite({ parsers });
-  await migrate(db);
-  return db;
-}
+/** This computer's database: SQLite, as in the desktop app. */
+const newLocal = memoryDb;
 
 // A stand-in for Supabase: the real cloud migrations, with auth.uid() read from a setting.
 async function newCloud() {
@@ -71,7 +70,7 @@ const B = "00000000-0000-4000-8000-00000000000b";
 /** A push made straight through the cloud API, not by one of the test computers. */
 const ELSEWHERE = { id: "elsewhere", name: "Elsewhere" };
 
-async function seed(db: PGlite, code: string) {
+async function seed(db: LocalDb, code: string) {
   const store = createLocalStore(async () => db);
   expect((await store.insert("employees", { employee_code: code, first_name: "Ada", last_name: "Lovelace", hourly_rate: 20 })).error).toBeNull();
   const emp = (await store.listEmployees()).find((e) => e.employee_code === code)!;
@@ -82,7 +81,7 @@ async function seed(db: PGlite, code: string) {
   return { store, emp };
 }
 
-function deps(db: PGlite, cloud: CloudSync, userId: string) {
+function deps(db: LocalDb, cloud: CloudSync, userId: string) {
   const backups: { reason: string; snapshot: Snapshot }[] = [];
   const d: SyncDeps = { db, cloud, userId, backup: async (reason, snapshot) => { backups.push({ reason, snapshot }); } };
   return { d, backups };
@@ -143,21 +142,6 @@ describe("shifts and manual pay (schema 2)", () => {
     expect((await store.listEmployees())[0]!.shift_id).toBeNull();
   });
 
-  it("upgrades an existing device database in place, putting everyone on the Day shift", async () => {
-    const db = new PGlite({ parsers });
-    await db.exec(`set time zone 'UTC'; create table _migrations (version integer primary key, applied_at timestamptz not null default now())`);
-    await db.exec(LOCAL_MIGRATIONS[0]!);
-    await db.exec(`insert into _migrations (version) values (1);
-      insert into employees (employee_code, first_name, last_name, hourly_rate) values ('OLD', 'Old', 'Timer', 21);
-      insert into time_records (employee_id, work_date, entry_mode, hours) select id, '2026-10-24', 'hours', 6 from employees;`);
-    await migrate(db);
-    const store = createLocalStore(async () => db);
-    const [day] = await store.listShifts();
-    expect((await store.listEmployees()).map((e) => [e.employee_code, e.shift_id])).toEqual([["OLD", day!.id]]);
-    expect((await store.listRecords()).map((r) => [r.hours, r.pay_override])).toEqual([[6, null]]);
-    expect((await store.getSettings())).toBeNull();
-  });
-
   it("still restores a backup made before shifts existed", async () => {
     const db = await newLocal();
     const { store } = await seed(db, "E1");
@@ -187,16 +171,9 @@ describe("pay type (schema 3)", () => {
     expect((await store.update("employees", emp.id, { pay_type: "weekly" })).error).not.toBeNull();
   });
 
-  it("upgrades a schema 2 device database and restores a schema 2 backup as hourly", async () => {
-    const db = new PGlite({ parsers });
-    await db.exec(`set time zone 'UTC'; create table _migrations (version integer primary key, applied_at timestamptz not null default now())`);
-    await db.exec(LOCAL_MIGRATIONS[0]!);
-    await db.exec(LOCAL_MIGRATIONS[1]!);
-    await db.exec(`insert into _migrations (version) values (1), (2);
-      insert into employees (employee_code, first_name, last_name, hourly_rate) values ('OLD', 'Old', 'Timer', 21);`);
-    await migrate(db);
-    const store = createLocalStore(async () => db);
-    expect((await store.listEmployees()).map((e) => [e.employee_code, e.pay_type])).toEqual([["OLD", "hourly"]]);
+  it("restores a schema 2 backup as hourly", async () => {
+    const db = await newLocal();
+    await seed(db, "OLD");
 
     const v2 = structuredClone(await exportSnapshot(db)) as unknown as { schema_version: number; data: Record<string, Record<string, unknown>[]> };
     v2.schema_version = 2;
@@ -317,9 +294,9 @@ describe("shift default times (schema 8)", () => {
 });
 
 describe("pay rate history (schema 9)", () => {
-  const ratesOf = async (db: PGlite, id: string) =>
-    (await db.query<{ effective_from: string; hourly_rate: number }>("select effective_from::text, hourly_rate::float8 as hourly_rate from pay_rates where employee_id = $1 order by effective_from", [id])).rows;
-  const today = async (db: PGlite) => (await db.query<{ d: string }>("select current_date::text as d")).rows[0]!.d;
+  const ratesOf = async (db: LocalDb, id: string) =>
+    (await db.query<{ effective_from: string; hourly_rate: number }>("select effective_from, hourly_rate from pay_rates where employee_id = $1 order by effective_from", [id])).rows;
+  const today = async (db: LocalDb) => (await db.query<{ d: string }>("select date('now', 'localtime') as d")).rows[0]!.d;
 
   it("keeps the old rate for earlier days whenever a rate changes, however it's changed", async () => {
     const db = await newLocal();
@@ -776,7 +753,7 @@ describe("which computer pushed", () => {
     await cloud.exec(`insert into auth.users values ('${A}', 'admin@example.com')`);
     await applySyncMigration(cloud);
   });
-  const named = (db: PGlite, name: string) => ({ ...deps(db, cloudAs(cloud, A), A).d, defaultDeviceName: name });
+  const named = (db: LocalDb, name: string) => ({ ...deps(db, cloudAs(cloud, A), A).d, defaultDeviceName: name });
 
   it("finds no differences between a computer and the copy it just pushed", async () => {
     const laptop = await newLocal();
@@ -1005,50 +982,28 @@ describe("restore and automatic backups", () => {
     expect(saved).toEqual(["automatic", "automatic", "automatic"]);
   });
 
-  it("backs up an existing database before updating it, stamped with its old version", async () => {
-    const db = new PGlite({ parsers });
-    await db.exec(`set time zone 'UTC'; create table _migrations (version integer primary key, applied_at timestamptz not null default now())`);
-    await db.exec(LOCAL_MIGRATIONS[0]!);
-    await db.exec(`insert into _migrations (version) values (1);
-      insert into employees (employee_code, first_name, last_name, hourly_rate) values ('OLD', 'Old', 'Timer', 21);`);
-    const saved: Snapshot[] = [];
-    await migrate(db, async (s) => { saved.push(s); });
-    expect(saved).toHaveLength(1);
-    expect(saved[0]!.schema_version).toBe(1);
-    expect(saved[0]!.data.employees.map((e) => e["employee_code"])).toEqual(["OLD"]);
-    expect("shifts" in saved[0]!.data).toBe(false);
+  it("leaves out tables a database from before an update doesn't have yet, and still restores its backup", async () => {
+    const db = await newLocal();
+    await seed(db, "OLD");
+    await db.exec("drop table pay_rates");
+    const old = await exportSnapshot(db, 8);
+    expect(old.schema_version).toBe(8);
+    expect("pay_rates" in old.data).toBe(false);
     // Saving it counts tables it doesn't have yet as empty (backups.ts counts every backup's rows).
-    expect(countRows(saved[0]!)).toMatchObject({ employees: 1, shifts: 0, pay_rates: 0 });
-    expect(isEmpty(saved[0]!)).toBe(false);
-    // And that backup still restores into the current version.
+    expect(countRows(old)).toMatchObject({ employees: 1, pay_rates: 0 });
     const fresh = await newLocal();
-    await replaceWithSnapshot(fresh, validateSnapshot(structuredClone(saved[0])));
+    await replaceWithSnapshot(fresh, validateSnapshot(structuredClone(old)));
     expect((await createLocalStore(async () => fresh).listEmployees()).map((e) => e.employee_code)).toEqual(["OLD"]);
-    // Already up to date, or brand new: no backup.
-    await migrate(db, async (s) => { saved.push(s); });
-    await migrate(new PGlite({ parsers }), async (s) => { saved.push(s); });
-    expect(saved).toHaveLength(1);
   });
 
-  it("backs up a schema 8 database before adding the rate history table", async () => {
-    const db = new PGlite({ parsers });
-    await db.exec(`set time zone 'UTC'; create table _migrations (version integer primary key, applied_at timestamptz not null default now())`);
-    for (let v = 1; v <= 8; v++) await db.transaction(async (tx) => { await tx.exec(LOCAL_MIGRATIONS[v - 1]!); await tx.query("insert into _migrations (version) values ($1)", [v]); });
-    await db.exec(`insert into employees (employee_code, first_name, last_name, hourly_rate) values ('OLD', 'Old', 'Timer', 21)`);
+  it("backs up nothing for a brand-new or up-to-date database", async () => {
     const saved: Snapshot[] = [];
-    await migrate(db, async (s) => { saved.push(s); countRows(s); });
-    expect(saved[0]!.schema_version).toBe(8);
-    expect("pay_rates" in saved[0]!.data).toBe(false);
-    expect(countRows(saved[0]!).pay_rates).toBe(0);
-    // Updated, and the old rate is kept when it changes.
-    await db.exec(`update employees set hourly_rate = 25`);
-    expect((await db.query<{ n: number }>("select count(*)::int as n from pay_rates")).rows[0]!.n).toBe(2);
-    const fresh = await newLocal();
-    await replaceWithSnapshot(fresh, validateSnapshot(structuredClone(saved[0])));
-    expect((await createLocalStore(async () => fresh).listEmployees()).map((e) => e.employee_code)).toEqual(["OLD"]);
+    const db = await newLocal();
+    await migrate(db, async (s) => { saved.push(s); });
+    expect(saved).toEqual([]);
   });
 
-  it("keeps the schema version equal to the number of local migrations (pre-update backups rely on it)", () => {
-    expect(LOCAL_MIGRATIONS.length).toBe(SCHEMA_VERSION);
+  it("keeps the schema version equal to the starting schema plus its migrations (pre-update backups rely on it)", () => {
+    expect(SQLITE_BASE_VERSION + SQLITE_MIGRATIONS.length).toBe(SCHEMA_VERSION);
   });
 });

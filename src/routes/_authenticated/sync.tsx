@@ -10,7 +10,7 @@ import { EMPLOYEE_SECTIONS } from "@/lib/employee-fields";
 import { useLabels } from "@/lib/labels";
 import { ALWAYS_SYNCED, confirmPrivateFields, customKey, DEFAULT_SHARED, getPrivateFields, PERSONAL_DETAILS, PRIVATE_COLUMNS, privateFieldsConfirmed } from "@/lib/db/privacy";
 import { cloudConfigured, setDataMode, useDataMode } from "@/lib/db/mode";
-import { localDb, requestPersistentStorage } from "@/lib/db/local";
+import { localDb } from "@/lib/db/local";
 import { desktop } from "@/lib/desktop";
 import { backupFileName, getBackup, listBackups, reasonLabel, saveBackup } from "@/lib/db/backups";
 import { readBackupFile, saveBackupFile } from "@/lib/backup-file";
@@ -46,7 +46,7 @@ function SyncPage() {
         const snapshot = await exportSnapshot(tx);
         return { state: await localSyncState(tx), counts: countRows(snapshot), empty: isEmpty(snapshot), exported: await exportState(tx) };
       });
-      return { ...read, persisted: navigator.storage?.persisted ? await navigator.storage.persisted() : null };
+      return read;
     },
   });
   const cloud = useQuery({
@@ -214,16 +214,10 @@ function SyncPage() {
           <p className="text-sm text-muted-foreground">
             {local.isError ? `Couldn't read this device's data: ${local.error.message}` : local.data ? describeCounts(local.data.counts) : "Loading…"}
           </p>
-          {desktop ? (
-            <p className="text-xs text-muted-foreground">
-              Stored on this computer in <code className="break-all">{folders.data?.dataDir ?? "…"}</code>.{" "}
-              <button className="underline underline-offset-2" onClick={() => openFolder("data")}>Open folder</button>
-            </p>
-          ) : (
           <p className="text-xs text-muted-foreground">
-            Stored in this browser. {local.data?.persisted === true ? "The browser has agreed to keep it." : local.data?.persisted === false ? "The browser may clear it if the disk gets full." : ""}
+            Stored on this computer in <code className="break-all">{folders.data?.dataDir ?? "…"}</code>.{" "}
+            <button className="underline underline-offset-2" onClick={() => openFolder("data")}>Open folder</button>
           </p>
-          )}
           {cloudConfigured && (
             <label className="flex items-center gap-2 text-xs text-muted-foreground">
               <span className="shrink-0">Name when syncing</span>
@@ -236,12 +230,6 @@ function SyncPage() {
                 onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
               />
             </label>
-          )}
-          {local.data?.persisted === false && (
-            <button className={btnGhost} onClick={() => run("persist", async () => {
-              const ok = await requestPersistentStorage();
-              if (ok) toast.success("The browser will keep this data"); else toast.warning("The browser declined. Keep downloading backup files.");
-            })}>Ask the browser to keep it</button>
           )}
           <div>
             <button onClick={() => switchMode("local")} disabled={mode === "local"} className={mode === "local" ? btnPrimary : btnGhost}>
