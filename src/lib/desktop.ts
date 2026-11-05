@@ -21,6 +21,25 @@ export type SecurityStatus = {
   encryptError: string | null;
 };
 
+export type BackupCopyStatus =
+  | { on: false }
+  | {
+    on: true;
+    folder: string;
+    /** How many of this computer's copies the folder keeps (copies of backups saved by the user are always kept). */
+    keep: number;
+    /** The copies are password-protected. */
+    protected: boolean;
+    /** The copies' key was sealed with a key this computer no longer has (after "start over"): the password must be set again. */
+    keyLost: boolean;
+    /** The last copy that worked: when, of which backup, and its file name. */
+    copied: { id: number; at: string; backupAt: string; file: string } | null;
+    /** The last try failed (cleared by the next one that works). */
+    error: { at: string; message: string } | null;
+    /** The folder is on the same drive as the app's own data. */
+    sameDrive: boolean;
+  };
+
 export interface DesktopBridge {
   db: {
     query<T = Record<string, unknown>>(sql: string, params?: unknown[], txId?: number): Promise<QueryResult<T>>;
@@ -54,11 +73,24 @@ export interface DesktopBridge {
     /** Only while locked: moves the database and keyring aside (kept) and starts empty with a new key. */
     startOver(): Promise<SecurityStatus>;
   };
+  /** Copies of the backups in a folder the user picks (electron/backup-copy.mjs). */
+  backupCopy: {
+    status(): Promise<BackupCopyStatus>;
+    /** The folder picker; null if cancelled. */
+    choose(): Promise<string | null>;
+    /** Throws with the reason when the folder can't take copies. */
+    check(folder: string): Promise<{ folder: string; sameDrive: boolean; cloudFolder: boolean }>;
+    /** `password`: a new one, null for none, left out to keep the current one. Copies straight away. */
+    set(choice: { folder?: string; keep?: number; password?: string | null }): Promise<BackupCopyStatus & { skipped?: number }>;
+    /** Stops copying; the copies already in the folder stay. */
+    off(): Promise<BackupCopyStatus>;
+    now(): Promise<BackupCopyStatus>;
+  };
   /** Where the database folder and the backup files are, and the computer's name. */
   info(): Promise<{ dataDir: string; backupDir: string; computerName: string }>;
   /** Whether the last session ended without closing the database; where a pre-SQLite database was moved at this start. */
   session(): Promise<{ uncleanSince: string | null; movedOldDatabase: string | null }>;
-  openFolder(which: "data" | "backups"): Promise<null>;
+  openFolder(which: "data" | "backups" | "copy"): Promise<null>;
   /** Runs `beforeClose` when the window is about to close; the window waits for it (up to 30 s). Replaces any earlier one. */
   onClosing(beforeClose: () => Promise<unknown>): void;
 }

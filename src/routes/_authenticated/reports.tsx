@@ -11,7 +11,7 @@ import { fullName, useEmployees } from "@/lib/payroll";
 type ReportsSearch = { emp?: string };
 
 export const Route = createFileRoute("/_authenticated/reports")({
-  head: () => ({ meta: [{ title: "Reports — Meridian Payroll" }] }),
+  head: () => ({ meta: [{ title: "Reports — KoPayroll" }] }),
   validateSearch: (s: Record<string, unknown>): ReportsSearch => (typeof s["emp"] === "string" && s["emp"] ? { emp: s["emp"] } : {}),
   component: ReportsPage,
 });

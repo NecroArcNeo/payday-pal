@@ -4,7 +4,8 @@ import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { AppShell, btnGhost, btnPrimary } from "@/components/AppShell";
-import { SecurityPanel } from "@/components/SecurityPanel";
+import { useBackupCopy } from "@/components/BackupCopyPanel";
+import { openSettings } from "@/lib/settings-window";
 import { useFieldDefs, usePrivateFields, useSession } from "@/lib/payroll";
 import { EMPLOYEE_SECTIONS } from "@/lib/employee-fields";
 import { useLabels } from "@/lib/labels";
@@ -14,15 +15,18 @@ import { localDb } from "@/lib/db/local";
 import { desktop } from "@/lib/desktop";
 import { backupFileName, getBackup, listBackups, reasonLabel, saveBackup } from "@/lib/db/backups";
 import { readBackupFile, saveBackupFile } from "@/lib/backup-file";
+import { askConfirm } from "@/lib/choice-prompt";
+import { SortControl, useTableSort } from "@/components/SortControl";
+import { sortTable, type SortColumns } from "@/lib/table-sort";
 import { countRows, describeCounts, describeDiff, exportSnapshot, isEmpty, validateSnapshot, type Snapshot } from "@/lib/db/snapshot";
 import {
   deviceIdentity, exportState, hasUnpushedChanges, localSyncState, markExported, pull, push, restoreSnapshot, setDeviceName, setPrivateFields,
   supabaseCloud, type SyncDeps,
 } from "@/lib/db/sync";
-import { Cloud, Download, FolderOpen, HardDrive, Lock, RotateCcw, Upload } from "lucide-react";
+import { Cloud, Download, FolderOpen, HardDrive, HardDriveDownload, Lock, RotateCcw, Upload } from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated/sync")({
-  head: () => ({ meta: [{ title: "Sync & backup — Meridian Payroll" }] }),
+  head: () => ({ meta: [{ title: "Sync & backup — KoPayroll" }] }),
   component: SyncPage,
 });
 
@@ -70,7 +74,10 @@ function SyncPage() {
   });
 
   const unpushed = user && local.data ? hasUnpushedChanges(local.data.state, user.id, local.data.empty) : false;
-  const exportDue = local.data && !local.data.empty && local.data.exported.changedSinceExport &&
+  // Copies going to another drive without trouble do what a downloaded file would.
+  const copy = useBackupCopy();
+  const copying = copy.data?.on && !copy.data.error && !copy.data.keyLost && !!copy.data.copied;
+  const exportDue = !copying && local.data && !local.data.empty && local.data.exported.changedSinceExport &&
     (!local.data.exported.exportedAt || Date.now() - Date.parse(local.data.exported.exportedAt) > EXPORT_REMINDER_DAYS * 86_400_000);
 
   const run = async (label: string, fn: () => Promise<void>) => {
@@ -115,12 +122,14 @@ function SyncPage() {
     const keep = await getPrivateFields(db);
     const send = [...PRIVATE_COLUMNS, ...defs.map((x) => customKey(x.id))].filter((k) => !keep.includes(k));
     const list = (keys: string[]) => (keys.length ? keys.map(fieldName).join(", ") : "nothing");
-    const ok = confirm(
-      "This is the first push from this computer. Check what will be uploaded to the cloud:\n\n"
-      + `Uploaded: employee ID, names, hourly rate, ${list(send)}.\n\n`
-      + `Stays on this computer only: ${list(keep)}.\n\n`
-      + 'To change this, cancel and use "Private fields" further down this page. Push with these settings?',
-    );
+    const ok = await askConfirm({
+      title: "Push with these settings?",
+      detail: "This is the first push from this computer. Check what will be uploaded to the cloud:\n\n"
+        + `Uploaded: employee ID, names, hourly rate, ${list(send)}.\n\n`
+        + `Stays on this computer only: ${list(keep)}.\n\n`
+        + 'To change this, cancel and use "Private fields" further down this page.',
+      confirm: "Push",
+    });
     if (ok) await confirmPrivateFields(db);
     return ok;
   };
@@ -143,7 +152,7 @@ function SyncPage() {
       const loss = diff
         ? `Compared with this computer, ${diff} differ. Pushing replaces the cloud copy with this computer's data, so those changes would be gone from the cloud (a copy is saved to Backups first).\n\nTo keep them instead, cancel and pull: this computer's data is backed up before a pull.`
         : "The data is the same on both sides, so pushing loses nothing.";
-      if (!confirm(`${why}\n\n${loss}\n\nPush and overwrite the cloud copy?`)) return;
+      if (!(await askConfirm({ title: "Push and overwrite the cloud copy?", detail: `${why}\n\n${loss}`, confirm: "Push and overwrite", danger: !!diff }))) return;
       r = await push(d, { confirmed: true });
     }
     if (r.kind === "done") toast.success(`Pushed to cloud: ${describeCounts(r.counts)}`);
@@ -159,7 +168,7 @@ function SyncPage() {
       const loss = diff
         ? `Compared with the cloud, ${diff} differ. Pulling replaces this computer's data with the cloud copy (${describeCounts(r.cloudCounts)}), so those changes would be gone from here. This computer's data is saved to Backups first, so you can restore it.`
         : "The data is the same on both sides, so pulling loses nothing.";
-      if (!confirm(`${why}.\n\n${loss}\n\nPull anyway?`)) return;
+      if (!(await askConfirm({ title: "Pull anyway?", detail: `${why}.\n\n${loss}`, confirm: "Pull and replace", danger: !!diff }))) return;
       r = await pull(d, { confirmed: true });
     }
     if (r.kind === "done") toast.success(`Pulled from cloud: ${describeCounts(r.counts)}`);
@@ -168,8 +177,12 @@ function SyncPage() {
   const restore = (snapshot: Snapshot, from: string, fromCloud = false) => run("restore", async () => {
     const s = validateSnapshot(snapshot);
     const kept = fromCloud ? " Private fields keep this device's values, since the cloud never had them." : "";
-    if (!confirm(`Replace the data on this device with ${from} (${describeCounts(countRows(s))})?\n\nThe current data is saved to Backups first.${kept}`)) return;
-    await restoreSnapshot(await localDb(), s, saveBackup, { keepPrivateFields: fromCloud });
+    if (!(await askConfirm({
+      title: `Replace the data on this device with ${from}?`,
+      detail: `It holds ${describeCounts(countRows(s))}.\n\nThe current data is saved to Backups first.${kept}`,
+      confirm: "Replace with this backup", danger: true,
+    }))) return;
+    await restoreSnapshot(await localDb(), s, saveBackup, { keepPrivateFields: fromCloud, from });
     toast.success("Backup restored on this device");
   });
 
@@ -271,11 +284,13 @@ function SyncPage() {
         </div>
       </section>
 
-      <PrivateFields busy={!!busy} onChange={(keys) => run("private", async () => {
-        await setPrivateFields(await localDb(), keys);
-      })} />
-
-      <SecurityPanel />
+      <section className="glass-panel flex flex-wrap items-center justify-between gap-3 p-5">
+        <p className="text-sm text-muted-foreground">Private fields, the app password and recovery key, and copying backups to another drive are in Settings.</p>
+        <span className="flex flex-wrap gap-2">
+          <button onClick={() => openSettings("privacy")} className={btnGhost}><Lock className="mr-1 inline h-4 w-4" />Privacy & security</button>
+          <button onClick={() => openSettings("backups")} className={btnGhost}><HardDriveDownload className="mr-1 inline h-4 w-4" />Backup copies</button>
+        </span>
+      </section>
 
       <section className="glass-panel space-y-3 p-5">
         <div className="font-display font-extrabold tracking-tight">Backup files</div>
@@ -303,7 +318,7 @@ function SyncPage() {
             </p>
           )}
         </div>
-        <BackupList
+        <BackupList id="device"
           rows={(backups.data ?? []).map((b) => ({ key: b.id, at: b.created_at, label: reasonLabel[b.reason] ?? b.reason, detail: describeCounts(b.counts) }))}
           empty={backups.isError ? `Couldn't read backups: ${backups.error.message}` : "No backups yet."}
           busy={!!busy}
@@ -318,7 +333,7 @@ function SyncPage() {
             <div className="font-display font-extrabold tracking-tight">Backups in the cloud</div>
             <p className="text-xs text-muted-foreground">The cloud keeps its previous copy every time something is pushed over it.</p>
           </div>
-          <BackupList
+          <BackupList id="cloud"
             rows={(cloudBackups.data ?? []).map((b) => ({ key: b.id, at: b.created_at, label: b.reason === "before-push" ? "Cloud copy, before a push replaced it" : "Cloud data before switching to local-first", detail: `version ${b.version}` }))}
             empty={cloudBackups.isError ? `Couldn't read cloud backups: ${cloudBackups.error.message}` : "No cloud backups yet."}
             busy={!!busy}
@@ -331,73 +346,34 @@ function SyncPage() {
   );
 }
 
-/** Ticks for the employee details that stay on this device and are never sent to the cloud. */
-function PrivateFields({ busy, onChange }: { busy: boolean; onChange: (keys: string[]) => void }) {
-  const { data: keys } = usePrivateFields();
-  const { data: defs = [] } = useFieldDefs();
-  const { label } = useLabels();
-  if (!keys) return null;
-  const groups = [
-    ...EMPLOYEE_SECTIONS.map((s) => ({ title: label(`section:${s.title}`, s.title), items: s.fields.filter((f) => !ALWAYS_SYNCED.includes(f.k)).map((f) => ({ key: f.k, label: label(f.k, f.label) })) })),
-    { title: "Other", items: [{ key: "notes", label: label("notes", "Notes") }, ...defs.map((d) => ({ key: customKey(d.id), label: label(customKey(d.id), d.label) }))] },
-  ];
-  const everything = [...PRIVATE_COLUMNS, ...defs.map((d) => customKey(d.id))];
-  const toggle = (k: string, on: boolean) => onChange(on ? [...keys, k] : keys.filter((x) => x !== k));
-  const preset = "rounded-lg bg-secondary px-2.5 py-1.5 text-xs text-muted-foreground ring-1 ring-border hover:text-foreground disabled:opacity-50";
-  return (
-    <section className="glass-panel space-y-4 p-5">
-      <div>
-        <div className="flex items-center gap-2 font-display font-extrabold tracking-tight"><Lock className="h-4 w-4" /> Private fields</div>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Ticked details stay on this device and are never sent to the cloud: pushing leaves them blank in the cloud copy, and pulling keeps this device's values.
-          Employee ID, names and hourly rate always sync, since payroll needs them. Categories you add later start out private.
-        </p>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Making a field private after pushing? Push again to remove it from the cloud copy; older copies under "Backups in the cloud" still contain it.
-          Backups on this computer and backup files you download keep everything; downloaded files ask for a password.
-        </p>
-      </div>
-      <div className="flex flex-wrap gap-1.5">
-        <button type="button" className={preset} disabled={busy} onClick={() => onChange(everything.filter((k) => !DEFAULT_SHARED.includes(k)))}>Recommended: only work details sync</button>
-        <button type="button" className={preset} disabled={busy} onClick={() => onChange(everything)}>Every detail</button>
-        <button type="button" className={preset} disabled={busy} onClick={() => onChange(PERSONAL_DETAILS)}>Only personal details</button>
-        <button type="button" className={preset} disabled={busy} onClick={() => onChange([])}>Sync everything</button>
-      </div>
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {groups.map((g) => (
-          <div key={g.title}>
-            <div className="mb-1.5 text-xs font-semibold text-muted-foreground">{g.title}</div>
-            <div className="space-y-1">
-              {g.items.map((it) => (
-                <label key={it.key} className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" disabled={busy} checked={keys.includes(it.key)} onChange={(e) => toggle(it.key, e.target.checked)} />
-                  {it.label}
-                </label>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
 async function fetchCloudBackup(id: number): Promise<Snapshot> {
   const { data, error } = await supabase.from("cloud_backups").select("snapshot").eq("id", id).single();
   if (error) throw new Error(error.message);
   return validateSnapshot(data.snapshot);
 }
 
-function BackupList({ rows, empty, busy, onDownload, onRestore }: {
-  rows: { key: number; at: string; label: string; detail: string }[];
+type BackupRow = { key: number; at: string; label: string; detail: string };
+/** A list of backups sorts by when it was saved (newest first) or by what kind it is (manual ones together, say). */
+const BACKUP_COLUMNS: SortColumns<BackupRow> = {
+  date: { label: "When", kind: "date", value: (r) => r.at },
+  kind: { label: "Kind", kind: "text", value: (r) => r.label },
+};
+
+function BackupList({ id, rows, empty, busy, onDownload, onRestore }: {
+  /** Where its sort is remembered. */ id: string;
+  rows: BackupRow[];
   empty: string; busy: boolean;
   onDownload: (key: number) => Promise<void>; onRestore: (key: number) => Promise<void>;
 }) {
+  const [sort, setSort] = useTableSort(`meridian-backups-sort:${id}`, BACKUP_COLUMNS, { by: "date", desc: true });
   const safely = (fn: () => Promise<void>) => fn().catch((e) => toast.error((e as Error).message));
   if (!rows.length) return <div className="px-5 py-6 text-sm text-muted-foreground">{empty}</div>;
+  // Ties (same kind) newest first.
+  const shown = sortTable(rows, sort, BACKUP_COLUMNS, (a, b) => b.at.localeCompare(a.at));
   return (
     <div className="max-h-96 divide-y divide-border overflow-y-auto">
-      {rows.map((r) => (
+      {rows.length > 1 && <div className="flex justify-end px-5 py-2"><SortControl value={sort} onChange={setSort} columns={BACKUP_COLUMNS} /></div>}
+      {shown.map((r) => (
         <div key={r.key} className="flex items-center justify-between gap-4 px-5 py-3 text-sm">
           <div className="min-w-0">
             <div className="font-medium">{r.label}</div>

@@ -10,6 +10,7 @@ import { EmployeePicker } from "@/components/EmployeeSearch";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { DataTable } from "@/components/DataTable";
 import { Check, Plus, X } from "lucide-react";
+import { TaskProgress } from "@/components/Loading";
 import { NO_DEFAULTS } from "@/lib/employee-fields";
 import { fullName, useEmployeeDefaults, useEmployees, useFieldDefs, useShifts, type Employee, type FieldDef } from "@/lib/payroll";
 import {
@@ -17,8 +18,10 @@ import {
   type DateOrder, type PersonRow, type RecordRow, type Role, type Sheet, type SheetSetup, type Target,
 } from "@/lib/import/parse";
 
+const IMPORT_STEPS = 4;
+
 export const Route = createFileRoute("/_authenticated/import")({
-  head: () => ({ meta: [{ title: "Import — Meridian Payroll" }] }),
+  head: () => ({ meta: [{ title: "Import — KoPayroll" }] }),
   component: ImportPage,
 });
 
@@ -95,6 +98,9 @@ function ImportPage() {
   const [active, setActive] = useState(0);
   const [skipDuplicates, setSkipDuplicates] = useState(true);
   const [busy, setBusy] = useState(false);
+  // Which step of the import is running (backing up, categories, people, hours): each is one database call, so the
+  // bar moves by step rather than by row.
+  const [step, setStep] = useState<{ done: number; label: string } | null>(null);
   const [drag, setDrag] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -169,7 +175,9 @@ function ImportPage() {
     setBusy(true);
     try {
       // 1. Back up what the import is about to change.
+      setStep({ done: 0, label: "Backing up first" });
       await backupBefore("import");
+      setStep({ done: 1, label: "Adding categories" });
 
       // 2. Categories the user asked to create from columns.
       const created = new Map<Target, string>();
@@ -184,6 +192,7 @@ function ImportPage() {
       }
 
       // 3. People, then re-read employees so new people's hours can link to them.
+      setStep({ done: 2, label: "Adding people" });
       const taken = new Set(employees.map((e) => e.employee_code.toLowerCase()));
       const resolve = (t: Target) => (t.startsWith("custom:") ? t.slice(7) : created.get(t));
       const people: PersonRow[] = sheets.flatMap((s, i) => (setups[i]!.role === "people" ? parsePeople(s, setups[i]!, employees, taken, resolve, shifts, defaults, typeOf).ok : []));
@@ -195,6 +204,7 @@ function ImportPage() {
       }
 
       // 4. Hours, minus shifts already in the app.
+      setStep({ done: 3, label: "Adding time records" });
       let recs: RecordRow[] = sheets.flatMap((s, i) => (setups[i]!.role === "records" ? parseRecords(s, setups[i]!, fresh).ok : []));
       let skipped = 0;
       if (skipDuplicates && recs.length) {
@@ -217,6 +227,7 @@ function ImportPage() {
       toast.error(`Import stopped: ${(e as Error).message}`);
     } finally {
       setBusy(false);
+      setStep(null);
     }
   };
 
@@ -323,6 +334,7 @@ function ImportPage() {
                 <button disabled={!total || busy} onClick={() => undoable("imported a file", commit)} className={btnPrimary}>{busy ? "Importing…" : `Import ${total} rows`}</button>
               </div>
             </div>
+            {step && <TaskProgress done={step.done} total={IMPORT_STEPS} label={`${step.label}…`} />}
             {problems.length > 0 && (
               <ul className="max-h-48 space-y-1 overflow-auto rounded-xl bg-secondary p-3 font-mono text-[11px] text-destructive">
                 {problems.slice(0, 200).map((e, i) => <li key={i}>{e}</li>)}

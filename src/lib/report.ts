@@ -199,6 +199,43 @@ export function buildReport(input: ReportInput): Report {
   return { buckets, series, values, seriesTotals, total, unit };
 }
 
+/** The statistics cards a report can show, in the order they're shown. */
+export const STATS = {
+  total: "Total", average: "Average", highest: "Highest", lowest: "Lowest", compare: "Compared with",
+} as const;
+export type StatKey = keyof typeof STATS;
+export const DEFAULT_STATS: StatKey[] = ["total", "average", "highest", "compare"];
+
+export type ReportStats = {
+  /** The figure for the whole range (people and pay per hour are over the range, not added up). */
+  total: number;
+  /** Per day/week/month/year (the report's grouping), over the ones that have started by `today`. */
+  average: number;
+  /** How many days/weeks… the average is over. */
+  averageOver: number;
+  highest: { value: number; bucket: Bucket } | null;
+  lowest: { value: number; bucket: Bucket } | null;
+};
+
+/**
+ * The cards' numbers for a report. Each day/week/month's figure is its series added up, or (pay per hour, which doesn't
+ * add up) its only series. The average, highest and lowest leave out days/weeks… that haven't started yet, so the rest
+ * of this month doesn't count as a quiet week; quiet ones that have started count (a week off is a real lowest).
+ */
+export function reportStats(report: Report, today: string, additive: boolean): ReportStats {
+  const figure = (i: number) => (additive ? report.values[i]!.reduce((a, b) => a + b, 0) : report.values[i]![0] ?? 0);
+  const started = report.buckets.map((b, i) => ({ bucket: b, value: figure(i) })).filter((x) => x.bucket.from <= today);
+  const pick = (better: (a: number, b: number) => boolean) =>
+    started.reduce<{ value: number; bucket: Bucket } | null>((best, x) => (!best || better(x.value, best.value) ? x : best), null);
+  return {
+    total: report.total,
+    average: started.reduce((a, x) => a + x.value, 0) / Math.max(1, started.length),
+    averageOver: started.length,
+    highest: pick((a, b) => a > b),
+    lowest: pick((a, b) => a < b),
+  };
+}
+
 /** Ready-made ranges for reports, worked out from `today` each time. Whole calendar months, so monthly bars are complete. */
 export const REPORT_RANGES = {
   this_month: "This month", last_month: "Last month", last_3_months: "Last 3 months", last_6_months: "Last 6 months",

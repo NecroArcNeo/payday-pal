@@ -23,10 +23,10 @@ To run a production build: `npm run build`, then `node .output/server/index.mjs`
 
 ```sh
 npm run desktop    # build the pages and open them in the desktop app
-npm run dist:win   # build the installer: release/Meridian Payroll Setup <version>.exe
+npm run dist:win   # build the installer: release/KoPayroll Setup <version>.exe
 ```
 
-The installer is for the current Windows user (no administrator prompt) and isn't code-signed, so a copy sent over the internet shows "Windows protected your PC" once when installing (More info → Run anyway). In the desktop app the database is in `%APPDATA%\Meridian Payroll\database` and the automatic backups are files in `%APPDATA%\Meridian Payroll\Backups` (not Documents, which OneDrive may sync to the cloud). Uninstalling keeps both. For a copy off the computer, use **Download backup file**: it asks for a password and encrypts the file. To move data from the browser version, download a backup file there and restore it on the desktop app's Sync & backup page.
+The installer is for the current Windows user (no administrator prompt) and isn't code-signed, so a copy sent over the internet shows "Windows protected your PC" once when installing (More info → Run anyway). In the desktop app the database is in `%APPDATA%\KoPayroll\database` and the automatic backups are files in `%APPDATA%\KoPayroll\Backups` (not Documents, which OneDrive may sync to the cloud). Uninstalling keeps both. For a copy off the computer, use **Download backup file**: it asks for a password and encrypts the file. To move data from the browser version, download a backup file there and restore it on the desktop app's Sync & backup page.
 
 ### Cloud sync setup (optional)
 

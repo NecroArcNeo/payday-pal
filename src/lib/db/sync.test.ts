@@ -46,6 +46,7 @@ const applySyncMigration = async (cloud: PGlite) => {
   await cloud.exec(migration("0013_lock_paid_days.sql"));
   await cloud.exec(migration("0014_unlock_records.sql"));
   await cloud.exec(migration("0015_frozen_pay.sql"));
+  await cloud.exec(migration("0017_deductions_pay_runs.sql"));
 };
 
 function cloudAs(db: PGlite, uid: string): CloudSync {

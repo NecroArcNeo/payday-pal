@@ -1,4 +1,4 @@
-// Meridian Payroll desktop app (Electron main process).
+// KoPayroll desktop app (Electron main process).
 //
 // The pages are the static build in dist/client, served from app://meridian/.
 // The payroll database runs here, in Node: one SQLite file (database.mjs) in a folder
@@ -13,7 +13,7 @@
 // and the app opens as usual; with one, nothing in the folder can be read until it's typed. Until the key is
 // unlocked, every database and backup call is refused.
 
-import { app, BrowserWindow, ipcMain, Menu, net, protocol, safeStorage, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol, safeStorage, shell } from "electron";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -21,6 +21,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { openDatabase, runQuery, transactionGate } from "./database.mjs";
 import * as keyring from "./keyring.mjs";
+import * as copies from "./backup-copy.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const CLIENT_DIR = path.join(here, "..", "dist", "client");
@@ -29,11 +30,28 @@ const ORIGIN = "app://meridian";
 const DEV_URL = process.env.MERIDIAN_DEV_URL;
 const PAGE_ORIGIN = DEV_URL ? new URL(DEV_URL).origin : ORIGIN;
 
-app.setName("Meridian Payroll");
+app.setName("KoPayroll");
 // MERIDIAN_HOME puts everything in one other folder (for testing, or running from a USB stick).
 const HOME = process.env.MERIDIAN_HOME;
 // The same folder in development and when installed (the package name would otherwise pick it in development).
-app.setPath("userData", HOME ? path.join(HOME, "app") : path.join(app.getPath("appData"), "Meridian Payroll"));
+app.setPath("userData", HOME ? path.join(HOME, "app") : appFolder());
+
+/**
+ * %APPDATA%\KoPayroll. The app was called Meridian Payroll before: on the first start its folder (database, keyring,
+ * backups, and Chromium's Local State holding the Windows key) is renamed as a whole, before anything opens it.
+ * If that fails (an old copy still running holds it open), this start keeps using the old folder and tries again next time.
+ */
+function appFolder() {
+  const folder = path.join(app.getPath("appData"), "KoPayroll");
+  const old = path.join(app.getPath("appData"), "Meridian Payroll");
+  if (fs.existsSync(folder) || !fs.existsSync(old)) return folder;
+  try {
+    fs.renameSync(old, folder);
+    return folder;
+  } catch {
+    return old;
+  }
+}
 // The database folder: payroll.db, plus SQLite's write-ahead log beside it while it's open.
 const DATA_DIR = path.join(app.getPath("userData"), "database");
 const DB_FILE = path.join(DATA_DIR, "payroll.db");
@@ -42,6 +60,8 @@ const BACKUP_DIR = path.join(app.getPath("userData"), "Backups");
 // a crash, a power cut or a forced quit.
 const SESSION_FILE = path.join(app.getPath("userData"), "session.json");
 const KEYRING_FILE = path.join(app.getPath("userData"), "keyring.json");
+// Where backups are also copied (a folder the user picks), and the copies' key (backup-copy.mjs).
+const COPY_FILE = path.join(app.getPath("userData"), "backup-copy.json");
 const lastSession = (() => {
   try { return JSON.parse(fs.readFileSync(SESSION_FILE, "utf8")); } catch { return null; }
 })();
@@ -198,6 +218,7 @@ function sealOldBackups() {
 /** Once the key is known: seal backups still unsealed. A failure leaves them as they were. */
 function afterUnlock() {
   failures = 0;
+  void copyLatest(); // catches up on a copy that couldn't be made while the app was closed or the drive was out
   try {
     sealOldBackups();
     encryptError = null;
@@ -414,6 +435,7 @@ handle("backups:add", async (_e, record) => {
   fs.mkdirSync(BACKUP_DIR, { recursive: true });
   const id = (backupIds().at(-1) ?? 0) + 1;
   writeDurably(backupFile(id), JSON.stringify(sealBackup({ id, ...record })));
+  void copyLatest(); // not awaited: a slow or missing drive never holds up a save
   return id;
 });
 handle("backups:get", async (_e, id) => {
@@ -449,11 +471,137 @@ handle("backups:delete", async (_e, ids) => {
   return null;
 });
 
+// ---------------------------------------------------------------- copies in a folder of the user's
+// After every backup, the newest is also written to the folder the user picked on Sync & backup, as a
+// password-protected backup file (backup-copy.mjs), so a wiped or failed disk doesn't take every copy with it.
+// The folder may be missing (a USB stick that's out): the failure is noted, shown on Sync & backup, and tried
+// again every few minutes and at the next backup. Settings in backup-copy.json:
+// { folder, keep, protection: null | { salt, iterations, key: sealed with the data key }, copied, error }.
+
+let copySettings = (() => {
+  try { return JSON.parse(fs.readFileSync(COPY_FILE, "utf8")); } catch { return null; }
+})();
+function saveCopySettings(next) {
+  copySettings = next;
+  if (next) writeDurably(COPY_FILE, JSON.stringify(next, null, 1));
+  else fs.rmSync(COPY_FILE, { force: true });
+}
+const COPY_RETRY_MS = 5 * 60_000;
+
+/** The copies' key, unsealed: null for unprotected copies. Throws when it was sealed with another data key (after "start over"). */
+function copyProtection(settings = copySettings) {
+  const p = settings?.protection;
+  if (!p) return null;
+  const { key } = keyring.unseal(dataKey, p.key);
+  return { key: Buffer.from(key, "base64"), salt: p.salt, iterations: p.iterations };
+}
+const sealCopyKey = (made) => made && { salt: made.salt, iterations: made.iterations, key: keyring.seal(dataKey, { purpose: "backup-copy-key" }, { key: made.key.toString("base64") }) };
+
+/** One copy at a time, in order; `pendingCopy` is what quitting waits for. */
+let copyChain = Promise.resolve();
+let pendingCopy = 0;
+function copyLatest(force = false) {
+  pendingCopy++;
+  copyChain = copyChain.then(() => copyNow(force)).finally(() => { pendingCopy--; });
+  return copyChain;
+}
+async function copyNow(force) {
+  const settings = copySettings;
+  if (!settings || !dataKey) return;
+  const id = backupIds().at(-1);
+  if (id === undefined) return;
+  // Already there (and not removed from the folder since): nothing to do.
+  if (!force && settings.copied?.id === id && !settings.error && fs.existsSync(path.join(settings.folder, settings.copied.file))) return;
+  try {
+    const raw = JSON.parse(fs.readFileSync(backupFile(id), "utf8"));
+    const record = keyring.isSealed(raw) ? keyring.unseal(dataKey, raw) : raw;
+    let protection;
+    try {
+      protection = copyProtection(settings);
+    } catch {
+      throw new Error("this computer's key changed since copies were turned on: set the copies' password again");
+    }
+    const file = await copies.copyBackup({ folder: settings.folder, computer: os.hostname(), keep: settings.keep, protection, record });
+    if (copySettings?.folder !== settings.folder) return; // turned off or moved while it copied
+    saveCopySettings({ ...copySettings, copied: { id, at: new Date().toISOString(), backupAt: record.created_at, file }, error: null });
+  } catch (e) {
+    if (copySettings?.folder !== settings.folder) return;
+    saveCopySettings({ ...copySettings, error: { at: new Date().toISOString(), message: copies.copyError(e) } });
+  }
+}
+setInterval(() => { if (copySettings?.error || copySettings?.copied?.id !== backupIds().at(-1)) void copyLatest(); }, COPY_RETRY_MS).unref();
+
+/** What Sync & backup shows. */
+function copyStatus() {
+  if (!copySettings) return { on: false };
+  const { folder, keep, protection, copied, error } = copySettings;
+  let keyLost = false;
+  try { copyProtection(); } catch { keyLost = true; }
+  const appRoot = path.parse(app.getPath("userData")).root.toLowerCase();
+  return { on: true, folder, keep, protected: !!protection, keyLost, copied: copied ?? null, error: error ?? null, sameDrive: path.parse(folder).root.toLowerCase() === appRoot };
+}
+
+handle("backup-copy:status", async () => (await requireUnlocked(), copyStatus()));
+handle("backup-copy:choose", async (event) => {
+  await requireUnlocked();
+  const parent = BrowserWindow.fromWebContents(event.sender);
+  const r = await dialog.showOpenDialog(parent, {
+    title: "Choose where to copy backups",
+    buttonLabel: "Copy backups here",
+    defaultPath: copySettings?.folder,
+    properties: ["openDirectory", "createDirectory"],
+  });
+  return r.canceled || !r.filePaths[0] ? null : r.filePaths[0];
+});
+handle("backup-copy:check", async (_e, folder) => (await requireUnlocked(), copies.checkFolder(folder, app.getPath("userData"))));
+/**
+ * Turns copies on or changes them. `password`: a string for a new password, null for no password, undefined
+ * to keep the current one. A new password (or none) also re-encrypts the copies already in that folder.
+ * Makes a copy straight away; throws (keeping the old settings) when the folder can't be written.
+ */
+handle("backup-copy:set", async (_e, { folder, keep, password }) => {
+  await requireUnlocked();
+  const checked = await copies.checkFolder(folder ?? copySettings?.folder, app.getPath("userData"));
+  if (typeof password === "string") checkedPassword(password);
+  if (password === undefined && !copySettings) throw new Error("Choose a password for the copies (or none)");
+  const protection = password === undefined ? copySettings.protection : sealCopyKey(password === null ? null : await copies.deriveCopyKey(password));
+  const next = {
+    folder: checked.folder,
+    keep: copies.KEEP_CHOICES.includes(keep) ? keep : copySettings?.keep ?? copies.DEFAULT_KEEP,
+    protection,
+    copied: copySettings?.folder === checked.folder ? copySettings.copied ?? null : null,
+    error: null,
+  };
+  await copyChain; // never change the key under a copy that's being written
+  let skipped = 0;
+  if (password !== undefined && copySettings?.folder === checked.folder) {
+    let from = null;
+    try { from = copyProtection(); } catch { /* the old key is gone: those copies keep their old password */ }
+    skipped = await copies.rewriteCopies(checked.folder, os.hostname(), from, copyProtection(next));
+  }
+  saveCopySettings(next);
+  await copyLatest(true);
+  return { ...copyStatus(), skipped };
+});
+handle("backup-copy:off", async () => {
+  await requireUnlocked();
+  await copyChain;
+  saveCopySettings(null);
+  return copyStatus();
+});
+// The page backs up first (when data changed), so this copies the newest backup unless it's already there.
+handle("backup-copy:now", async () => {
+  await requireUnlocked();
+  await copyLatest();
+  return copyStatus();
+});
+
 handle("desktop:info", () => ({ dataDir: DATA_DIR, backupDir: BACKUP_DIR, computerName: os.hostname() }));
 handle("desktop:session", () => ({ uncleanSince: lastSession?.open ? lastSession.startedAt ?? null : null, movedOldDatabase }));
 handle("db:set-aside", () => setAsideDatabase());
 handle("desktop:open-folder", async (_e, which) => {
-  const dir = which === "backups" ? BACKUP_DIR : DATA_DIR;
+  if (which === "copy" && !copySettings) throw new Error("Copies aren't turned on");
+  const dir = which === "backups" ? BACKUP_DIR : which === "copy" ? copySettings.folder : DATA_DIR;
   fs.mkdirSync(dir, { recursive: true });
   const err = await shell.openPath(dir);
   if (err) throw new Error(err);
@@ -496,7 +644,7 @@ function createWindow() {
     height: 900,
     minWidth: 900,
     minHeight: 600,
-    title: "Meridian Payroll",
+    title: "KoPayroll",
     icon: path.join(here, "..", "build", "icon.ico"),
     show: false,
     webPreferences: { preload: path.join(here, "preload.cjs"), contextIsolation: true, sandbox: true, nodeIntegration: false },
@@ -541,6 +689,17 @@ app.whenReady().then(() => {
 });
 
 app.on("window-all-closed", () => app.quit());
+
+// The backup made as the window closed may still be on its way to the user's folder: let it finish (at most
+// COPY_QUIT_WAIT_MS, in case the drive hangs), then quit.
+const COPY_QUIT_WAIT_MS = 20_000;
+let copyWaited = false;
+app.on("before-quit", (e) => {
+  if (copyWaited || !pendingCopy) return;
+  e.preventDefault();
+  copyWaited = true;
+  void Promise.race([copyChain, new Promise((r) => setTimeout(r, COPY_QUIT_WAIT_MS))]).finally(() => app.quit());
+});
 
 // Close the database cleanly before exiting: SQLite folds its write-ahead log back into the file.
 app.on("will-quit", () => {

@@ -22,11 +22,20 @@ export function setAlias(key: string, alias: string, name: string) {
   setPref(KEY, next);
 }
 
+/** Removes an alias, so the real name shows again. */
+export function clearAlias(key: string) {
+  const next = { ...getPref<Aliases>(KEY, {}) };
+  delete next[key];
+  setPref(KEY, next);
+}
+
 export function useLabels() {
   const [aliases] = usePref<Aliases>(KEY, {});
   return {
     /** The alias for `key`, else its real name. */
     label: (key: string, name: string) => aliases[key] || name,
     aliasOf: (key: string): string | undefined => aliases[key],
+    /** Every alias, by key (Settings → Display lists them). */
+    aliases,
   };
 }

@@ -3,7 +3,8 @@ import type { BackupReason } from "./backups";
 import { changeSeq, getMeta, setMeta } from "./local";
 import { confirmPrivateFields, customKey, DEFAULT_SHARED, getPrivateFields, keepPrivate, PRIVATE_COLUMNS, redactSnapshot, savePrivateFields } from "./privacy";
 import { SCHEMA_VERSION, TABLES } from "./schema";
-import { countRows, diffCounts, exportSnapshot, isEmpty, replaceWithSnapshot, validateSnapshot, type Snapshot, type SnapshotCounts, type Sql, type SqlDb } from "./snapshot";
+import { addHistory } from "./history";
+import { countRows, describeCounts, diffCounts, exportSnapshot, isEmpty, replaceWithSnapshot, validateSnapshot, type Snapshot, type SnapshotCounts, type Sql, type SqlDb } from "./snapshot";
 
 // Push copies this device's whole database to the signed-in account; pull
 // copies the account's database onto this device. Neither ever overwrites
@@ -171,7 +172,10 @@ export async function pull({ db, cloud, userId, backup }: SyncDeps, opts: { conf
   await replaceWithSnapshot(db, keepPrivate(incoming, current, await getPrivateFields(db)), {
     // Refuse if anything was written after the backup was taken.
     before: async (tx) => { if ((await changeSeq(tx)) !== seq) throw new Error("Data on this device changed during the pull. Nothing was replaced — try again."); },
-    after: async (tx) => markSynced(tx, await changeSeq(tx), remote.version, userId),
+    after: async (tx) => {
+      await addHistory(tx, "restore", `pulled the cloud copy (${describeCounts(countRows(incoming))})`);
+      await markSynced(tx, await changeSeq(tx), remote.version, userId);
+    },
   });
   return { kind: "done", counts: countRows(incoming) };
 }
@@ -194,7 +198,7 @@ export async function setPrivateFields(db: Sql, keys: string[]) {
  * A field stays private if either this device or the backup kept it private, so restoring onto a fresh
  * install (whose choices are the defaults) can't make anything less private than it was.
  */
-export async function restoreSnapshot(db: SqlDb, snapshot: Snapshot, backup: SyncDeps["backup"], opts: { keepPrivateFields?: boolean } = {}) {
+export async function restoreSnapshot(db: SqlDb, snapshot: Snapshot, backup: SyncDeps["backup"], opts: { keepPrivateFields?: boolean; from?: string } = {}) {
   const incoming = validateSnapshot(snapshot);
   const { snapshot: current, seq } = await db.transaction(async (tx) => ({ snapshot: await exportSnapshot(tx), seq: await changeSeq(tx) }));
   if (!isEmpty(current)) await backup("before-restore", current);
@@ -204,7 +208,10 @@ export async function restoreSnapshot(db: SqlDb, snapshot: Snapshot, backup: Syn
     ?? [...PRIVATE_COLUMNS.filter((k) => !DEFAULT_SHARED.includes(k)), ...incoming.data.employee_field_defs.map((d) => customKey(String(d["id"])))];
   await replaceWithSnapshot(db, opts.keepPrivateFields ? keepPrivate(incoming, current, privateHere) : incoming, {
     before: async (tx) => { if ((await changeSeq(tx)) !== seq) throw new Error("Data changed during the restore. Nothing was replaced — try again."); },
-    after: async (tx) => savePrivateFields(tx, [...new Set([...privateHere, ...privateThere])]),
+    after: async (tx) => {
+      await savePrivateFields(tx, [...new Set([...privateHere, ...privateThere])]);
+      await addHistory(tx, "restore", `restored ${opts.from ?? "a backup"} (${describeCounts(countRows(incoming))})`);
+    },
   });
 }
 

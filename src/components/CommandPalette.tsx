@@ -2,7 +2,8 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowRight, BarChart3, CalendarDays, Clock, Database, FileText, Moon, Search, User, Zap } from "lucide-react";
+import { ArrowRight, BarChart3, CalendarDays, Clock, Database, FileText, Moon, Search, Settings, User, Zap } from "lucide-react";
+import { openSettings, SETTINGS_SECTIONS } from "@/lib/settings-window";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandShortcut } from "@/components/ui/command";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { toggleTheme } from "@/components/ThemeToggle";
@@ -11,7 +12,7 @@ import { searchEmployees } from "@/lib/employee-search";
 import { useLabels } from "@/lib/labels";
 import { fullName, useEmployees } from "@/lib/payroll";
 import { saveBackup } from "@/lib/db/backups";
-import { storeFor, useDataMode } from "@/lib/db/mode";
+import { useEmployeePages } from "@/components/EmployeeMenu";
 import { localDb } from "@/lib/db/local";
 import { exportSnapshot } from "@/lib/db/snapshot";
 
@@ -30,7 +31,18 @@ const PAGE_WORDS: Record<string, string> = {
   "/import": "excel csv file upload spreadsheet",
   "/payroll": "pay run gross lock wages",
   "/reports": "charts summary graphs compare",
-  "/sync": "backup restore cloud security password",
+  "/sync": "backup restore cloud push pull",
+  "/history": "changes audit log who when undo",
+};
+/** Extra words that find each Settings section. */
+const SECTION_WORDS: Record<string, string> = {
+  features: "deductions net pay runs turn on off",
+  pay: "overtime threshold multiplier weekend shifts rules",
+  checks: "limits warnings long day break colours tags rows",
+  display: "theme dark night light breaks minutes hours labels rename",
+  privacy: "private fields password recovery key security encryption",
+  backups: "copy usb drive folder automatic",
+  history: "edit history audit changes keep",
 };
 
 /** The header's search button, and the box it opens. Ctrl+K (⌘K on a Mac) opens or closes it from anywhere. */
@@ -71,7 +83,7 @@ function Palette({ pages, onDone }: { pages: readonly Page[]; onDone: () => void
   const [q, setQ] = useState("");
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const mode = useDataMode();
+  const empPages = useEmployeePages();
   const { label } = useLabels();
   const { data: employees = [] } = useEmployees();
   const icon = (I: typeof Search) => <I className="mr-2 h-4 w-4 text-muted-foreground" />;
@@ -97,21 +109,18 @@ function Palette({ pages, onDone }: { pages: readonly Page[]; onDone: () => void
     { id: "export-many", label: "Export several timesheets", keywords: "bulk zip everyone routine", icon: icon(FileText), run: go("/timesheet", "Export several… is on the Timesheet page.") },
     { id: "import", label: "Import a file", keywords: "excel csv upload", icon: icon(FileText), run: () => navigate({ to: "/import" }) },
     { id: "add-employee", label: "Add an employee", keywords: "new hire staff person", icon: icon(User), run: () => navigate({ to: "/employees" }) },
-    { id: "colours", label: "Choose row colours", keywords: "overtime tags highlight", icon: icon(Zap), run: go("/records", "Row colours are under the Colours button above the Time records list.") },
+    { id: "colours", label: "Choose row colours", keywords: "overtime tags highlight", icon: icon(Zap), run: () => openSettings("checks") },
+    { id: "settings", label: "Settings", keywords: "preferences options configure", hint: "Ctrl+,", icon: icon(Settings), run: () => openSettings() },
+    ...SETTINGS_SECTIONS.map((s): Item => ({ id: `settings:${s.id}`, label: `Settings: ${s.label}`, keywords: SECTION_WORDS[s.id] ?? "", icon: icon(Settings), run: () => openSettings(s.id) })),
   ];
 
   const typed = q.trim() !== "";
   const people = typed ? searchEmployees(employees, q).slice(0, 6) : [];
   const top = people[0];
   const forTop: Item[] = top ? [
-    { id: `rec:${top.id}`, label: `Time records for ${fullName(top)}`, icon: icon(Clock), run: async () => {
-      // Time records shows one entry type at a time: open the one their latest record uses, so they aren't hidden.
-      const latest = await storeFor(mode).listRecordsPage({ employeeIds: [top.id] }, 0, 1).catch(() => null);
-      const kind = latest?.rows[0]?.entry_mode;
-      navigate({ to: "/records", search: { emp: top.id, ...(kind === "clock" || kind === "hours" ? { mode: kind } : {}) } });
-    } },
-    { id: `ts:${top.id}`, label: `Timesheet for ${fullName(top)}`, icon: icon(FileText), run: () => navigate({ to: "/timesheet", search: { employee: top.id, from: undefined, to: undefined } }) },
-    { id: `rep:${top.id}`, label: `Report for ${fullName(top)}`, icon: icon(BarChart3), run: () => navigate({ to: "/reports", search: { emp: top.id } }) },
+    { id: `rec:${top.id}`, label: `Time records for ${fullName(top)}`, icon: icon(Clock), run: () => void empPages.records(top.id) },
+    { id: `ts:${top.id}`, label: `Timesheet for ${fullName(top)}`, icon: icon(FileText), run: () => void empPages.timesheet(top.id) },
+    { id: `rep:${top.id}`, label: `Report for ${fullName(top)}`, icon: icon(BarChart3), run: () => void empPages.report(top.id) },
   ] : [];
   const shownPages = matchCommands(pageItems, q);
   const shownActions = matchCommands(actions, q);

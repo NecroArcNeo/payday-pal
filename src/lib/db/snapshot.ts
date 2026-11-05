@@ -1,4 +1,5 @@
 import { COLUMNS, decodeRow, encodeRow } from "./codec";
+import { allHistory, mergeHistory, type HistoryEntry } from "./history";
 import { getPrivateFields } from "./privacy";
 import { SCHEMA_VERSION, TABLES, type TableName } from "./schema";
 
@@ -21,6 +22,8 @@ export type Snapshot = {
   data: Record<TableName, Row[]>;
   /** Which employee details the copied device kept private (privacy.ts), so a restore can keep them private. Not in cloud copies. */
   private_fields?: string[];
+  /** This device's edit history (history.ts), in local backups and drive copies only: never sent to the cloud. */
+  history?: HistoryEntry[];
 };
 
 export type SnapshotCounts = Record<TableName, number>;
@@ -74,7 +77,8 @@ export function diffCounts(a: Snapshot, b: Snapshot): SnapshotCounts {
 
 const DIFF_NAMES: Record<TableName, [string, string]> = {
   employee_field_defs: ["category", "categories"], shifts: ["shift", "shifts"], employees: ["employee", "employees"],
-  pay_rates: ["pay rate change", "pay rate changes"], time_records: ["time record", "time records"], pay_adjustments: ["extra-pay entry", "extra-pay entries"], payroll_settings: ["", ""],
+  pay_rates: ["pay rate change", "pay rate changes"], time_records: ["time record", "time records"], pay_adjustments: ["extra-pay entry", "extra-pay entries"],
+  deductions: ["deduction", "deductions"], pay_runs: ["pay run", "pay runs"], pay_run_lines: ["pay run line", "pay run lines"], payroll_settings: ["", ""],
 };
 /** "2 employees, 40 time records and the payroll settings", or null when nothing differs. */
 export function describeDiff(c: SnapshotCounts): string | null {
@@ -95,7 +99,7 @@ export async function exportSnapshot(sql: Sql, schemaVersion = SCHEMA_VERSION): 
       const { rows } = await sql.query("select 1 from sqlite_master where type = 'table' and name = $1", [t]);
       if (!rows.length) continue;
     }
-    const order = t === "payroll_settings" ? "id" : t === "shifts" ? "sort_order, created_at, id" : "created_at, id";
+    const order = t === "payroll_settings" ? "id" : t === "shifts" ? "sort_order, created_at, id" : t === "pay_run_lines" ? "pay_run_id, employee_name, id" : "created_at, id";
     const { rows } = await sql.query<Row>(`select * from ${t} order by ${order}`);
     data[t] = rows.map((r) => decodeRow(t, r));
   }
@@ -103,6 +107,8 @@ export async function exportSnapshot(sql: Sql, schemaVersion = SCHEMA_VERSION): 
   // An older database (before an update) may lack columns the private-field check reads; restoring such a
   // backup assumes the defaults, which keep every personal detail private.
   if (schemaVersion === SCHEMA_VERSION) snapshot.private_fields = await getPrivateFields(sql);
+  const history = await allHistory(sql);
+  if (history.length) snapshot.history = history;
   return snapshot;
 }
 
@@ -126,6 +132,7 @@ export function validateSnapshot(raw: unknown): Snapshot {
   }
   if (s.data!.payroll_settings.length > 1) fail("more than one payroll settings row");
   if (s.private_fields !== undefined && !(Array.isArray(s.private_fields) && s.private_fields.every((k) => typeof k === "string"))) fail("the private fields list is malformed");
+  if (s.history !== undefined && !Array.isArray(s.history)) fail("the edit history is malformed");
   return s as Snapshot;
 }
 
@@ -168,6 +175,10 @@ function upgrade(s: Partial<Snapshot>): Partial<Snapshot> {
   if (s.schema_version === 10) s = { ...s, schema_version: 11 };
   // 12 only added time_records.frozen_pay, which restores empty (the day pays by the current rules until locked again).
   if (s.schema_version === 11) s = { ...s, schema_version: 12 };
+  // 13 added deductions and pay runs (none yet), and the settings that turn them on (off), restored as their defaults.
+  if (s.schema_version === 12 && s.data && typeof s.data === "object") {
+    s = { ...s, schema_version: 13, data: { ...(s.data as Record<string, unknown>), deductions: [], pay_runs: [], pay_run_lines: [] } as unknown as Snapshot["data"] };
+  }
   return s;
 }
 
@@ -199,6 +210,8 @@ export async function replaceWithSnapshot(
       const { rows: n } = await tx.query<{ n: number }>(`select count(*) as n from ${t}`);
       if (n[0]?.n !== rows.length) throw new Error(`Restore check failed for "${t}": expected ${rows.length} rows, found ${n[0]?.n}`);
     }
+    // The edit history isn't replaced: the backup's entries join this device's.
+    await mergeHistory(tx, s.history);
     if (hooks.after) await hooks.after(tx);
   });
 }

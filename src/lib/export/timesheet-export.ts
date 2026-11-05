@@ -17,7 +17,13 @@ export const SHEET_FIELDS = {
   total_hours: "Total hours", regular_hours: "Regular hours", overtime_hours: "Overtime hours", weekend_hours: "Weekend hours",
   regular_pay: "Regular pay", overtime_pay: "Overtime pay", set_pay: "Pay for days with a set amount", hours_pay: "Pay from hours", extra_pay: "Extra pay", total_pay: "Total pay",
   today: "Today's date",
+  // Payslip values: only listed (and filled) while deductions or pay runs are on (Settings → Features).
+  deductions_total: "Deductions (total)", net_pay: "Net pay",
+  paid_on: "Paid on (pay run)", ytd_gross: "Year to date: gross pay", ytd_deductions: "Year to date: deductions", ytd_net: "Year to date: net pay",
 } as const;
+/** The payslip fields each feature adds to the template editor. */
+export const DEDUCTION_FIELDS = ["deductions_total", "net_pay"] as const;
+export const PAY_RUN_FIELDS = ["paid_on", "ytd_gross", "ytd_deductions", "ytd_net"] as const;
 /** The day-by-day columns: one row per record (or per day). */
 export const ROW_FIELDS = {
   date: "Date", weekday: "Weekday", week_of: "Week of (Monday)", weekend: "Weekend (shows \"Weekend\")", entry_type: "Entry type",
@@ -26,11 +32,21 @@ export const ROW_FIELDS = {
   regular_pay: "Regular pay", overtime_pay: "Overtime pay", pay: "Day pay", note: "Note",
 } as const;
 /** A built-in value, or one of the user's own categories (`custom:<category id>`). */
-export type SheetField = keyof typeof SHEET_FIELDS | `custom:${string}`;
+export type SheetField = keyof typeof SHEET_FIELDS | `custom:${string}` | `deduction:${string}`;
 /** The user's categories a template can show: not ones under Personal, which stay on the profile. */
 export type TemplateCategory = { id: string; label: string; field_type: string };
 export const fieldLabel = (k: SheetField, categories: TemplateCategory[] = []) =>
-  k.startsWith("custom:") ? categories.find((c) => `custom:${c.id}` === k)?.label ?? "A deleted category" : SHEET_FIELDS[k as keyof typeof SHEET_FIELDS];
+  k.startsWith("custom:") ? categories.find((c) => `custom:${c.id}` === k)?.label ?? "A deleted category"
+    : k.startsWith("deduction:") ? `Deduction: ${k.slice(10)}`
+    : SHEET_FIELDS[k as keyof typeof SHEET_FIELDS];
+/**
+ * What a payslip adds to a timesheet: the period's deductions (worked out, or as a recorded pay run saved them), and
+ * when the period was paid in a pay run, its date and the year-to-date totals.
+ */
+export type Payslip = {
+  deductions: { name: string; amount: number }[] | null; deductionsTotal: number | null; net: number | null;
+  paidOn: string | null; ytd: { gross: number; deductions: number; net: number } | null;
+};
 export type RowField = keyof typeof ROW_FIELDS;
 export type WeekStart = number | "period";
 export const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
@@ -102,6 +118,7 @@ export function timesheetData(input: {
   categories?: TemplateCategory[];
   shiftName: string; rates: number[]; from: string; to: string; today: string;
   records: SheetRecord[]; lines: Map<string, PayLine>; extraPay: number;
+  payslip?: Payslip | null | undefined;
 }, per: "record" | "day" = "record", weeks: number | null = null, weekStart: WeekStart = 1): TimesheetData {
   const { employee: e, records, lines } = input;
   const line = (r: SheetRecord) => lines.get(r.id);
@@ -121,6 +138,14 @@ export function timesheetData(input: {
     regular_pay: sum(records, (l) => l.regPay), overtime_pay: sum(records, (l) => l.otPay), set_pay: sum(records, (l) => (l.manual ? l.pay : 0)), hours_pay: hoursPay,
     extra_pay: round2(input.extraPay), total_pay: round2(hoursPay + input.extraPay), today: { date: input.today },
   };
+  const slip = input.payslip;
+  if (slip?.deductions) {
+    values.deductions_total = slip.deductionsTotal ?? 0;
+    values.net_pay = slip.net ?? round2(hoursPay + input.extraPay);
+    for (const d of slip.deductions) values[`deduction:${d.name}`] = round2(Number(values[`deduction:${d.name}`] ?? 0) + d.amount);
+  }
+  if (slip?.paidOn) values.paid_on = { date: slip.paidOn };
+  if (slip?.ytd) { values.ytd_gross = slip.ytd.gross; values.ytd_deductions = slip.ytd.deductions; values.ytd_net = slip.ytd.net; }
   for (const c of input.categories ?? []) {
     const raw = custom[c.id];
     const text = raw === undefined || raw === null ? "" : String(raw);
@@ -247,6 +272,13 @@ export function plainTable(data: TimesheetData, compact = false): (string | numb
     [],
     ["Total hours", show(v.total_hours)], ["Regular hours", show(v.regular_hours)], ["Overtime hours", show(v.overtime_hours)],
     ["Regular pay", show(v.regular_pay)], ["Overtime pay", show(v.overtime_pay)], ["Extra pay", show(v.extra_pay)], ["Total pay", show(v.total_pay)],
+    // The payslip part, when deductions or pay runs are on.
+    ...(v.net_pay !== undefined ? [
+      ...(Object.keys(v) as SheetField[]).filter((k) => k.startsWith("deduction:")).map((k) => [fieldLabel(k), show(v[k])]),
+      ["Deductions", show(v.deductions_total)], ["Net pay", show(v.net_pay)],
+    ] : []),
+    ...(v.paid_on !== undefined ? [["Paid on", show(v.paid_on)]] : []),
+    ...(v.ytd_gross !== undefined ? [["Year to date: gross pay", show(v.ytd_gross)], ["Year to date: deductions", show(v.ytd_deductions)], ["Year to date: net pay", show(v.ytd_net)]] : []),
   ];
 }
 

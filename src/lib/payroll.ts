@@ -52,6 +52,33 @@ export function usePayRates() {
   });
 }
 
+export type Deduction = Tables<"deductions">;
+/** Every employee's deductions, by employee id. */
+export function useDeductions() {
+  const mode = useDataMode();
+  return useQuery({
+    queryKey: ["deductions", mode],
+    queryFn: async () => {
+      const m = new Map<string, Deduction[]>();
+      for (const d of await storeFor(mode).listDeductions()) m.set(d.employee_id, [...(m.get(d.employee_id) ?? []), d]);
+      return m;
+    },
+  });
+}
+
+export type PayRun = Tables<"pay_runs"> & { lines: Tables<"pay_run_lines">[] };
+/** Every pay run with its lines, newest period first. */
+export function usePayRuns() {
+  const mode = useDataMode();
+  return useQuery({
+    queryKey: ["pay-runs", mode],
+    queryFn: async (): Promise<PayRun[]> => {
+      const { runs, lines } = await storeFor(mode).listPayRuns();
+      return runs.map((r) => ({ ...r, lines: lines.filter((l) => l.pay_run_id === r.id) }));
+    },
+  });
+}
+
 export function useRecords(from?: string, to?: string) {
   const mode = useDataMode();
   return useQuery({ queryKey: ["records", from, to, mode], queryFn: () => storeFor(mode).listRecords(from, to) });
@@ -120,7 +147,10 @@ export function useAdjustments(from?: string, to?: string) {
 }
 
 /** `locked_through`: days up to and including this date are locked as paid (null = nothing locked). */
-export const defaultSettings = { ot_threshold: 40, ot_multiplier: 1.5, weekend_overtime: true, visible_columns: ["employee_code", "days"], locked_through: null as string | null };
+export const defaultSettings = {
+  ot_threshold: 40, ot_multiplier: 1.5, weekend_overtime: true, visible_columns: ["employee_code", "days"], locked_through: null as string | null,
+  deductions_on: false, pay_runs_on: false, history_keep_days: null as number | null,
+};
 
 /** The default profile new employees start with (see `withDefaults`). */
 export function useEmployeeDefaults() {
@@ -138,7 +168,11 @@ export function usePayrollSettings() {
     queryFn: async () => {
       const data = await storeFor(mode).getSettings();
       return data
-        ? { ot_threshold: Number(data.ot_threshold), ot_multiplier: Number(data.ot_multiplier), weekend_overtime: data.weekend_overtime ?? true, visible_columns: data.visible_columns, locked_through: data.locked_through ?? null }
+        ? {
+          ot_threshold: Number(data.ot_threshold), ot_multiplier: Number(data.ot_multiplier), weekend_overtime: data.weekend_overtime ?? true,
+          visible_columns: data.visible_columns, locked_through: data.locked_through ?? null,
+          deductions_on: !!data.deductions_on, pay_runs_on: !!data.pay_runs_on, history_keep_days: data.history_keep_days ?? null,
+        }
         : defaultSettings;
     },
   });

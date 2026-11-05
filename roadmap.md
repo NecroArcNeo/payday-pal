@@ -10,8 +10,8 @@
 
 ## Desktop app, data safety and privacy (Oct 27, 2026)
 - [x] Fix lost saves: PGlite 0.5.8 didn't write a transaction to storage until the next query (`local.ts`, commit 01f350b)
-- [x] Windows desktop app (Electron): `npm run dist:win` → `release/Meridian Payroll Setup <version>.exe`, per-user install, no admin prompt, unsigned (7a5fca6)
-  - Database: `%APPDATA%\Meridian Payroll\database`. Backups: `%APPDATA%\Meridian Payroll\Backups`. Uninstalling keeps both.
+- [x] Windows desktop app (Electron): `npm run dist:win` → `release/KoPayroll Setup <version>.exe`, per-user install, no admin prompt, unsigned (7a5fca6)
+  - Database: `%APPDATA%\KoPayroll\database`. Backups: `%APPDATA%\KoPayroll\Backups`. Uninstalling keeps both.
   - Updating: bump `version` in package.json, `npm run dist:win` (~30 s), run the new installer over the old one.
 - [x] Automatic backups every 30 min while data changed, on closing the app, and before database updates; "Back up now" (kept forever); tiered retention: all for 2 days, daily for 30 days, weekly for a year, then monthly (222a5f3)
 - [x] Recovery screen when the database won't open: restore a backup, damaged folder kept as `database-damaged-<time>`; crash detection on next start (418762d)
@@ -22,7 +22,7 @@
 - [ ] **Turn on BitLocker** for C: (Settings → Privacy & security → Device encryption) and keep the recovery key off the laptop
 - [ ] **Move data into the desktop app**: browser version → Download backup file → desktop app → Restore from file
 - [ ] Set up Supabase cloud sync (apply `drizzle/migrations` 0003 … latest in order; see README)
-- [ ] Edit history / undo for record and profile edits (L7)
+- [x] Edit history / undo for record and profile edits (L7): done Nov 4, 2026 (Edit history page)
 - [ ] Optional: auto-update for the desktop app (GitHub Releases); code signing only if handing it to people outside a trusted circle
 - [x] **Data encrypted on this device + optional app password** (desktop app; done Oct 31, 2026). The database is encrypted block by block as Postgres writes it (AES-XTS, about 0.1 ms per save), automatic backups are sealed; one random data key, unlocked by Windows for the account when there's no password, or by the password (asked at start), a recovery key shown once, or optionally an emailed code through the cloud account. The unencrypted database and backups convert on first start. Not covered: Chromium's own storage (prefs, templates, cloud sign-in token) and exported files (payroll CSV: names and pay, no ID numbers)
 - [ ] At launch (external setup, deferred): test email reset against the real Supabase project: apply migration 0016, and put the code (`{{ .Token }}`) in the "Magic Link" email template
@@ -44,8 +44,15 @@
 - [ ] Restore the browser version's exported backup file into the desktop app and check the counts match
 - [x] Side panel on Time records: click a row to see how its pay is worked out and edit it (Nov 1, 2026)
 - [x] Right-click menu on Time records rows, and Ctrl+K search (Nov 2, 2026)
-- [ ] Next from the UI kit (Nov 1, 2026): progress bars and loading placeholders, resizable Employees list; then remove the unused UI components
-- [ ] Ideas for later (Oct 31, 2026): payroll run checklist (flag missing clock-outs, overlaps, long days, then lock and export), paste rows from Excel into Time records, payslips (PDF), Ctrl+K quick search, automatic backup copy to a folder/USB, open where I left off, saved weekly patterns
+- [x] Loading placeholders, progress bars and resizing (Nov 4, 2026): tables, cards and charts show placeholders while loading instead of "no records yet"; a thin bar at the top while data is read; Export several shows "12 of 30", Import its steps. Clicking an employee opens their profile beside the list (drag its edge wider); the Time records panel's width, the page list on the left, chart heights and the template editor's split can be dragged too, and are remembered
+- [x] Proper question boxes and an employee menu (Nov 4, 2026): every confirm()/prompt() is now the app's own box (what goes, a red button for deleting, Cancel focused, Escape cancels; "New section…" works again, Electron never showed prompt()); employees can't be deleted with paid days, offered "Mark resigned instead"; each employee row has a ⋯ / right-click menu (open, profile, time records, timesheet, report, resign, delete)
+- [x] Reports statistics for any dates (Nov 4, 2026): "Statistics for" the chart's period or chosen dates (type them, or drag across the bars), average per day/week/month/year, choose the cards (total, average, highest, lowest, compared with)
+- [x] Sort every table by any column (Nov 4, 2026): a sort button in each column's header (the name still renames it) and "Sort by" listing every column, remembered per table; Time records sorts in the database where it can and in the app otherwise; backups by when or kind
+- [x] Copy backups to another drive (Nov 4, 2026): pick a folder (USB stick, another drive) on Sync & backup; after every backup the newest is also saved there as a password-protected backup file that Restore from file opens on any computer, even after this one's disk is wiped; keeps the newest 5–100 (ones you saved yourself always), an unplugged drive is shown and retried, the copy made on closing finishes before the app quits
+- [x] Settings window, deductions and net pay, pay runs, edit history (Nov 4, 2026): the gear (or Ctrl+,) opens Settings with Features, Pay rules (overtime, shifts), Checks & colours, Display (theme, breaks, renamed labels), Privacy & security, Backups and Edit history. Deductions (tax, health plan…: fixed per pay period, per week or once, or a percent of gross) give net pay on Payroll, the Timesheet and payslips; pay runs save what each person was paid and lock the period, with payslips showing the paid date and year-to-date totals; both can be turned off. Every change is kept in an edit history (who, when, each field before and after), on its own page and on each profile and record
+- [ ] Bulk "add a deduction to selected employees" on the Employees page
+- [ ] Remove the unused UI components (26 in src/components/ui, and the packages only they use)
+- [ ] Ideas for later (Oct 31, 2026): payroll run checklist (flag missing clock-outs, overlaps, long days, then lock and export), paste rows from Excel into Time records, payslips (PDF), Ctrl+K quick search, open where I left off, saved weekly patterns
 - [ ] Optional: speed — memoize table rows (opening an edit with 500 rows is slow on old PCs); check PGlite updates (0.5.12+)
 - [x] Timesheet export with selectable templates (done Oct 28, 2026: your own Excel templates)
 

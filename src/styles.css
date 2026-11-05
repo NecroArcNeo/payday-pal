@@ -289,14 +289,25 @@
   .marked-row > td:first-child { box-shadow: inset 4px 0 0 var(--row-mark); }
 }
 
-/* The Time records side panel (RecordPanel) is fixed to the right; on screens wide enough to keep the table usable
-   beside it, the page narrows by the panel's width instead of being covered. */
+/* A side panel (SidePanel: a Time record, an employee) is fixed to the right, as wide as --side-panel-w (dragged by
+   its edge); on screens wide enough to keep the table usable beside it, the page narrows by the panel's width instead
+   of being covered. */
 @media (min-width: 1280px) {
-  html.record-panel-open main { padding-right: 27rem; }
+  html.side-panel-open main { padding-right: var(--side-panel-w, 27rem); }
 }
 /* Toasts sit bottom right, where the panel has its Save button: a toast there (one lasts 20 s after a crash) took the
    click meant for Save. While the panel is open they move beside it, or above its buttons when it fills the width. */
-html.record-panel-open [data-sonner-toaster][data-x-position="right"] { right: calc(27rem + 1rem) !important; }
+html.side-panel-open [data-sonner-toaster][data-x-position="right"] { right: calc(var(--side-panel-w, 27rem) + 1rem) !important; }
 @media (max-width: 54rem) {
-  html.record-panel-open [data-sonner-toaster][data-x-position="right"] { right: 1rem !important; bottom: 6rem !important; }
+  html.side-panel-open [data-sonner-toaster][data-x-position="right"] { right: 1rem !important; bottom: 6rem !important; }
+}
+
+/* An operation still running with no count to show (FetchBar): a sliver sweeping across. */
+@keyframes meridian-sweep {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(400%); }
+}
+.animate-sweep { animation: meridian-sweep 1.1s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .animate-sweep { animation-duration: 3s; }
 }

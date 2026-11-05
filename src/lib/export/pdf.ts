@@ -174,7 +174,7 @@ function drawPage(sheet: RenderedSheet, layout: PdfLayout, page: PdfPage): HTMLC
 export function sheetPdf(sheet: RenderedSheet, title: string): Uint8Array {
   const layout = pdfLayout(sheet);
   const doc = new jsPDF({ unit: "pt", format: "a4", orientation: layout.landscape ? "landscape" : "portrait", compress: true });
-  doc.setProperties({ title, creator: "Meridian Payroll" });
+  doc.setProperties({ title, creator: "KoPayroll" });
   layout.pages.forEach((page, i) => {
     if (i) doc.addPage("a4", layout.landscape ? "landscape" : "portrait");
     if (!page.rows.length) return;
@@ -190,7 +190,7 @@ export function sheetPdf(sheet: RenderedSheet, title: string): Uint8Array {
  */
 export function chartPdf(chart: HTMLCanvasElement, title: string, table: RenderedSheet | null): Uint8Array {
   const doc = new jsPDF({ unit: "pt", format: "a4", orientation: "landscape", compress: true });
-  doc.setProperties({ title, creator: "Meridian Payroll" });
+  doc.setProperties({ title, creator: "KoPayroll" });
   const room = { w: PAGE.h - PAGE.margin * 2, h: PAGE.w - PAGE.margin * 2 };
   // The canvas is drawn at 2 pixels per screen pixel; screen pixels are 0.75 pt.
   const natural = { w: (chart.width / 2) * PT, h: (chart.height / 2) * PT };

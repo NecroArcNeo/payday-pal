@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Employee, Shift, TimeRecord } from "@/lib/payroll";
 import { addDays } from "@/lib/payroll";
-import { autoGroup, bucketsBetween, buildReport, compareReports, previousRange, rangeLabel, reportRange, sameTimeLastYear, TOP_PEOPLE, type ReportInput } from "./report";
+import { autoGroup, bucketsBetween, buildReport, compareReports, previousRange, rangeLabel, reportRange, reportStats, sameTimeLastYear, TOP_PEOPLE, type ReportInput } from "./report";
 
 const shifts = [{ id: "day", name: "Day", multiplier: 1 }, { id: "night", name: "Night", multiplier: 1.2 }] as Shift[];
 const emp = (id: string, more: Partial<Employee> = {}) =>
@@ -134,5 +134,36 @@ describe("comparing two periods", () => {
   it("adds regular and overtime up to hours", () => {
     const r = buildReport(base(week("a", "2026-10-26"), { metric: "reg_ot" }));
     expect(compareReports(r, r)[0]).toMatchObject({ a: 45, b: 45 });
+  });
+});
+
+describe("statistics cards", () => {
+  // Four weeks: 0, 30, 10 hours, then a week that hasn't started yet.
+  const report = {
+    buckets: ["2026-10-05", "2026-10-12", "2026-10-19", "2026-10-26"].map((d) => ({ key: d, label: d, from: d, to: addDays(d, 6) })),
+    series: [{ key: "a", label: "A" }, { key: "b", label: "B" }],
+    values: [[0, 0], [20, 10], [4, 6], [0, 0]],
+    seriesTotals: [24, 16], total: 40, unit: "hours" as const,
+  };
+
+  it("averages, and finds the highest and lowest, over the weeks that have started", () => {
+    const s = reportStats(report, "2026-10-21", true);
+    expect(s).toMatchObject({ total: 40, averageOver: 3, highest: { value: 30, bucket: { from: "2026-10-12" } }, lowest: { value: 0, bucket: { from: "2026-10-05" } } });
+    expect(s.average).toBeCloseTo(40 / 3);
+  });
+
+  it("uses the only series for figures that don't add up (pay per hour)", () => {
+    const perHour = { ...report, series: [report.series[0]!], values: [[0], [22], [25], [0]], total: 23 };
+    expect(reportStats(perHour, "2026-10-21", false)).toMatchObject({ highest: { value: 25 }, average: 47 / 3 });
+  });
+
+  it("has nothing to pick before any week has started", () => {
+    expect(reportStats(report, "2026-10-01", true)).toMatchObject({ average: 0, averageOver: 0, highest: null, lowest: null });
+  });
+
+  it("works out the statistics for chosen dates from a report over just those dates", () => {
+    // Hours worked from Oct 27 to Oct 29: three 9-hour days of a 45-hour week.
+    const r = buildReport(base(week("a", "2026-10-26"), { from: "2026-10-27", to: "2026-10-29", groupBy: "day", metric: "hours" }));
+    expect(reportStats(r, "2026-11-04", true)).toMatchObject({ total: 27, averageOver: 3, average: 9 });
   });
 });

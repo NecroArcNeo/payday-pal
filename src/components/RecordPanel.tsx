@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { HistoryList } from "@/components/HistoryView";
 import { toast } from "sonner";
 import { ChevronDown, ChevronUp, Lock, LockOpen, Trash2, X } from "lucide-react";
 import { db } from "@/lib/db/mode";
@@ -17,6 +17,7 @@ import { shiftFor, shiftForRecord, type PayLine } from "@/lib/pay";
 import { rateOn } from "@/lib/pay-rates";
 import type { EntryMode } from "@/components/RecordsLedger";
 import { readAmount } from "@/lib/amount";
+import { SidePanel } from "@/components/SidePanel";
 
 // The Time records side panel: one record's details (how its pay is worked out, its colours and tags) and its edit
 // form, beside the list rather than over it, so the list stays usable: clicking another row or ↑/↓ moves the panel to
@@ -34,17 +35,9 @@ export function RecordPanel({ record, employees, shifts, line, mark, lockedThrou
   // Focus moves to the panel when it opens, so the keyboard (Tab, Escape) starts there; not on every record change,
   // so stepping with ↑/↓ doesn't pull focus out of the list.
   useEffect(() => { head.current?.focus(); }, []);
-  // While open, the page makes room for the panel on wide screens (styles.css), so no column is hidden behind it.
-  useEffect(() => {
-    document.documentElement.classList.add("record-panel-open");
-    return () => document.documentElement.classList.remove("record-panel-open");
-  }, []);
-
-  // Through a portal into <body>: the table's panel has a backdrop blur, and an ancestor with a filter or transform
-  // becomes the box `position: fixed` is measured from, so the panel would be stuck inside the table.
-  return createPortal(
-    <aside role="dialog" aria-modal="false" aria-labelledby="record-panel-title"
-      className="fixed inset-y-0 right-0 z-40 flex w-[min(27rem,100vw)] flex-col border-l border-border bg-background shadow-2xl duration-200 animate-in slide-in-from-right">
+  // Beside the list, not over it: the page makes room for it on wide screens, and its left edge can be dragged.
+  return (
+    <SidePanel id="record" labelledBy="record-panel-title">
       <div className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
         <div className="min-w-0">
           <h2 id="record-panel-title" ref={head} tabIndex={-1} className="truncate font-display text-lg font-extrabold tracking-tight outline-none">
@@ -75,9 +68,14 @@ export function RecordPanel({ record, employees, shifts, line, mark, lockedThrou
             undone with Ctrl+Z, or another record opened), and keeps the user's typing otherwise. */}
         <RecordForm key={fingerprint(record)} record={record} employees={employees} shifts={shifts} locked={locked}
           onChanged={onChanged} onDelete={onDelete} onDirty={onDirty} />
+        <section className="text-sm">
+          <div className="label-mono mb-1">History</div>
+          <div className="overflow-hidden rounded-lg ring-1 ring-border">
+            <HistoryList filter={{ rowId: record.id }} empty="No changes to this record yet." />
+          </div>
+        </section>
       </div>
-    </aside>,
-    document.body,
+    </SidePanel>
   );
 }
 

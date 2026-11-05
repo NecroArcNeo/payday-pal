@@ -97,7 +97,8 @@ export function RecordWarnings({ checked, employees }: { checked: Checked; emplo
   );
 }
 
-function LimitsEditor({ onClose }: { onClose: () => void }) {
+/** The limits "Things to check" uses (a per-device pref). On the Payroll page under Limits, and in Settings → Checks. */
+export function LimitsEditor({ onClose }: { onClose: () => void }) {
   const [saved, setSaved] = usePref<unknown>(LIMITS_PREF, DEFAULT_LIMITS);
   const limits = validLimits(saved);
   const [v, setV] = useState({ longDay: String(limits.longDay), noBreakAfter: String(limits.noBreakAfter), shortShift: String(limits.shortShift), longBreak: String(limits.longBreak) });

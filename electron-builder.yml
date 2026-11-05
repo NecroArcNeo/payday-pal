@@ -1,6 +1,6 @@
 # Windows installer for the desktop app: npm run dist:win (output in release/).
 appId: com.meridian.payroll
-productName: Meridian Payroll
+productName: KoPayroll
 copyright: Copyright © 2026 NecroArcNeo
 directories:
   output: release
@@ -26,7 +26,7 @@ nsis:
   perMachine: false
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: Meridian Payroll
+  shortcutName: KoPayroll
   # Uninstalling never deletes the payroll database or the backups.
   deleteAppDataOnUninstall: false
 # Chromium's own interface text (context menus, spell-check): English only keeps ~45 MB out of the install.

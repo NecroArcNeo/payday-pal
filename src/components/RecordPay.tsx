@@ -1,16 +1,21 @@
-import { money, type Shift } from "@/lib/payroll";
+import { useMemo } from "react";
+import { fullName, money, useEmployees, usePayRates, useShifts, type RecordWithEmp, type Shift, type TimeRecord } from "@/lib/payroll";
+import { rateOn } from "@/lib/pay-rates";
+import { recordColumns } from "@/lib/record-columns";
+import type { SortColumns } from "@/lib/table-sort";
 import { shiftForRecord, type PayLine } from "@/lib/pay";
 import { EditableLabel } from "@/components/EditableLabel";
+import { SortTh } from "@/components/SortControl";
 
 /** Headers for the per-record pay columns, matching <RecordPayCells>. */
 export function RecordPayHeaders({ className = "px-3 py-3 text-right font-medium" }: { className?: string }) {
   return (
     <>
-      <th className={className}><EditableLabel k="reg_hrs" name="Reg hrs" /></th>
-      <th className={className}><EditableLabel k="ot_hrs" name="OT hrs" /></th>
-      <th className={className}><EditableLabel k="reg_pay" name="Reg pay" /></th>
-      <th className={className}><EditableLabel k="ot_pay" name="OT pay" /></th>
-      <th className={className} title="What this day pays: regular + overtime pay, the salaried share of the week, or the manual amount. Extra-pay entries are added on the Payroll page."><EditableLabel k="total_pay" name="Total pay" /></th>
+      <SortTh k="reg_hrs" className={className}><EditableLabel k="reg_hrs" name="Reg hrs" /></SortTh>
+      <SortTh k="ot_hrs" className={className}><EditableLabel k="ot_hrs" name="OT hrs" /></SortTh>
+      <SortTh k="reg_pay" className={className}><EditableLabel k="reg_pay" name="Reg pay" /></SortTh>
+      <SortTh k="ot_pay" className={className}><EditableLabel k="ot_pay" name="OT pay" /></SortTh>
+      <SortTh k="total_pay" className={className} title="What this day pays: regular + overtime pay, the salaried share of the week, or the manual amount. Extra-pay entries are added on the Payroll page."><EditableLabel k="total_pay" name="Total pay" /></SortTh>
     </>
   );
 }
@@ -36,6 +41,26 @@ export function RecordPayCells({ line, cell = "px-3 py-3 text-right" }: { line: 
       </td>
     </>
   );
+}
+
+/**
+ * The columns a list of these records sorts by (recordColumns), with what they need: the shift each was worked on,
+ * the rate in force that day (as the Rate column shows) and their pay lines. `showName`: the list has an Employee column.
+ */
+export function useRecordSortColumns<R extends TimeRecord = RecordWithEmp>(pay: Map<string, PayLine> | undefined, showName = true): SortColumns<R> {
+  const { data: shifts = [] } = useShifts();
+  const { data: employees = [] } = useEmployees();
+  const { data: rateHistory } = usePayRates();
+  return useMemo(() => {
+    const empById = new Map(employees.map((e) => [e.id, e]));
+    const nameOf = (r: R) => { const e = empById.get(r.employee_id); return e ? fullName(e) : ""; };
+    return recordColumns<R>({
+      ...(showName ? { name: nameOf } : {}),
+      shift: (r) => shiftForRecord(r.shift_id, empById.get(r.employee_id)?.shift_id, shifts).name,
+      rate: (r) => rateOn(rateHistory?.get(r.employee_id), empById.get(r.employee_id)?.hourly_rate ?? 0, r.work_date),
+      pay: (r) => pay?.get(r.id),
+    });
+  }, [shifts, employees, rateHistory, pay, showName]);
 }
 
 /** The shift a record was worked on, flagged when it isn't the employee's usual one. */

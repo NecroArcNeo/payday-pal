@@ -15,19 +15,20 @@ import { breakRangeText, formatBreak, useBreakUnit, validBreak } from "@/lib/bre
 import { EmployeePicker, SearchInput } from "@/components/EmployeeSearch";
 import { ANY, describeEmployeeFilter, describeFacet, facetActive, facetAllows, isFiltering, matchesEmployee, NO_FILTER, searchEmployees, type EmployeeFilter, type Facet } from "@/lib/employee-search";
 import { FacetFilter } from "@/components/FacetFilter";
-import { askChoice } from "@/lib/choice-prompt";
+import { askChoice, askConfirm } from "@/lib/choice-prompt";
 import { describeRecord, sameDayClashes, type Clash } from "@/lib/record-clash";
 import { addDays, computeHours, datesBetween, fullName, isoDate, useEmployees, usePayrollSettings, useRecordPay, useShifts, weekday, type Employee, type RecordWithEmp, type TimeRecord } from "@/lib/payroll";
 import { shiftFor } from "@/lib/pay";
 import { describeTimes, usualTimes, usualTimesFor, type UsualTimes } from "@/lib/shift-times";
 import { CalendarPlus, Check, Lock, LockOpen, Pencil, Plus, Trash2, X } from "lucide-react";
-import { usePref } from "@/lib/prefs";
 import { PayLock } from "@/components/PayLock";
 import { setRecordsLocked } from "@/lib/pay-freeze";
-import { SortControl } from "@/components/SortControl";
+import { SortControl, useTableSort } from "@/components/SortControl";
 import { CopyWeek } from "@/components/CopyWeek";
 import { useCopyToNextWeek } from "@/components/RecordMenu";
-import { sortRecords, validSort, type Sort, type SortKey } from "@/lib/record-sort";
+import { newestFirst, STORE_SORTED } from "@/lib/record-columns";
+import { sortTable, withoutColumns } from "@/lib/table-sort";
+import { useRecordSortColumns } from "@/components/RecordPay";
 import { DateInput } from "@/components/DateInput";
 import { readAmount } from "@/lib/amount";
 
@@ -46,7 +47,7 @@ type RecordsSearch = { from?: string; to?: string; emp?: string; mode?: EntryMod
 const isDay = (v: unknown): v is string => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
 
 export const Route = createFileRoute("/_authenticated/records")({
-  head: () => ({ meta: [{ title: "Time records — Meridian Payroll" }] }),
+  head: () => ({ meta: [{ title: "Time records — KoPayroll" }] }),
   validateSearch: (s: Record<string, unknown>): RecordsSearch => ({
     ...(isDay(s["from"]) ? { from: s["from"] } : {}),
     ...(isDay(s["to"]) ? { to: s["to"] } : {}),
@@ -62,8 +63,9 @@ export const Route = createFileRoute("/_authenticated/records")({
 
 /** Records shown at first, and added by each "Load more". */
 const PAGE = 50;
-const SORT_KEYS = ["date", "employee", "hours", "pay"] as const satisfies readonly SortKey[];
-const NEWEST: Sort<(typeof SORT_KEYS)[number]> = { by: "date", desc: true };
+/** The database orders a page by these itself (store.ts recordOrder); any other column is sorted in the app. */
+const inStore = (by: string): by is (typeof STORE_SORTED)[number] => (STORE_SORTED as readonly string[]).includes(by);
+const PAY_COLUMNS = ["reg_hrs", "ot_hrs", "reg_pay", "ot_pay", "total_pay"];
 
 function RecordsPage() {
   const qc = useQueryClient();
@@ -87,8 +89,6 @@ function RecordsPage() {
   const [pickQ, setPickQ] = useState<EmployeeFilter>(NO_FILTER);
   const [listQ, setListQ] = useState<EmployeeFilter>(NO_FILTER);
   const [listShifts, setListShifts] = useState<Facet>(ANY);
-  const [savedSort, setSort] = usePref<Sort>("meridian-records-sort", NEWEST);
-  const sort = validSort(savedSort, SORT_KEYS, NEWEST);
   // Resigned employees can't be given new hours, so they aren't offered here (their old records still list below).
   const working = useMemo(() => employees.filter((e) => e.active), [employees]);
   const resigned = employees.length - working.length;
@@ -214,7 +214,11 @@ function RecordsPage() {
         const clash = new Set(clashes.map((c) => `${c.employee_id}|${c.work_date}`));
         rows = rows.filter((r) => !clash.has(`${r.employee_id}|${r.work_date}`));
       }
-    } else if (days.length > 1 && !confirm(`Add ${rows.length} records: ${picked.length} employee${picked.length === 1 ? "" : "s"} × ${days.length} days (${weekday(days[0]!)} ${days[0]} to ${weekday(days.at(-1)!)} ${days.at(-1)})?`)) return;
+    } else if (days.length > 1 && !(await askConfirm({
+      title: `Add ${rows.length} records?`,
+      detail: `${picked.length} employee${picked.length === 1 ? "" : "s"} × ${days.length} days, ${weekday(days[0]!)} ${days[0]} to ${weekday(days.at(-1)!)} ${days.at(-1)}.`,
+      confirm: `Add ${rows.length} records`,
+    }))) return;
     const { error } = await db().insert("time_records", rows);
     if (error) { toast.error(error.message); return; }
     toast.success(rows.length === 1 ? "Record added" : `${rows.length} records added`);
@@ -232,6 +236,11 @@ function RecordsPage() {
 
   // ---- the list: filtered in the database, loaded a page at a time
   const [listMode, setListMode] = useState<EntryMode>(search.mode ?? "clock");
+  // Sorted by any column (clock times and break only for clock records). These columns name the choices and the
+  // headers; sorting in the app uses the same ones with the pay worked out (appColumns, below).
+  const sortChoices = useRecordSortColumns(undefined);
+  const sortColumns = listMode === "clock" ? sortChoices : withoutColumns(sortChoices, ["clock_in", "clock_out", "break"]);
+  const [sort, setSort] = useTableSort("meridian-records-sort", sortColumns, { by: "date", desc: true });
   const [limit, setLimit] = useState(PAGE);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulk, setBulk] = useState<null | "selected" | "all">(null);
@@ -239,42 +248,45 @@ function RecordsPage() {
   const shiftsShown = useMemo(() => (facetActive(listShifts) ? shifts.map((x) => x.id).filter((id) => facetAllows(listShifts, id)) : undefined), [listShifts, shifts]);
   const filter = useMemo<RecordFilter>(() => ({
     from: from || undefined, to: to || undefined, mode: listMode,
-    // The database sorts by everything but pay, which only the app works out (below).
-    sort: sort.by === "pay" ? undefined : { by: sort.by, desc: sort.desc },
+    // The database sorts by date, employee and hours itself; any other column is sorted here (below).
+    sort: inStore(sort.by) ? { by: sort.by, desc: sort.desc } : undefined,
     employeeIds: onlyEmp || isFiltering(listQ) ? employees.filter((e) => (!onlyEmp || e.id === onlyEmp) && matchesEmployee(e, listQ)).map((e) => e.id) : undefined,
     shifts: shiftsShown ? { ids: shiftsShown, employeeIds: employees.filter((e) => shiftsShown.includes(shiftFor(e.shift_id, shifts).id ?? "")).map((e) => e.id) } : undefined,
   }), [from, to, listMode, sort.by, sort.desc, listQ, onlyEmp, shiftsShown, employees, shifts]);
   const filterKey = JSON.stringify(filter);
   // A new filter starts again from the first page, with nothing selected.
   useEffect(() => { setLimit(PAGE); setSelected(new Set()); setBulk(null); }, [filterKey]);
-  const byPay = sort.by === "pay";
+  const inApp = !inStore(sort.by);
   const page = useQuery({
     queryKey: ["records", "page", dataMode, filterKey, limit],
     queryFn: () => storeFor(dataMode).listRecordsPage(filter, 0, limit),
     placeholderData: keepPreviousData,
-    enabled: !byPay,
+    enabled: !inApp,
   });
-  // Sorting by pay: pay isn't stored, so load every matching record, work out each one's pay (over whole weeks, as the
-  // table does), sort, and page through the sorted list here instead of in the database.
+  // Sorting by a column the database can't order by (pay isn't stored; shift, rate and the rest need the app's rules
+  // or names): load every matching record, sort them here (pay worked out over whole weeks, as the table does), and
+  // page through the sorted list here instead of in the database.
   const everything = useQuery({
     queryKey: ["records", "matching", dataMode, filterKey],
     queryFn: () => storeFor(dataMode).listRecordsMatching(filter),
-    enabled: byPay,
+    enabled: inApp,
     placeholderData: keepPreviousData,
   });
-  const allPay = useRecordPay(byPay ? everything.data ?? [] : []);
-  const byPayRows = useMemo(() => {
-    if (!byPay || !everything.data) return [];
+  const needsPay = inApp && PAY_COLUMNS.includes(sort.by);
+  const allPay = useRecordPay(needsPay ? everything.data ?? [] : []);
+  const appColumns = useRecordSortColumns(allPay);
+  const appRows = useMemo(() => {
+    if (!inApp || !everything.data) return [];
     const empById = new Map(employees.map((e) => [e.id, e]));
     const withEmp: RecordWithEmp[] = everything.data.map((r) => {
       const e = empById.get(r.employee_id);
       return { ...r, employees: e ? { first_name: e.first_name, last_name: e.last_name, employee_code: e.employee_code, hourly_rate: e.hourly_rate } : null };
     });
-    return sortRecords(withEmp, sort, { pay: (r) => allPay?.get(r.id)?.pay });
-  }, [byPay, everything.data, employees, allPay, sort]);
-  const rows = byPay ? byPayRows.slice(0, limit) : page.data?.rows ?? [];
-  const total = byPay ? byPayRows.length : page.data?.total ?? 0;
-  const loading = byPay ? everything.isFetching || (byPayRows.length > 0 && !allPay) : page.isFetching;
+    return sortTable(withEmp, sort, appColumns, newestFirst);
+  }, [inApp, everything.data, employees, appColumns, sort]);
+  const rows = inApp ? appRows.slice(0, limit) : page.data?.rows ?? [];
+  const total = inApp ? appRows.length : page.data?.total ?? 0;
+  const loading = inApp ? everything.isFetching || (needsPay && appRows.length > 0 && !allPay) : page.isFetching;
   const pickedRows = rows.filter((r) => selected.has(r.id));
   const toggleRow = (id: string) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const toggleAllRows = () => setSelected((s) => (rows.length && rows.every((r) => s.has(r.id)) ? new Set() : new Set(rows.map((r) => r.id))));
@@ -307,7 +319,11 @@ function RecordsPage() {
 
   const deleteMany = async (which: "selected" | "all") => {
     const n = which === "selected" ? pickedRows.length : total;
-    if (!confirm(`Delete ${n} ${describeFilter} record${n === 1 ? "" : "s"}${which === "selected" ? " that you selected" : ""}?\n\nA backup is saved first, so you can restore it from Sync & backup.`)) return;
+    if (!(await askConfirm({
+      title: `Delete ${n} record${n === 1 ? "" : "s"}?`,
+      detail: `${which === "selected" ? "The ones you selected" : "Every one shown"}: ${describeFilter} records.\n\nA backup is saved first, so you can restore it from Sync & backup.`,
+      confirm: `Delete ${n} record${n === 1 ? "" : "s"}`, danger: true,
+    }))) return;
     try {
       const ids = which === "selected" ? pickedRows.map((r) => r.id) : (await storeFor(dataMode).listRecordsMatching(filter)).map((r) => r.id);
       await backupBefore("record-delete");
@@ -538,9 +554,10 @@ function RecordsPage() {
 
       <RecordsLedger
         title={<span className="flex items-center gap-3">{total} records
-          <SortControl value={sort} onChange={setSort} keys={SORT_KEYS} />
-          {loading && <span className="text-xs font-normal text-muted-foreground">{byPay ? "working out pay…" : "loading…"}</span>}</span>}
-        rows={rows} total={total} mode={listMode} onModeChange={setListMode} employees={employees}
+          <SortControl value={sort} onChange={setSort} columns={sortColumns} />
+          {loading && <span className="text-xs font-normal text-muted-foreground">{needsPay ? "working out pay…" : inApp ? "sorting…" : "loading…"}</span>}</span>}
+        sort={sort} sortColumns={sortColumns} onSort={setSort}
+        rows={rows} total={total} loading={inApp ? !everything.data : !page.data} mode={listMode} onModeChange={setListMode} employees={employees}
         selected={selected} onToggle={toggleRow} onToggleAll={toggleAllRows} onChanged={refresh} onDelete={del}
         footer={
           <div className="flex flex-wrap items-center gap-2">
@@ -629,7 +646,12 @@ function BulkRecordEdit({ mode, employees, label, load, onClose, onDone }: {
         if (on["pay"]) patch["pay_override"] = v.pay.trim() ? Math.round(payNum * 100) / 100 : null;
         return { id: r.id, patch };
       });
-      if (!confirm(`Change ${rows.length} record${rows.length === 1 ? "" : "s"}: ${changes.join(", ")}?\n\nA backup is saved first, so you can restore it from Sync & backup.`)) return;
+      if (!(await askConfirm({
+        title: `Change ${rows.length} record${rows.length === 1 ? "" : "s"}?`,
+        detail: "A backup is saved first, so you can restore it from Sync & backup.",
+        items: changes,
+        confirm: `Change ${rows.length} record${rows.length === 1 ? "" : "s"}`,
+      }))) return;
       await backupBefore("record-edit");
       const { error, updated } = await db().updateMany("time_records", rows as never);
       if (error) { toast.error(error.message); if (updated) onDone(); return; }

@@ -1,28 +1,27 @@
 import { useState } from "react";
 import { fullName, money, useEmployees, usePayRates, useRecordPay, useShifts, weekday, type RecordWithEmp } from "@/lib/payroll";
 import { rateOn } from "@/lib/pay-rates";
-import { RecordPayCells, RecordPayHeaders, RecordShiftCell } from "@/components/RecordPay";
+import { RECORD_PAY_COLUMNS, RecordPayCells, RecordPayHeaders, RecordShiftCell } from "@/components/RecordPay";
 import { EmployeeLink } from "@/components/EmployeeLink";
 import { BreakHeader, BreakUnitToggle } from "@/components/BreakField";
 import { DataTable } from "./DataTable";
+import { SkeletonRows } from "./Loading";
 import { formatBreak, useBreakUnit } from "@/lib/breaks";
 import { Trash2 } from "lucide-react";
 import { EditableLabel } from "@/components/EditableLabel";
-import { SortControl } from "@/components/SortControl";
-import { usePref } from "@/lib/prefs";
-import { sortRecords, validSort, type Sort, type SortKey } from "@/lib/record-sort";
+import { SortControl, SortTh, TableSort, useTableSort } from "@/components/SortControl";
+import { useRecordSortColumns } from "@/components/RecordPay";
+import { newestFirst } from "@/lib/record-columns";
+import { sortTable, withoutColumns } from "@/lib/table-sort";
 
-const SORT_KEYS = ["date", "employee", "hours", "pay"] as const satisfies readonly SortKey[];
-const NEWEST: Sort<(typeof SORT_KEYS)[number]> = { by: "date", desc: true };
-
-export function RecordsTable({ records, title = "Time records", onDelete, showName = true }: { records: RecordWithEmp[]; title?: string; onDelete?: (id: string) => void; showName?: boolean }) {
+export function RecordsTable({ records, title = "Time records", onDelete, showName = true, loading = false }: { records: RecordWithEmp[]; title?: string; onDelete?: (id: string) => void; showName?: boolean; loading?: boolean }) {
   const [mode, setMode] = useState<"clock" | "hours">("clock");
   const pay = useRecordPay(records);
-  const [savedSort, setSort] = usePref<Sort>("meridian-recent-records-sort", NEWEST);
-  // With no name column (one person's records), sorting by employee means nothing.
-  const sortKeys = showName ? SORT_KEYS : SORT_KEYS.filter((k) => k !== "employee");
-  const sort = validSort(savedSort, sortKeys, NEWEST);
-  const rows = sortRecords(records.filter((r) => r.entry_mode === mode), sort, { name: (r) => (r.employees ? fullName(r.employees) : ""), pay: (r) => pay?.get(r.id)?.pay });
+  // Any column; daily-hours records have no clock times or break, so those aren't offered for them.
+  const all = useRecordSortColumns(pay, showName);
+  const columns = mode === "clock" ? all : withoutColumns(all, ["clock_in", "clock_out", "break"]);
+  const [sort, setSort] = useTableSort("meridian-recent-records-sort", columns, { by: "date", desc: true });
+  const rows = sortTable(records.filter((r) => r.entry_mode === mode), sort, columns, newestFirst);
   const { data: rateHistory } = usePayRates();
   const { data: shifts = [] } = useShifts();
   const [breakUnit] = useBreakUnit();
@@ -34,7 +33,7 @@ export function RecordsTable({ records, title = "Time records", onDelete, showNa
       <div className="flex items-center justify-between border-b border-border px-5 py-4">
         <div className="flex flex-wrap items-center gap-3">
           <div className="font-display font-extrabold tracking-tight">{title}</div>
-          <SortControl value={sort} onChange={setSort} keys={sortKeys} />
+          <SortControl value={sort} onChange={setSort} columns={columns} />
         </div>
         {mode === "clock" && <span className="ml-auto mr-3 flex items-center gap-2 text-xs text-muted-foreground">Breaks in <BreakUnitToggle /></span>}
         <div className="flex rounded-xl bg-secondary p-1 text-xs font-medium ring-1 ring-border">
@@ -52,25 +51,28 @@ export function RecordsTable({ records, title = "Time records", onDelete, showNa
       <div className="overflow-x-auto">
         <DataTable id="recent-records" className="w-full text-sm">
           <thead>
+            <TableSort sort={sort} columns={columns} onSort={setSort}>
             <tr className="border-b border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
-              {showName && <th className="px-5 py-3 text-left font-medium"><EditableLabel k="employee" name="Employee" /></th>}
-              <th className="px-3 py-3 text-left font-medium"><EditableLabel k="date" name="Date" /></th>
-              <th className="px-3 py-3 text-left font-medium"><EditableLabel k="shift" name="Shift" /></th>
+              {showName && <SortTh k="employee" className="px-5 py-3 text-left font-medium"><EditableLabel k="employee" name="Employee" /></SortTh>}
+              <SortTh k="date" className="px-3 py-3 text-left font-medium"><EditableLabel k="date" name="Date" /></SortTh>
+              <SortTh k="shift" className="px-3 py-3 text-left font-medium"><EditableLabel k="shift" name="Shift" /></SortTh>
               {mode === "clock" && (
                 <>
-                  <th className="px-3 py-3 text-left font-medium"><EditableLabel k="clock_in" name="Clock in" /></th>
-                  <th className="px-3 py-3 text-left font-medium"><EditableLabel k="clock_out" name="Clock out" /></th>
-                  <th className="px-3 py-3 text-right font-medium"><BreakHeader unit={breakUnit} /></th>
+                  <SortTh k="clock_in" className="px-3 py-3 text-left font-medium"><EditableLabel k="clock_in" name="Clock in" /></SortTh>
+                  <SortTh k="clock_out" className="px-3 py-3 text-left font-medium"><EditableLabel k="clock_out" name="Clock out" /></SortTh>
+                  <SortTh k="break" className="px-3 py-3 text-right font-medium"><BreakHeader unit={breakUnit} /></SortTh>
                 </>
               )}
-              <th className="px-3 py-3 text-right font-medium"><EditableLabel k="hours" name="Hours" /></th>
-              <th className="px-3 py-3 text-right font-medium"><EditableLabel k="hourly_rate" name="Rate" /></th>
+              <SortTh k="hours" className="px-3 py-3 text-right font-medium"><EditableLabel k="hours" name="Hours" /></SortTh>
+              <SortTh k="hourly_rate" className="px-3 py-3 text-right font-medium"><EditableLabel k="hourly_rate" name="Rate" /></SortTh>
               <RecordPayHeaders />
               {onDelete && <th className="w-10" />}
             </tr>
+            </TableSort>
           </thead>
           <tbody className="font-mono text-[13px]">
-            {rows.length === 0 && (
+            {loading && <SkeletonRows cols={(showName ? 1 : 0) + (mode === "clock" ? 7 : 4) + RECORD_PAY_COLUMNS + (onDelete ? 1 : 0)} />}
+            {!loading && rows.length === 0 && (
               <tr>
                 <td colSpan={14} className="px-5 py-10 text-center font-body text-muted-foreground">
                   No {mode === "clock" ? "clock in/out" : "daily hours"} records yet.

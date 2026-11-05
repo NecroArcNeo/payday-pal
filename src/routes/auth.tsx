@@ -10,9 +10,9 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 export const Route = createFileRoute("/auth")({
   head: () => ({
     meta: [
-      { title: "Sign in — Meridian Payroll" },
+      { title: "Sign in — KoPayroll" },
       { name: "description", content: "Sign in to sync your payroll data between devices." },
-      { property: "og:title", content: "Sign in — Meridian Payroll" },
+      { property: "og:title", content: "Sign in — KoPayroll" },
       { property: "og:description", content: "Access your payroll ledger." },
     ],
   }),
@@ -62,7 +62,7 @@ function AuthPage() {
       <div className="anim-breathe pointer-events-none fixed -right-52 top-1/3 h-[40rem] w-[40rem] rounded-full bg-glow-b blur-3xl" />
       <div className="absolute right-6 top-6"><ThemeToggle /></div>
       <div className="glass-panel anim-rise relative w-full max-w-sm p-7">
-        <div className="label-mono">Meridian Payroll</div>
+        <div className="label-mono">KoPayroll</div>
         <h1 className="mt-1 font-display text-2xl font-extrabold tracking-tight">{mode === "in" ? "Sign in to sync" : "Create account"}</h1>
         <p className="mt-1 text-xs text-muted-foreground">Optional. An account lets you push your payroll data to the cloud and pull it onto other devices. The app works fully without one.</p>
         {!cloudConfigured && <p className="mt-3 text-xs text-destructive">Cloud sync isn't set up on this install (no Supabase settings in .env).</p>}

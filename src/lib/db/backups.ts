@@ -6,7 +6,7 @@ import { countRows, type Snapshot, type SnapshotCounts } from "./snapshot";
 // broken database can't take its backups down with it. In the browser they're
 // a separate IndexedDB database, on the same device — downloaded backup files
 // and the cloud are what survive the browser's storage being cleared. In the
-// desktop app they're JSON files in %APPDATA%\Meridian Payroll\Backups
+// desktop app they're JSON files in %APPDATA%\KoPayroll\Backups
 // (electron/main.mjs), flushed to disk before they count as saved. They hold
 // private fields, so they stay out of folders OneDrive may sync.
 
@@ -16,7 +16,7 @@ const STORE = "backups";
 export type BackupReason = "before-pull" | "before-push-cloud-copy" | "before-restore" | "before-import" | "before-import-cloud-copy"
   | "before-bulk-edit" | "before-bulk-edit-cloud-copy" | "before-bulk-delete" | "before-bulk-delete-cloud-copy"
   | "before-record-edit" | "before-record-edit-cloud-copy" | "before-record-delete" | "before-record-delete-cloud-copy"
-  | "before-copy-week" | "before-copy-week-cloud-copy" | "before-update" | "automatic" | "manual";
+  | "before-copy-week" | "before-copy-week-cloud-copy" | "before-pay-run-delete" | "before-pay-run-delete-cloud-copy" | "before-update" | "automatic" | "manual";
 export const reasonLabel: Record<BackupReason, string> = {
   "before-pull": "This device, before pulling from cloud",
   "before-push-cloud-copy": "Cloud copy, before pushing over it",
@@ -33,6 +33,8 @@ export const reasonLabel: Record<BackupReason, string> = {
   "before-record-delete-cloud-copy": "Cloud copy, before deleting several time records",
   "before-copy-week": "This device, before copying a week's shifts",
   "before-copy-week-cloud-copy": "Cloud copy, before copying a week's shifts",
+  "before-pay-run-delete": "This device, before deleting a pay run",
+  "before-pay-run-delete-cloud-copy": "Cloud copy, before deleting a pay run",
   "before-update": "This device, before an app update changed how data is stored",
   automatic: "Automatic backup",
   manual: "Saved by you (kept until you delete it)",

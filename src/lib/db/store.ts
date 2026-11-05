@@ -14,7 +14,11 @@ type RecordWithEmp = Tables<"time_records"> & {
   employees: Pick<Employee, "first_name" | "last_name" | "employee_code" | "hourly_rate"> | null;
 };
 type EditableTable = Exclude<TableName, "payroll_settings">;
-export type SettingsInput = { ot_threshold: number; ot_multiplier: number; weekend_overtime: boolean; visible_columns: string[] };
+/** The settings a save changes; the ones left out stay as they are. */
+export type SettingsInput = Partial<{
+  ot_threshold: number; ot_multiplier: number; weekend_overtime: boolean; visible_columns: string[];
+  deductions_on: boolean; pay_runs_on: boolean; history_keep_days: number | null;
+}>;
 type Result = { error: Error | null };
 /** A record's pay to save as it's locked. */
 export type FrozenRow = { id: string; pay: FrozenPay };
@@ -40,6 +44,10 @@ export interface DataStore {
   listAdjustments(from?: string, to?: string): Promise<Tables<"pay_adjustments">[]>;
   /** Every employee's pay rate history, oldest first. */
   listPayRates(): Promise<Tables<"pay_rates">[]>;
+  /** Every employee's deductions, in their order. */
+  listDeductions(): Promise<Tables<"deductions">[]>;
+  /** Every pay run, newest period first, with each run's lines. */
+  listPayRuns(): Promise<{ runs: Tables<"pay_runs">[]; lines: Tables<"pay_run_lines">[] }>;
   /** One page of records matching the filter, ordered by `filter.sort` (newest first by default), plus how many match in total. */
   listRecordsPage(filter: RecordFilter, offset: number, limit: number): Promise<{ rows: RecordWithEmp[]; total: number }>;
   /** Every record matching the filter (no cap), for "edit all". */
@@ -214,6 +222,16 @@ export function createLocalStore(getDb: () => Promise<SqlDb>): DataStore {
     async listPayRates() {
       return list<Tables<"pay_rates">>(await getDb(), "pay_rates", "select * from pay_rates order by employee_id, effective_from");
     },
+    async listDeductions() {
+      return list<Tables<"deductions">>(await getDb(), "deductions", "select * from deductions order by employee_id, sort_order, created_at");
+    },
+    async listPayRuns() {
+      const db = await getDb();
+      return {
+        runs: await list<Tables<"pay_runs">>(db, "pay_runs", "select * from pay_runs order by period_to desc, created_at desc"),
+        lines: await list<Tables<"pay_run_lines">>(db, "pay_run_lines", "select * from pay_run_lines order by employee_name collate nocase, id"),
+      };
+    },
     async listRecordKeys(from, to) {
       return list<RecordKey>(await getDb(), "time_records", `select ${RECORD_KEY_COLUMNS} from time_records where work_date between $1 and $2`, [from, to]);
     },
@@ -245,9 +263,7 @@ export function createLocalStore(getDb: () => Promise<SqlDb>): DataStore {
       const db = await getDb();
       await db.transaction((tx) => insertRows(tx, "employees", rows as Row[], "employee_code"));
     }),
-    saveSettings: (s) => attempt(async () => saveSettingsColumns(await getDb(), {
-      ot_threshold: s.ot_threshold, ot_multiplier: s.ot_multiplier, weekend_overtime: s.weekend_overtime, visible_columns: s.visible_columns,
-    })),
+    saveSettings: (s) => attempt(async () => saveSettingsColumns(await getDb(), Object.fromEntries(Object.entries(s).filter(([, v]) => v !== undefined)))),
     saveEmployeeDefaults: (d) => attempt(async () => saveSettingsColumns(await getDb(), { employee_defaults: d })),
     setLockedThrough: (date, freeze = []) => attempt(async () => {
       const db = await getDb();
@@ -377,6 +393,15 @@ export const cloudStore: DataStore = {
   },
   async getSettings() {
     return check(await supabase.from("payroll_settings").select("*").maybeSingle());
+  },
+  async listDeductions() {
+    return check(await supabase.from("deductions").select("*").order("employee_id").order("sort_order").order("created_at")) as Tables<"deductions">[];
+  },
+  async listPayRuns() {
+    return {
+      runs: check(await supabase.from("pay_runs").select("*").order("period_to", { ascending: false })) as Tables<"pay_runs">[],
+      lines: check(await supabase.from("pay_run_lines").select("*").order("employee_name")) as Tables<"pay_run_lines">[],
+    };
   },
   insert: async (table, rows) => wrap(supabase.from(table).insert((await cloudSafe(table, rows)) as never)),
   update: async (table, id, patch) => wrap(supabase.from(table as "employees").update((await cloudSafe(table, patch)) as never).eq("id", id)),

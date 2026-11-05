@@ -8,54 +8,61 @@ import { EmployeePicker, SearchInput } from "@/components/EmployeeSearch";
 import { DataTable } from "@/components/DataTable";
 import { describeEmployeeFilter, isFiltering, matchesEmployee, NO_FILTER, type EmployeeFilter } from "@/lib/employee-search";
 import {
-  currentWeek, fullName, money, useAdjustments, useAllRecords, useEmployees, useFieldDefs, usePayRates, usePayrollSettings, useShifts,
+  currentWeek, fullName, money, useAdjustments, useAllRecords, useDeductions, useEmployees, useFieldDefs, usePayRates, usePayrollSettings, useShifts,
   type Employee, type Shift,
 } from "@/lib/payroll";
 import { employeePay, shiftFor, weekEnd, weekStart } from "@/lib/pay";
 import { ratesBetween } from "@/lib/pay-rates";
 import { PayLock } from "@/components/PayLock";
-import { formatValue } from "@/lib/field-types";
+import { fieldType, formatValue } from "@/lib/field-types";
+import { readAmount } from "@/lib/amount";
 import { labelOf, useLabels } from "@/lib/labels";
 import { customKey } from "@/lib/db/privacy";
-import { Plus, Settings2, Trash2 } from "lucide-react";
+import { Columns3, Settings2, Trash2 } from "lucide-react";
+import { openSettings } from "@/lib/settings-window";
 import { EditableLabel } from "@/components/EditableLabel";
 import { BreakInput } from "@/components/BreakField";
 import { useBreakUnit, validBreak, breakRangeText } from "@/lib/breaks";
 import type { TablesUpdate } from "@/integrations/supabase/types";
-import { SortControl } from "@/components/SortControl";
-import { usePref } from "@/lib/prefs";
-import { validSort, type Sort, type SortKey } from "@/lib/record-sort";
+import { SortControl, SortTh, TableSort, useTableSort } from "@/components/SortControl";
+import { sortTable, type Sort, type SortColumns, type SortKind, type SortValue } from "@/lib/table-sort";
 import { DateInput } from "@/components/DateInput";
 import { RecordWarnings, useRecordWarnings } from "@/components/RecordWarnings";
 import { EmployeeLink } from "@/components/EmployeeLink";
 import { PeriodHint } from "@/components/PeriodHint";
+import { SkeletonRows } from "@/components/Loading";
+import { askConfirm } from "@/lib/choice-prompt";
+import { deductionsFor } from "@/lib/deductions";
+import { runLine } from "@/lib/pay-runs";
+import { PayRunsList, RecordPayRun } from "@/components/PayRuns";
 
 export const Route = createFileRoute("/_authenticated/payroll")({
-  head: () => ({ meta: [{ title: "Payroll — Meridian Payroll" }] }),
+  head: () => ({ meta: [{ title: "Payroll — KoPayroll" }] }),
   component: PayrollPage,
 });
 
-/** `key` is also the column's alias key (see src/lib/labels.ts); custom categories use customKey(id). */
-const builtInCols: { key: string; label: string; get: (e: Employee) => string; alias?: string }[] = [
-  { key: "employee_code", label: "ID", get: (e) => e.employee_code },
-  { key: "job_title", label: "Job title", get: (e) => e.job_title ?? "" },
-  { key: "department", label: "Department", get: (e) => e.department ?? "" },
-  { key: "email", label: "Email", get: (e) => e.email ?? "" },
-  { key: "phone", label: "Phone", get: (e) => e.phone ?? "" },
-  { key: "hire_date", label: "Hire date", get: (e) => e.hire_date ?? "" },
+/**
+ * `key` is also the column's alias key (see src/lib/labels.ts); custom categories use customKey(id). `sortBy` is what
+ * the column sorts by (`get` is what it shows): hire dates as dates, number and money categories by their amount.
+ */
+type InfoCol = { key: string; label: string; get: (e: Employee) => string; alias?: string; kind: SortKind; sortBy?: (e: Employee) => SortValue };
+const builtInCols: InfoCol[] = [
+  { key: "employee_code", label: "ID", kind: "text", get: (e) => e.employee_code },
+  { key: "job_title", label: "Job title", kind: "text", get: (e) => e.job_title ?? "" },
+  { key: "department", label: "Department", kind: "text", get: (e) => e.department ?? "" },
+  { key: "email", label: "Email", kind: "text", get: (e) => e.email ?? "" },
+  { key: "phone", label: "Phone", kind: "text", get: (e) => e.phone ?? "" },
+  { key: "hire_date", label: "Hire date", kind: "date", get: (e) => e.hire_date ?? "" },
 ];
 
-const SORT_KEYS = ["employee", "hours", "pay"] as const satisfies readonly SortKey[];
-const BY_NAME: Sort<(typeof SORT_KEYS)[number]> = { by: "employee", desc: false };
+const BY_NAME: Sort = { by: "employee", desc: false };
 
 function PayrollPage() {
   const w = currentWeek();
   const [from, setFrom] = useState(w.from);
   const [to, setTo] = useState(w.to);
-  const [showSettings, setShowSettings] = useState(false);
+  const [showColumns, setShowColumns] = useState(false);
   const [q, setQ] = useState<EmployeeFilter>(NO_FILTER);
-  const [savedSort, setSort] = usePref<Sort>("meridian-payroll-sort", BY_NAME);
-  const sort = validSort(savedSort, SORT_KEYS, BY_NAME);
   const qc = useQueryClient();
   // Load whole Mon–Sun weeks around the period, so weekly overtime is right even when the period starts mid-week.
   const isDate = (d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d);
@@ -66,6 +73,9 @@ function PayrollPage() {
   const { data: adjustments = [] } = useAdjustments(from, to);
   const { data: defs = [] } = useFieldDefs();
   const { data: settings } = usePayrollSettings();
+  const { data: deductionRules } = useDeductions();
+  // Deductions and net pay only while that feature is on (Settings → Features).
+  const deductionsOn = settings?.deductions_on ?? false;
   const threshold = settings?.ot_threshold ?? 40;
   const mult = settings?.ot_multiplier ?? 1.5;
   const weekendOt = settings?.weekend_overtime ?? true;
@@ -74,9 +84,18 @@ function PayrollPage() {
 
   // Categories under Personal are personal details, which stay off payroll.
   const shownDefs = defs.filter((d) => d.section !== "Personal");
-  const infoCols = [
+  const infoCols: InfoCol[] = [
     ...builtInCols,
-    ...shownDefs.map((d) => ({ key: d.id, alias: customKey(d.id), label: d.label, get: (e: Employee) => formatValue(d.field_type, String(((e.custom_fields ?? {}) as Record<string, unknown>)[d.id] ?? "")) })),
+    ...shownDefs.map((d): InfoCol => {
+      const raw = (e: Employee) => String(((e.custom_fields ?? {}) as Record<string, unknown>)[d.id] ?? "");
+      const type = fieldType(d.field_type);
+      const numeric = type === "number" || type === "money";
+      return {
+        key: d.id, alias: customKey(d.id), label: d.label, get: (e) => formatValue(d.field_type, raw(e)),
+        kind: numeric ? "number" : type === "date" ? "date" : "text",
+        ...(numeric ? { sortBy: (e: Employee) => (raw(e) ? readAmount(raw(e)) : null) } : {}),
+      };
+    }),
   ].filter((c) => visible.includes(c.key));
   const aliasKey = (c: { key: string; alias?: string }) => c.alias ?? c.key;
   const { label } = useLabels();
@@ -90,7 +109,7 @@ function PayrollPage() {
   const empIds = new Set([...inPeriod.map((r) => r.employee_id), ...adjustments.map((a) => a.employee_id)]);
   const byEmp = new Map<string, typeof records>();
   for (const r of records) byEmp.set(r.employee_id, [...(byEmp.get(r.employee_id) ?? []), r]);
-  const list = employees
+  const unsorted = employees
     .filter((e) => empIds.has(e.id))
     .map((e) => {
       const history = rateHistory?.get(e.id);
@@ -102,17 +121,52 @@ function PayrollPage() {
       const extras: Record<string, number> = {};
       for (const a of adjustments) if (a.employee_id === e.id) extras[a.category] = (extras[a.category] ?? 0) + Number(a.amount);
       const extraTotal = Object.values(extras).reduce((s, n) => s + n, 0);
-      return { e, shift, rate, rates, ...p, extras, gross: p.total + extraTotal };
-    })
-    .sort((a, b) => {
-      // Ties (and the name sort itself) go by name A to Z, so equal amounts stay in a findable order.
-      const byName = fullName(a.e).localeCompare(fullName(b.e), undefined, { sensitivity: "base" });
-      const diff = sort.by === "hours" ? a.regular + a.overtime - (b.regular + b.overtime) : sort.by === "pay" ? a.gross - b.gross : byName;
-      return (sort.desc ? -diff : diff) || byName;
+      const gross = p.total + extraTotal;
+      const deducted = deductionsOn ? deductionsFor(deductionRules?.get(e.id) ?? [], gross, from, to) : null;
+      const byName: Record<string, number> = {};
+      for (const l of deducted?.lines ?? []) byName[l.name] = (byName[l.name] ?? 0) + l.amount;
+      return { e, shift, rate, rates, ...p, extras, gross, deducted, byName };
     });
+  type Row = (typeof unsorted)[number];
+  const hasManual = unsorted.some((r) => r.manualDays > 0);
+  // One column per deduction taken this period (like extra-pay categories), then the total and net pay.
+  const deductionCols = [...new Set(unsorted.flatMap((r) => Object.keys(r.byName)))];
 
-  const sum = (f: (r: (typeof list)[number]) => number) => list.reduce((s, r) => s + f(r), 0);
-  const hasManual = list.some((r) => r.manualDays > 0);
+  // Sorted by any column the table shows (the same ones as its headers). Ties go by name A to Z, so equal amounts
+  // stay in a findable order.
+  const columns: SortColumns<Row> = {
+    employee: { label: "Employee", kind: "text", value: (r) => fullName(r.e) },
+    ...Object.fromEntries(infoCols.map((c) => [aliasKey(c), { label: c.label, kind: c.kind, value: (r: Row) => (c.sortBy ?? c.get)(r.e) }])),
+    ...(showDays ? { days: { label: "Days", kind: "number" as const, value: (r: Row) => r.days } } : {}),
+    ...(showShift ? { shift: { label: "Shift", kind: "text" as const, value: (r: Row) => r.shift.name } } : {}),
+    // The latest rate in the period (the one shown last when it changed partway).
+    ...(showRate ? { hourly_rate: { label: "Rate", kind: "number" as const, value: (r: Row) => r.rate } } : {}),
+    reg_hrs: { label: "Reg hrs", kind: "number", value: (r) => r.regular },
+    ot_hrs: { label: "OT hrs", kind: "number", value: (r) => r.overtime },
+    reg_pay: { label: "Regular pay", kind: "number", value: (r) => r.regPay },
+    ot_pay: { label: "OT pay", kind: "number", value: (r) => r.otPay },
+    ...(hasManual ? { manual_pay: { label: "Manual pay", kind: "number" as const, value: (r: Row) => (r.manualDays ? r.manualPay : null) } } : {}),
+    ...Object.fromEntries(categories.map((c) => [`extra:${c}`, { label: c, kind: "number" as const, value: (r: Row) => r.extras[c] ?? 0 }])),
+    gross_pay: { label: "Gross pay", kind: "number", value: (r) => r.gross },
+    ...(deductionsOn ? {
+      ...Object.fromEntries(deductionCols.map((n) => [`deduction:${n}`, { label: n, kind: "number" as const, value: (r: Row) => r.byName[n] ?? 0 }])),
+      deductions_total: { label: "Deductions", kind: "number" as const, value: (r: Row) => r.deducted?.total ?? 0 },
+      net_pay: { label: "Net pay", kind: "number" as const, value: (r: Row) => r.deducted?.net ?? r.gross },
+    } : {}),
+  };
+  const [sort, setSort] = useTableSort("meridian-payroll-sort", columns, BY_NAME);
+  const byName = (a: Row, b: Row) => fullName(a.e).localeCompare(fullName(b.e), undefined, { sensitivity: "base" });
+  const list = sortTable(unsorted, sort, columns, byName);
+
+  const sum = (f: (r: Row) => number) => list.reduce((s, r) => s + f(r), 0);
+  // What a pay run for this period would save: each person's line as the table shows it.
+  const payRunsOn = settings?.pay_runs_on ?? false;
+  const runLines = payRunsOn ? list.map((r) => runLine({
+    employee: r.e, regular: r.regular, overtime: r.overtime, extraPay: Object.values(r.extras).reduce((s, n) => s + n, 0), gross: r.gross, deducted: r.deducted,
+  })) : [];
+  // The table's column count, for the loading placeholder's rows.
+  const colCount = 1 + infoCols.length + [showDays, showShift, showRate].filter(Boolean).length + 4 + (hasManual ? 1 : 0) + categories.length + 1
+    + (deductionsOn ? deductionCols.length + 2 : 0);
   // The search narrows the table only; totals and the CSV export always cover everyone paid.
   const shown = isFiltering(q) ? list.filter((r) => matchesEmployee(r.e, q)) : list;
 
@@ -120,10 +174,12 @@ function PayrollPage() {
     const head = [labelOf("employee", "Name"), ...infoCols.map((c) => labelOf(aliasKey(c), c.label)), labelOf("pay_type", "Pay type"), labelOf("shift", "Shift"), "Shift multiplier",
       ...(showDays ? [labelOf("days", "Days")] : []), ...(showRate ? [labelOf("hourly_rate", "Rate")] : []),
       labelOf("reg_hrs", "Regular hours"), labelOf("ot_hrs", "Overtime hours"), "Weekend hours", labelOf("reg_pay", "Regular pay"), labelOf("ot_pay", "Overtime pay"),
-      labelOf("manual_pay", "Manual day pay"), ...categories.map((c) => labelOf(`extra:${c}`, c)), labelOf("gross_pay", "Gross pay")];
+      labelOf("manual_pay", "Manual day pay"), ...categories.map((c) => labelOf(`extra:${c}`, c)), labelOf("gross_pay", "Gross pay"),
+      ...(deductionsOn ? [...deductionCols.map((n) => labelOf(`deduction:${n}`, n)), labelOf("deductions_total", "Deductions"), labelOf("net_pay", "Net pay")] : [])];
     const body = list.map((r) => [fullName(r.e), ...infoCols.map((c) => c.get(r.e)), r.e.pay_type === "salary" ? "Salary" : "Hourly", r.shift.name, r.shift.multiplier, ...(showDays ? [r.days] : []), ...(showRate ? [r.rates.map((x) => x.toFixed(2)).join(" → ")] : []),
       r.regular.toFixed(2), r.overtime.toFixed(2), r.weekendHours.toFixed(2), r.regPay.toFixed(2), r.otPay.toFixed(2), r.manualPay.toFixed(2),
-      ...categories.map((c) => (r.extras[c] ?? 0).toFixed(2)), r.gross.toFixed(2)]);
+      ...categories.map((c) => (r.extras[c] ?? 0).toFixed(2)), r.gross.toFixed(2),
+      ...(deductionsOn ? [...deductionCols.map((n) => (r.byName[n] ?? 0).toFixed(2)), (r.deducted?.total ?? 0).toFixed(2), (r.deducted?.net ?? r.gross).toFixed(2)] : [])]);
     const csv = [head, ...body].map((l) => l.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
@@ -135,7 +191,8 @@ function PayrollPage() {
   return (
     <AppShell eyebrow="Payroll run" title={`${from} – ${to}`} actions={
       <div className="flex gap-2">
-        <button onClick={() => setShowSettings((s) => !s)} className={btnGhost}><Settings2 className="mr-1 inline h-4 w-4" />Customize</button>
+        <button onClick={() => setShowColumns((s) => !s)} className={btnGhost} aria-expanded={showColumns}><Columns3 className="mr-1 inline h-4 w-4" />Columns</button>
+        <button onClick={() => openSettings("pay")} className={btnGhost} title="Overtime rules and shifts"><Settings2 className="mr-1 inline h-4 w-4" />Pay rules</button>
         <button onClick={exportCsv} className={btnGhost}>Export CSV</button>
       </div>
     }>
@@ -147,20 +204,23 @@ function PayrollPage() {
       </div>
       {/* Once the period's records are in and no one is paid, say why and offer the nearest week with records. */}
       {recordsLoaded && list.length === 0 && isDate(from) && isDate(to) && <PeriodHint from={from} to={to} onPick={(f, t) => { setFrom(f); setTo(t); }} />}
-      {to && <PayLock periodEnd={to} warnings={checked.open.length} />}
+      {to && (payRunsOn ? (
+        <div className="flex flex-wrap items-center gap-3">
+          {recordsLoaded && isDate(from) && isDate(to) && from <= to && <RecordPayRun from={from} to={to} lines={runLines} warnings={checked.open.length} />}
+          <div className="min-w-0 flex-1"><PayLock periodEnd={to} warnings={checked.open.length} /></div>
+        </div>
+      ) : <PayLock periodEnd={to} warnings={checked.open.length} />)}
       {inPeriod.length > 0 && <RecordWarnings checked={checked} employees={employees} />}
 
-      {showSettings && settings && (
-        <>
-          <SettingsPanel settings={settings} cols={[...builtInCols.map((c) => ({ key: c.key, label: label(c.key, c.label) })), { key: "shift", label: label("shift", "Shift") }, { key: "days", label: label("days", "Days") },
-            { key: "rate", label: label("hourly_rate", "Rate") }, ...shownDefs.map((d) => ({ key: d.id, label: label(customKey(d.id), d.label) }))]}
-            onSaved={() => qc.invalidateQueries({ queryKey: ["payroll-settings"] })} />
-          <ShiftsPanel shifts={shifts} employees={employees} onChange={() => qc.invalidateQueries({ queryKey: ["shifts"] })} />
-        </>
+      {showColumns && settings && (
+        <ColumnsPanel settings={settings} cols={[...builtInCols.map((c) => ({ key: c.key, label: label(c.key, c.label) })), { key: "shift", label: label("shift", "Shift") }, { key: "days", label: label("days", "Days") },
+          { key: "rate", label: label("hourly_rate", "Rate") }, ...shownDefs.map((d) => ({ key: d.id, label: label(customKey(d.id), d.label) }))]}
+          onSaved={() => qc.invalidateQueries({ queryKey: ["payroll-settings"] })} onClose={() => setShowColumns(false)} />
       )}
 
-      <section className="grid grid-cols-2 gap-4 md:grid-cols-4">
+      <section className={`grid grid-cols-2 gap-4 ${deductionsOn ? "md:grid-cols-5" : "md:grid-cols-4"}`}>
         <StatCard label="Gross pay" value={money(sum((r) => r.gross))} highlight />
+        {deductionsOn && <StatCard label="Net pay" value={money(sum((r) => r.deducted?.net ?? r.gross))} sub={`after ${money(sum((r) => r.deducted?.total ?? 0))} in deductions`} delay={30} />}
         <StatCard label="Regular hours" value={sum((r) => r.regular).toFixed(2)} delay={60} />
         <StatCard label="Overtime hours" value={sum((r) => r.overtime).toFixed(2)} delay={120} />
         <StatCard label="Employees paid" value={String(list.length)} delay={180} />
@@ -175,29 +235,35 @@ function PayrollPage() {
           </span>
           <div className="flex w-full flex-wrap items-center gap-3">
             <SearchInput value={q} onChange={setQ} employees={list.map((r) => r.e)} className="min-w-[16rem] max-w-xl flex-1" />
-            <SortControl value={sort} onChange={setSort} keys={SORT_KEYS} />
+            <SortControl value={sort} onChange={setSort} columns={columns} />
           </div>
         </div>
         <div className="overflow-x-auto">
           <DataTable id="payroll" className="w-full text-sm">
             <thead>
+              <TableSort sort={sort} columns={columns} onSort={setSort}>
               <tr className="border-b border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
-                <th className={`${th} pl-5 text-left`}><EditableLabel k="employee" name="Employee" /></th>
-                {infoCols.map((c) => <th key={c.key} className={`${th} text-left`}><EditableLabel k={aliasKey(c)} name={c.label} /></th>)}
-                {showDays && <th className={`${th} text-right`}><EditableLabel k="days" name="Days" /></th>}
-                {showShift && <th className={`${th} text-left`}><EditableLabel k="shift" name="Shift" /></th>}
-                {showRate && <th className={`${th} text-right`}><EditableLabel k="hourly_rate" name="Rate" /></th>}
-                <th className={`${th} text-right`}><EditableLabel k="reg_hrs" name="Reg hrs" /></th>
-                <th className={`${th} text-right`}><EditableLabel k="ot_hrs" name="OT hrs" /></th>
-                <th className={`${th} text-right`}><EditableLabel k="reg_pay" name="Regular pay" /></th>
-                <th className={`${th} text-right`}><EditableLabel k="ot_pay" name="OT pay" /></th>
-                {hasManual && <th className={`${th} text-right`}><EditableLabel k="manual_pay" name="Manual pay" /></th>}
-                {categories.map((c) => <th key={c} className={`${th} text-right`}><EditableLabel k={`extra:${c}`} name={c} /></th>)}
-                <th className={`${th} pr-5 text-right`}><EditableLabel k="gross_pay" name="Gross pay" /></th>
+                <SortTh k="employee" className={`${th} pl-5 text-left`}><EditableLabel k="employee" name="Employee" /></SortTh>
+                {infoCols.map((c) => <SortTh k={aliasKey(c)} key={c.key} className={`${th} text-left`}><EditableLabel k={aliasKey(c)} name={c.label} /></SortTh>)}
+                {showDays && <SortTh k="days" className={`${th} text-right`}><EditableLabel k="days" name="Days" /></SortTh>}
+                {showShift && <SortTh k="shift" className={`${th} text-left`}><EditableLabel k="shift" name="Shift" /></SortTh>}
+                {showRate && <SortTh k="hourly_rate" className={`${th} text-right`}><EditableLabel k="hourly_rate" name="Rate" /></SortTh>}
+                <SortTh k="reg_hrs" className={`${th} text-right`}><EditableLabel k="reg_hrs" name="Reg hrs" /></SortTh>
+                <SortTh k="ot_hrs" className={`${th} text-right`}><EditableLabel k="ot_hrs" name="OT hrs" /></SortTh>
+                <SortTh k="reg_pay" className={`${th} text-right`}><EditableLabel k="reg_pay" name="Regular pay" /></SortTh>
+                <SortTh k="ot_pay" className={`${th} text-right`}><EditableLabel k="ot_pay" name="OT pay" /></SortTh>
+                {hasManual && <SortTh k="manual_pay" className={`${th} text-right`}><EditableLabel k="manual_pay" name="Manual pay" /></SortTh>}
+                {categories.map((c) => <SortTh k={`extra:${c}`} key={c} className={`${th} text-right`}><EditableLabel k={`extra:${c}`} name={c} /></SortTh>)}
+                <SortTh k="gross_pay" className={`${th} ${deductionsOn ? "" : "pr-5"} text-right`}><EditableLabel k="gross_pay" name="Gross pay" /></SortTh>
+                {deductionsOn && deductionCols.map((n) => <SortTh k={`deduction:${n}`} key={n} className={`${th} text-right`}><EditableLabel k={`deduction:${n}`} name={n} /></SortTh>)}
+                {deductionsOn && <SortTh k="deductions_total" className={`${th} text-right`}><EditableLabel k="deductions_total" name="Deductions" /></SortTh>}
+                {deductionsOn && <SortTh k="net_pay" className={`${th} pr-5 text-right`}><EditableLabel k="net_pay" name="Net pay" /></SortTh>}
               </tr>
+              </TableSort>
             </thead>
             <tbody className="font-mono text-[13px]">
-              {list.length === 0 && <tr><td colSpan={20} className="px-5 py-10 text-center font-body text-muted-foreground">No hours in this period.</td></tr>}
+              {!recordsLoaded && <SkeletonRows cols={colCount} />}
+              {recordsLoaded && list.length === 0 && <tr><td colSpan={20} className="px-5 py-10 text-center font-body text-muted-foreground">No hours in this period.</td></tr>}
               {list.length > 0 && shown.length === 0 && <tr><td colSpan={20} className="px-5 py-10 text-center font-body text-muted-foreground">No one paid this period matches {describeEmployeeFilter(q)}.</td></tr>}
               {shown.map((r) => (
                 <tr key={r.e.id} className="border-b border-border last:border-0 hover:bg-secondary">
@@ -212,7 +278,10 @@ function PayrollPage() {
                   <td className="px-3 py-3 text-right">{money(r.otPay)}</td>
                   {hasManual && <td className="px-3 py-3 text-right" title={`${r.manualDays} day(s) with manual pay`}>{r.manualDays ? money(r.manualPay) : "—"}</td>}
                   {categories.map((c) => <td key={c} className="px-3 py-3 text-right">{money(r.extras[c] ?? 0)}</td>)}
-                  <td className="px-5 py-3 text-right font-semibold">{money(r.gross)}</td>
+                  <td className={`${deductionsOn ? "px-3" : "px-5"} py-3 text-right font-semibold`}>{money(r.gross)}</td>
+                  {deductionsOn && deductionCols.map((n) => <td key={n} className="px-3 py-3 text-right text-muted-foreground">{r.byName[n] ? `−${money(r.byName[n]!)}` : "—"}</td>)}
+                  {deductionsOn && <td className="px-3 py-3 text-right" title={r.deducted?.lines.map((l) => `${l.name}: ${money(l.amount)} (${l.detail})`).join("\n")}>{r.deducted?.total ? `−${money(r.deducted.total)}` : "—"}</td>}
+                  {deductionsOn && <td className={`px-5 py-3 text-right font-semibold ${(r.deducted?.net ?? 0) < 0 ? "text-destructive" : ""}`} title={(r.deducted?.net ?? 0) < 0 ? "The deductions are more than the gross pay" : undefined}>{money(r.deducted?.net ?? r.gross)}</td>}
                 </tr>
               ))}
             </tbody>
@@ -221,58 +290,39 @@ function PayrollPage() {
       </div>
 
       <ExtrasPanel employees={employees} adjustments={adjustments} defaultDate={to} onChange={() => qc.invalidateQueries({ queryKey: ["adjustments"] })} />
+      {payRunsOn && <PayRunsList onShow={(f, t) => { setFrom(f); setTo(t); window.scrollTo({ top: 0, behavior: "smooth" }); }} />}
     </AppShell>
   );
 }
 
-function SettingsPanel({ settings, cols, onSaved }: {
+/** Which extra columns the payroll table shows (payroll_settings.visible_columns). Saved on each click. */
+function ColumnsPanel({ settings, cols, onSaved, onClose }: {
   settings: { ot_threshold: number; ot_multiplier: number; weekend_overtime: boolean; visible_columns: string[] };
-  cols: { key: string; label: string }[]; onSaved: () => void;
+  cols: { key: string; label: string }[]; onSaved: () => void; onClose: () => void;
 }) {
-  const [threshold, setThreshold] = useState(String(settings.ot_threshold));
-  const [mult, setMult] = useState(String(settings.ot_multiplier));
-  const [weekend, setWeekend] = useState(settings.weekend_overtime);
-  const [vis, setVis] = useState<string[]>(settings.visible_columns);
-  useEffect(() => setVis(settings.visible_columns), [settings.visible_columns]);
-
-  const save = async () => {
-    const t = Number(threshold), m = Number(mult);
-    if (!Number.isFinite(t) || t < 0 || t > 168) { toast.error("Overtime threshold must be 0–168 hours"); return; }
-    if (!Number.isFinite(m) || m < 1 || m > 5) { toast.error("Overtime multiplier must be between 1 and 5"); return; }
-    const { error } = await db().saveSettings({ ot_threshold: t, ot_multiplier: m, weekend_overtime: weekend, visible_columns: vis });
-    if (error) { toast.error(error.message); return; }
-    toast.success("Payroll settings saved");
-    onSaved();
+  const vis = settings.visible_columns;
+  const toggle = async (key: string) => {
+    const next = vis.includes(key) ? vis.filter((v) => v !== key) : [...vis, key];
+    const { error } = await db().saveSettings({ visible_columns: next });
+    if (error) toast.error(error.message); else onSaved();
   };
-
   return (
-    <div className="glass-panel space-y-4 p-5">
-      <div className="font-display font-extrabold tracking-tight">Customize payroll</div>
-      <div className="flex flex-wrap gap-4">
-        <label><span className="label-mono">Weekday overtime after (hrs / week)</span>
-          <input type="number" step="0.5" className={`${inputCls} mt-1 max-w-[10rem]`} value={threshold} onChange={(e) => setThreshold(e.target.value)} /></label>
-        <label><span className="label-mono">Overtime rate (× hourly)</span>
-          <input type="number" step="0.1" className={`${inputCls} mt-1 max-w-[10rem]`} value={mult} onChange={(e) => setMult(e.target.value)} /></label>
-        <label className="flex items-end gap-2 pb-2 text-sm">
-          <input type="checkbox" checked={weekend} onChange={(e) => setWeekend(e.target.checked)} />
-          Saturday and Sunday hours are always overtime
-        </label>
+    <div className="glass-panel space-y-3 p-5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="font-display font-extrabold tracking-tight">Show these columns</div>
+        <button onClick={onClose} className={btnGhost}>Done</button>
       </div>
-      <div>
-        <div className="label-mono mb-2">Show these columns</div>
-        <div className="flex flex-wrap gap-2">
-          {cols.map((c) => {
-            const on = vis.includes(c.key);
-            return (
-              <button key={c.key} type="button" onClick={() => setVis(on ? vis.filter((v) => v !== c.key) : [...vis, c.key])}
-                className={`rounded-lg px-3 py-1.5 text-xs font-medium ring-1 ring-border ${on ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground hover:text-foreground"}`}>
-                {c.label}
-              </button>
-            );
-          })}
-        </div>
+      <div className="flex flex-wrap gap-2">
+        {cols.map((c) => {
+          const on = vis.includes(c.key);
+          return (
+            <button key={c.key} type="button" aria-pressed={on} onClick={() => void toggle(c.key)}
+              className={`rounded-lg px-3 py-1.5 text-xs font-medium ring-1 ring-border ${on ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground hover:text-foreground"}`}>
+              {c.label}
+            </button>
+          );
+        })}
       </div>
-      <button onClick={save} className={btnPrimary}>Save settings</button>
     </div>
   );
 }
@@ -306,6 +356,17 @@ function ExtrasPanel({ employees, adjustments, defaultDate, onChange }: {
     const { error } = await db().remove("pay_adjustments", id);
     if (error) toast.error(error.message); else onChange();
   };
+  type Extra = (typeof adjustments)[number];
+  const columns: SortColumns<Extra> = {
+    employee: { label: "Employee", kind: "text", value: (a) => name(a.employee_id) },
+    date: { label: "Pay date", kind: "date", value: (a) => a.pay_date },
+    category: { label: "Category", kind: "text", value: (a) => a.category },
+    note: { label: "Note", kind: "text", value: (a) => a.note },
+    amount: { label: "Amount", kind: "number", value: (a) => Number(a.amount) },
+  };
+  const [sort, setSort] = useTableSort("meridian-payroll-extra-sort", columns, { by: "date", desc: false });
+  const rows = sortTable(adjustments, sort, columns);
+  const th = "px-3 py-2.5 font-medium";
 
   return (
     <div className="glass-panel overflow-hidden">
@@ -324,8 +385,20 @@ function ExtrasPanel({ employees, adjustments, defaultDate, onChange }: {
       </form>
       {adjustments.length > 0 && (
         <DataTable id="payroll-extra-pay" className="w-full text-sm">
+          <thead>
+            <TableSort sort={sort} columns={columns} onSort={setSort}>
+            <tr className="border-t border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
+              <SortTh k="employee" className={`${th} pl-5 text-left`}><EditableLabel k="employee" name="Employee" /></SortTh>
+              <SortTh k="date" className={`${th} text-left`}><EditableLabel k="pay_date" name="Pay date" /></SortTh>
+              <SortTh k="category" className={`${th} text-left`}><EditableLabel k="category" name="Category" /></SortTh>
+              <SortTh k="note" className={`${th} text-left`}><EditableLabel k="note" name="Note" /></SortTh>
+              <SortTh k="amount" className={`${th} text-right`}><EditableLabel k="amount" name="Amount" /></SortTh>
+              <th className="w-10" />
+            </tr>
+            </TableSort>
+          </thead>
           <tbody className="font-mono text-[13px]">
-            {adjustments.map((a) => (
+            {rows.map((a) => (
               <tr key={a.id} className="border-t border-border hover:bg-secondary">
                 <td className="px-5 py-2 font-body">{employees.some((e) => e.id === a.employee_id) ? <EmployeeLink id={a.employee_id} name={name(a.employee_id)} /> : "—"}</td>
                 <td className="px-3 py-2">{a.pay_date}</td>
@@ -338,114 +411,6 @@ function ExtrasPanel({ employees, adjustments, defaultDate, onChange }: {
           </tbody>
         </DataTable>
       )}
-    </div>
-  );
-}
-
-/** The shifts employees can be on, each with a multiplier on the hourly rate. The first one is the default. */
-function ShiftsPanel({ shifts, employees, onChange }: { shifts: Shift[]; employees: Employee[]; onChange: () => void }) {
-  const [name, setName] = useState("");
-  const [multiplier, setMultiplier] = useState("1");
-  const counts = new Map<string, number>();
-  for (const e of employees) {
-    const id = shiftFor(e.shift_id, shifts).id;
-    if (id) counts.set(id, (counts.get(id) ?? 0) + 1);
-  }
-  const checkMult = (v: string) => {
-    const m = Number(v);
-    if (!Number.isFinite(m) || m <= 0 || m > 10) { toast.error("A shift multiplier must be above 0 and at most 10 (1 = normal rate)"); return null; }
-    return Math.round(m * 1000) / 1000;
-  };
-
-  const add = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const n = name.trim();
-    if (!n || n.length > 40) { toast.error("Give the shift a name (up to 40 characters)"); return; }
-    if (shifts.some((s) => s.name.toLowerCase() === n.toLowerCase())) { toast.error(`There's already a "${n}" shift`); return; }
-    const m = checkMult(multiplier);
-    if (m === null) return;
-    const { error } = await db().insert("shifts", { name: n, multiplier: m, sort_order: shifts.length });
-    if (error) { toast.error(error.message); return; }
-    toast.success(`Added the ${n} shift`);
-    setName(""); setMultiplier("1");
-    onChange();
-  };
-  const save = async (s: Shift, patch: TablesUpdate<"shifts">) => {
-    const { error } = await db().update("shifts", s.id, patch);
-    if (error) toast.error(error.message); else { toast.success(`${patch.name ?? s.name} shift saved`); onChange(); }
-  };
-  const remove = async (s: Shift) => {
-    const rest = shifts.filter((x) => x.id !== s.id);
-    if (!rest.length) { toast.error("Keep at least one shift"); return; }
-    const n = counts.get(s.id) ?? 0;
-    if (!confirm(`Delete the ${s.name} shift?${n ? `\n\n${n} employee${n === 1 ? "" : "s"} on it will move to the default shift (${rest[0]!.name}).` : ""}`)) return;
-    const { error } = await db().remove("shifts", s.id);
-    if (error) { toast.error(error.message); return; }
-    onChange();
-  };
-
-  return (
-    <div className="glass-panel overflow-hidden">
-      <div className="border-b border-border px-5 py-4">
-        <div className="font-display font-extrabold tracking-tight">Shifts</div>
-        <p className="text-xs text-muted-foreground">
-          Each employee is on one shift. The multiplier scales their rate for regular hours (1 = normal, 1.1 = 10% more). Overtime hours are paid at the overtime rate instead, not stacked with the shift. A single day can be put on another shift on the Time records page.
-          New employees start on the first shift. A shift's usual hours (optional) fill in the clock-in, clock-out and break when you add records for its people on the Time records page.
-        </p>
-      </div>
-      <div className="divide-y divide-border">
-        {shifts.map((s, i) => <ShiftRow key={s.id} shift={s} isDefault={i === 0} count={counts.get(s.id) ?? 0} onSave={save} onRemove={remove} checkMult={checkMult} />)}
-        {shifts.length === 0 && <div className="px-5 py-4 text-sm text-muted-foreground">No shifts yet: everyone is paid their normal rate. Add one below.</div>}
-      </div>
-      <form onSubmit={add} className="flex flex-wrap items-end gap-3 border-t border-border p-5">
-        <label><span className="label-mono">New shift</span><input className={`${inputCls} mt-1`} placeholder="e.g. Swing, Weekend" value={name} onChange={(e) => setName(e.target.value)} /></label>
-        <label><span className="label-mono">Multiplier</span><input type="number" step="0.05" min="0.05" max="10" className={`${inputCls} mt-1 w-28`} value={multiplier} onChange={(e) => setMultiplier(e.target.value)} /></label>
-        <button className={btnPrimary}><Plus className="mr-1 inline h-4 w-4" />Add shift</button>
-      </form>
-    </div>
-  );
-}
-
-function ShiftRow({ shift, isDefault, count, onSave, onRemove, checkMult }: {
-  shift: Shift; isDefault: boolean; count: number;
-  onSave: (s: Shift, patch: TablesUpdate<"shifts">) => void; onRemove: (s: Shift) => void; checkMult: (v: string) => number | null;
-}) {
-  const [unit] = useBreakUnit();
-  const saved = {
-    name: shift.name, mult: String(Number(shift.multiplier)),
-    start: shift.default_clock_in?.slice(0, 5) ?? "", end: shift.default_clock_out?.slice(0, 5) ?? "",
-    brk: shift.default_lunch_minutes === null ? "" : String(shift.default_lunch_minutes),
-  };
-  const [v, setV] = useState(saved);
-  const savedKey = JSON.stringify(saved);
-  useEffect(() => { setV(JSON.parse(savedKey) as typeof saved); }, [savedKey]);
-  const set = (k: keyof typeof saved, val: string) => setV((x) => ({ ...x, [k]: val }));
-  const dirty = v.name.trim() !== saved.name || Number(v.mult) !== Number(saved.mult) || v.start !== saved.start || v.end !== saved.end || (!!v.start && v.brk !== saved.brk);
-  const save = () => {
-    if (!v.name.trim()) { toast.error("A shift needs a name"); return; }
-    const m = checkMult(v.mult);
-    if (m === null) return;
-    if (!v.start !== !v.end) { toast.error("Set both the usual start and end, or clear both"); return; }
-    const brk = v.start ? Number(v.brk || 0) : null;
-    if (brk !== null && !validBreak(brk)) { toast.error(breakRangeText(unit)); return; }
-    onSave(shift, { name: v.name.trim().slice(0, 40), multiplier: m, default_clock_in: v.start || null, default_clock_out: v.end || null, default_lunch_minutes: brk });
-  };
-  return (
-    <div className="flex flex-wrap items-center gap-3 px-5 py-3 text-sm">
-      <input className={`${inputCls} max-w-[12rem]`} value={v.name} onChange={(e) => set("name", e.target.value)} aria-label="Shift name" />
-      <span className="text-muted-foreground">×</span>
-      <input type="number" step="0.05" min="0.05" max="10" className={`${inputCls} w-24`} value={v.mult} onChange={(e) => set("mult", e.target.value)} aria-label={`${shift.name} multiplier`} />
-      <span className="ml-2 text-xs text-muted-foreground">Usual hours</span>
-      <input type="time" className={`${inputCls} !w-[7.5rem]`} value={v.start} onChange={(e) => set("start", e.target.value)} aria-label={`${shift.name} usual start`} />
-      <span className="text-muted-foreground">–</span>
-      <input type="time" className={`${inputCls} !w-[7.5rem]`} value={v.end} onChange={(e) => set("end", e.target.value)} aria-label={`${shift.name} usual end`} />
-      <BreakInput minutes={v.brk} onChange={(m) => set("brk", m)} className={`${inputCls} !w-20`} label={`${shift.name} usual break`} />
-      <span className="text-xs text-muted-foreground">{unit === "h" ? "h" : "min"} break</span>
-      <span className="text-xs text-muted-foreground">{count} employee{count === 1 ? "" : "s"}{isDefault ? " · default" : ""}</span>
-      <div className="ml-auto flex gap-2">
-        {dirty && <button onClick={save} className={btnPrimary}>Save</button>}
-        <button onClick={() => onRemove(shift)} className={btnGhost} aria-label={`Delete ${shift.name} shift`}><Trash2 className="h-4 w-4" /></button>
-      </div>
     </div>
   );
 }

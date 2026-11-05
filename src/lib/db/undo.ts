@@ -1,4 +1,5 @@
 import { decodeRow, encodeRow } from "./codec";
+import { addHistory, replayedOps } from "./history";
 import { localDb } from "./local";
 import { TABLES, type TableName } from "./schema";
 import { canonical, tableColumns, type Row, type Sql, type SqlDb } from "./snapshot";
@@ -66,6 +67,8 @@ export class UndoHistory {
         this.depth--;
       }
       if (ops.length) {
+        // The permanent record (history.ts). A failure there is reported but never undoes the change itself.
+        await addHistory(sql, "edit", label, ops).catch((e: unknown) => console.error("Edit history not saved:", e));
         this.undoStack.push({ label, ops });
         if (this.undoStack.length > LIMIT) this.undoStack.shift();
         this.redoStack = [];
@@ -112,6 +115,7 @@ export class UndoHistory {
       this.depth--;
     }
     from.pop();
+    await addHistory(await this.getDb(), what, step.label, replayedOps(step.ops, what)).catch((e: unknown) => console.error("Edit history not saved:", e));
     (what === "undo" ? this.redoStack : this.undoStack).push(step);
     this.changed();
     return step.label;
@@ -235,6 +239,7 @@ async function apply(tx: Sql, run: Change[]): Promise<boolean> {
 const NOUNS: Record<TableName, [string, string]> = {
   employee_field_defs: ["a category", "categories"], shifts: ["a shift", "shifts"], employees: ["an employee", "employees"],
   pay_rates: ["a pay rate", "pay rates"], time_records: ["a record", "records"], pay_adjustments: ["an extra-pay entry", "extra-pay entries"],
+  deductions: ["a deduction", "deductions"], pay_runs: ["a pay run", "pay runs"], pay_run_lines: ["a pay run line", "pay run lines"],
   payroll_settings: ["the settings", "the settings"],
 };
 const count = (t: TableName, n: number) => (n === 1 ? NOUNS[t][0] : `${n} ${NOUNS[t][1]}`);

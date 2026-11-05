@@ -4,9 +4,9 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Meridian Payroll — Employees, hours & pay" },
+      { title: "KoPayroll — Employees, hours & pay" },
       { name: "description", content: "Store employee details, track clock-in or daily hours, import CSV/Excel timesheets and calculate pay." },
-      { property: "og:title", content: "Meridian Payroll" },
+      { property: "og:title", content: "KoPayroll" },
       { property: "og:description", content: "Employees, work hours and pay in one live ledger." },
     ],
   }),
@@ -20,7 +20,7 @@ function Index() {
       <div className="anim-breathe pointer-events-none fixed -right-52 top-1/3 h-[40rem] w-[40rem] rounded-full bg-glow-b blur-3xl" />
       <div className="absolute right-6 top-6"><ThemeToggle /></div>
       <div className="anim-rise relative max-w-xl text-center">
-        <div className="mx-auto mb-6 grid h-12 w-12 place-items-center rounded-2xl bg-primary font-display text-xl font-extrabold text-primary-foreground">M</div>
+        <div className="mx-auto mb-6 grid h-12 w-12 place-items-center rounded-2xl bg-primary font-display text-xl font-extrabold text-primary-foreground">K</div>
         <div className="label-mono">Payroll OS</div>
         <h1 className="mt-3 font-display text-5xl font-extrabold tracking-tight">Every hour, on the ledger.</h1>
         <p className="mt-4 text-muted-foreground">

@@ -38,6 +38,31 @@ describe("one employee's timesheet among everyone's records", () => {
     expect((await exportFile({ format: "xlsx" }, employeeTimesheet(emp("e2", "E2"), ctx), "t")).name).toBe("t.xlsx");
   });
 
+  it("is a payslip when deductions are on: each deduction, the total and net pay, and the plain file lists them", async () => {
+    const tax = { id: "t", name: "Tax", kind: "percent", amount: 10, repeats: "period", starts_on: null, ends_on: null };
+    const d = employeeTimesheet(emp("e1", "E1"), { ...ctx, deductions: [tax] })("record", null, 1);
+    expect([d.values["deduction:Tax"], d.values.deductions_total, d.values.net_pay]).toEqual([18.5, 18.5, 166.5]);
+    expect(d.values.paid_on).toBeUndefined();
+    const csv = strFromU8((await exportFile({ format: "csv" }, employeeTimesheet(emp("e1", "E1"), { ...ctx, deductions: [tax] }), "t")).bytes);
+    expect(csv).toContain(`"Deduction: Tax","18.5"`);
+    expect(csv).toContain(`"Net pay","166.5"`);
+    // Off: no payslip part at all.
+    expect(employeeTimesheet(emp("e1", "E1"), ctx)("record", null, 1).values.net_pay).toBeUndefined();
+  });
+
+  it("uses a recorded pay run's own figures for its period, with its date and the year to date", () => {
+    const line = { employee_id: "e1", employee_name: "Ada E1", employee_code: "E1", hours: 8, regular_hours: 8, overtime_hours: 0, extra_pay: 25, gross: 185, deductions: [{ name: "Tax", amount: 20 }], deductions_total: 20, net: 165 };
+    const runs = [
+      { id: "r0", period_from: "2026-10-12", period_to: "2026-10-18", paid_on: "2026-10-19", created_at: "2026-10-19T09:00:00Z", lines: [{ ...line, gross: 100, deductions_total: 10, net: 90 }] },
+      { id: "r1", period_from: ctx.from, period_to: ctx.to, paid_on: "2026-10-26", created_at: "2026-10-26T09:00:00Z", lines: [line] },
+    ];
+    // The deduction has changed since the run (now 50%), and the run's saved 20 still wins.
+    const tax = { id: "t", name: "Tax", kind: "percent", amount: 50, repeats: "period", starts_on: null, ends_on: null };
+    const v = employeeTimesheet(emp("e1", "E1"), { ...ctx, deductions: [tax], runs })("record", null, 1).values;
+    expect([v["deduction:Tax"], v.net_pay, v.paid_on]).toEqual([20, 165, { date: "2026-10-26" }]);
+    expect([v.ytd_gross, v.ytd_deductions, v.ytd_net]).toEqual([285, 30, 255]);
+  });
+
   it("names an export's kind for routines, and finds it again", () => {
     const t = { id: "t1", name: "Weekly" } as unknown as TimesheetTemplate;
     for (const k of [{ format: "pdf" as const }, { format: "xlsx" as const, template: t }, { format: "pdf" as const, template: t }]) {

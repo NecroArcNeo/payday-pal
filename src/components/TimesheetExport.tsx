@@ -1,32 +1,28 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { usePayslipData } from "@/lib/payslip";
 import { toast } from "sonner";
 import { ChevronDown, Download, Eye, FileSpreadsheet, FileText, Pencil, Upload, X } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { btnGhost, btnPrimary, inputCls } from "@/components/AppShell";
 import { downloadBlob } from "@/lib/db/backups";
 import {
-  colLetters, exportFile, fieldLabel, fromBase64, ROW_FIELDS, SHEET_FIELDS, templateCells, templateProblems, toBase64,
+  colLetters, DEDUCTION_FIELDS, exportFile, fieldLabel, fromBase64, PAY_RUN_FIELDS, ROW_FIELDS, SHEET_FIELDS, templateCells, templateProblems, toBase64,
   WEEKDAY_NAMES, type ExportKind, type RowField, type SheetField, type TemplateCategory, type TimesheetSource, type TimesheetTemplate,
 } from "@/lib/export/timesheet-export";
 import { deleteTemplate, MAX_TEMPLATE_BYTES, saveTemplate, useTemplates } from "@/lib/export/template-store";
 import { fillTemplate, parseAddress, templateSheets, type TemplateSheet } from "@/lib/export/xlsx-template";
 import { renderSheet, type RenderedCell, type RenderedSheet } from "@/lib/export/sheet-render";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { askConfirm, keepDialogFocus } from "@/lib/choice-prompt";
+import { usePref } from "@/lib/prefs";
 
 /** The Timesheet page's Export menu: a plain Excel, CSV or PDF file, or the period filled into one of the user's templates (as Excel or PDF). */
 export function TimesheetExport({ data, fileName, categories }: { data: TimesheetSource; fileName: string; categories: TemplateCategory[] }) {
   const templates = useTemplates();
-  const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<TimesheetTemplate | "new" | null>(null);
-  const box = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, [open]);
 
   const save = async (kind: ExportKind) => {
-    setOpen(false);
     try {
       const f = await exportFile(kind, data, fileName);
       downloadBlob(new Blob([f.bytes as Uint8Array<ArrayBuffer>], { type: f.type }), f.name);
@@ -34,30 +30,33 @@ export function TimesheetExport({ data, fileName, categories }: { data: Timeshee
     } catch (e) { toast.error((e as Error).message, { duration: 15000 }); }
   };
 
-  const item = "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-secondary";
+  // The kit's dropdown menu: arrow keys move through the items (each template's PDF and edit buttons too), Escape or
+  // a click elsewhere closes it, and it opens upward or leftward when there's no room below. An item closes the menu
+  // when picked, so the editor opens after it (outside the menu, so it stays open).
+  const item = "gap-2 rounded-lg px-3 py-2";
   return (
-    <div ref={box} className="relative print:hidden">
-      <button type="button" onClick={() => setOpen(!open)} className={btnGhost} aria-haspopup="menu" aria-expanded={open}>
-        <Download className="mr-1 inline h-4 w-4" />Export<ChevronDown className="ml-1 inline h-3.5 w-3.5" />
-      </button>
-      {open && (
-        <div role="menu" className="absolute right-0 z-20 mt-1 w-72 rounded-xl border border-border bg-background p-1.5 shadow-xl">
-          <button role="menuitem" className={item} onClick={() => void save({ format: "xlsx" })}><FileSpreadsheet className="h-4 w-4 text-muted-foreground" />Excel file (.xlsx)</button>
-          <button role="menuitem" className={item} onClick={() => void save({ format: "csv" })}><FileSpreadsheet className="h-4 w-4 text-muted-foreground" />CSV file (.csv)</button>
-          <button role="menuitem" className={item} onClick={() => void save({ format: "pdf" })}><FileText className="h-4 w-4 text-muted-foreground" />PDF file (.pdf)</button>
-          <div className="my-1 border-t border-border" />
-          <div className="px-3 pb-1 pt-1.5 font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Your templates</div>
+    <div className="print:hidden">
+      <DropdownMenu modal={false}>
+        <DropdownMenuTrigger className={btnGhost}>
+          <Download className="mr-1 inline h-4 w-4" />Export<ChevronDown className="ml-1 inline h-3.5 w-3.5" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-72 rounded-xl p-1.5" onCloseAutoFocus={keepDialogFocus}>
+          <DropdownMenuItem className={item} onSelect={() => void save({ format: "xlsx" })}><FileSpreadsheet className="h-4 w-4 text-muted-foreground" />Excel file (.xlsx)</DropdownMenuItem>
+          <DropdownMenuItem className={item} onSelect={() => void save({ format: "csv" })}><FileSpreadsheet className="h-4 w-4 text-muted-foreground" />CSV file (.csv)</DropdownMenuItem>
+          <DropdownMenuItem className={item} onSelect={() => void save({ format: "pdf" })}><FileText className="h-4 w-4 text-muted-foreground" />PDF file (.pdf)</DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel className="px-3 pb-1 pt-1.5 font-mono text-[10px] font-normal uppercase tracking-[0.15em] text-muted-foreground">Your templates</DropdownMenuLabel>
           {templates.map((t) => (
             <div key={t.id} className="flex items-center">
-              <button role="menuitem" className={`${item} flex-1`} onClick={() => void save({ format: "xlsx", template: t })} title={`Fill ${t.fileName} with this timesheet`}><FileSpreadsheet className="h-4 w-4 text-primary" />{t.name}</button>
-              <button role="menuitem" className="rounded-lg px-2 py-1.5 text-xs font-medium text-muted-foreground hover:bg-secondary hover:text-foreground" onClick={() => void save({ format: "pdf", template: t })}
-                title={`Fill ${t.fileName} with this timesheet and save it as a PDF`} aria-label={`${t.name} as a PDF`}>PDF</button>
-              <button className="rounded-lg p-2 text-muted-foreground hover:bg-secondary hover:text-foreground" onClick={() => { setOpen(false); setEditing(t); }} aria-label={`Edit the ${t.name} template`}><Pencil className="h-3.5 w-3.5" /></button>
+              <DropdownMenuItem className={`${item} flex-1`} onSelect={() => void save({ format: "xlsx", template: t })} title={`Fill ${t.fileName} with this timesheet`}><FileSpreadsheet className="h-4 w-4 text-primary" />{t.name}</DropdownMenuItem>
+              <DropdownMenuItem className="rounded-lg px-2 py-1.5 text-xs font-medium text-muted-foreground" onSelect={() => void save({ format: "pdf", template: t })}
+                title={`Fill ${t.fileName} with this timesheet and save it as a PDF`} aria-label={`${t.name} as a PDF`}>PDF</DropdownMenuItem>
+              <DropdownMenuItem className="rounded-lg p-2 text-muted-foreground" onSelect={() => setEditing(t)} aria-label={`Edit the ${t.name} template`}><Pencil className="h-3.5 w-3.5" /></DropdownMenuItem>
             </div>
           ))}
-          <button role="menuitem" className={`${item} text-primary`} onClick={() => { setOpen(false); setEditing("new"); }}><Upload className="h-4 w-4" />Add a template…</button>
-        </div>
-      )}
+          <DropdownMenuItem className={`${item} text-primary focus:text-primary`} onSelect={() => setEditing("new")}><Upload className="h-4 w-4" />Add a template…</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
       {editing && <TemplateEditor initial={editing === "new" ? null : editing} onClose={() => setEditing(null)} data={data} categories={categories} />}
     </div>
   );
@@ -131,11 +130,15 @@ const emptyTemplate = (): Omit<TimesheetTemplate, "file" | "fileName"> => ({
 function TemplateEditor({ initial, onClose, data, categories }: {
   initial: TimesheetTemplate | null; onClose: () => void; data: TimesheetSource; categories: TemplateCategory[];
 }) {
+  const payslip = usePayslipData();
   const [t, setT] = useState<Omit<TimesheetTemplate, "file" | "fileName">>(initial ?? emptyTemplate());
   const [file, setFile] = useState<{ name: string; bytes: Uint8Array } | null>(initial ? { name: initial.fileName, bytes: fromBase64(initial.file) } : null);
   const sheets = useMemo<TemplateSheet[]>(() => { try { return file ? templateSheets(file.bytes) : []; } catch { return []; } }, [file]);
   const [active, setActive] = useState<Active>({ kind: "cell", key: "employee_name" });
   const [preview, setPreview] = useState(false);
+  // How the editor's width is split between the fields list and the sheet: drag the line between them (double-click
+  // resets). Panel id → percent, a per-device pref.
+  const [split, setSplit] = usePref<Record<string, number> | undefined>("meridian-template-editor-split", undefined);
   // The sheet being filled: the chosen one, else the first visible worksheet.
   const sheetName = t.sheet ?? (sheets.find((s) => s.fillable && !s.hidden) ?? sheets.find((s) => s.fillable))?.name ?? null;
 
@@ -169,8 +172,11 @@ function TemplateEditor({ initial, onClose, data, categories }: {
     return { sheet: draw(file.bytes), note: preview ? "Nothing is placed yet: pick a value on the left and click its cell, then the preview shows it filled in." : "" };
   }, [file, sheetName, preview, placed, t, data]);
 
+  // The payslip values only while their feature is on (Settings → Features), with one field per deduction in use.
+  const hidden = new Set<string>([...(payslip.deductionsOn ? [] : DEDUCTION_FIELDS), ...(payslip.payRunsOn ? [] : PAY_RUN_FIELDS)]);
   const fields = [
-    ...(Object.keys(SHEET_FIELDS) as SheetField[]).map((k) => ({ kind: "cell" as const, key: k })),
+    ...(Object.keys(SHEET_FIELDS) as SheetField[]).filter((k) => !hidden.has(k)).map((k) => ({ kind: "cell" as const, key: k })),
+    ...payslip.deductionNames.map((n) => ({ kind: "cell" as const, key: `deduction:${n}` as SheetField })),
     ...categories.map((c) => ({ kind: "cell" as const, key: `custom:${c.id}` as SheetField })),
     ...(Object.keys(ROW_FIELDS) as RowField[]).map((k) => ({ kind: "column" as const, key: k })),
   ];
@@ -203,7 +209,7 @@ function TemplateEditor({ initial, onClose, data, categories }: {
     onClose();
   };
   const remove = async () => {
-    if (!initial || !confirm(`Delete the "${initial.name}" template? Your original file isn't affected.`)) return;
+    if (!initial || !(await askConfirm({ title: `Delete the "${initial.name}" template?`, detail: "Your original file isn't affected.", confirm: "Delete template", danger: true }))) return;
     try { await deleteTemplate(initial.id); } catch (e) { toast.error((e as Error).message); return; }
     onClose();
   };
@@ -243,8 +249,10 @@ function TemplateEditor({ initial, onClose, data, categories }: {
             <input type="file" accept=".xlsx,.xlsm" className="hidden" onChange={(e) => void load(e.target.files?.[0])} />
           </label>
         ) : (
-          <div className="flex min-h-0 flex-1 gap-4">
-            <div className="flex w-80 shrink-0 flex-col gap-1 overflow-y-auto pr-1">
+          <ResizablePanelGroup id="template-editor" orientation="horizontal" className="min-h-0 flex-1" defaultLayout={split}
+            onLayoutChanged={(l, m) => { if (m.isUserInteraction) setSplit(m.requestedLayout ?? l); }}>
+            <ResizablePanel id="fields" defaultSize={320} minSize={240} maxSize="60">
+            <div className="flex h-full flex-col gap-1 overflow-y-auto pr-3">
               <label className="block text-sm"><span className="label-mono">Template name</span>
                 <input className={`${inputCls} mt-1`} value={t.name} onChange={(e) => setT({ ...t, name: e.target.value })} /></label>
               <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
@@ -280,7 +288,10 @@ function TemplateEditor({ initial, onClose, data, categories }: {
               {fields.filter((f) => f.kind === "column").map(fieldRow)}
               {step(4, "Tick the preview to check, then save")}
             </div>
-            <div className="flex min-w-0 flex-1 flex-col gap-2">
+            </ResizablePanel>
+            <ResizableHandle withHandle />
+            <ResizablePanel id="sheet" minSize="30">
+            <div className="flex h-full min-w-0 flex-col gap-2 pl-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex flex-wrap gap-1" role="tablist" aria-label="Sheets">
                   {sheets.map((s) => (
@@ -301,7 +312,8 @@ function TemplateEditor({ initial, onClose, data, categories }: {
                 {shown.sheet && <SheetView sheet={shown.sheet} marks={marks} tableCols={tableCols} inTable={inTable} startRow={t.table.startRow} preview={preview} onCell={(r, c) => place(r - 1, c - 1)} />}
               </div>
             </div>
-          </div>
+            </ResizablePanel>
+          </ResizablePanelGroup>
         )}
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
           <div className="min-w-0 flex-1 text-xs text-muted-foreground">

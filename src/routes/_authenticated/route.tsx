@@ -7,6 +7,8 @@ import { listBackups, saveBackup } from "@/lib/db/backups";
 import { RecoveryScreen } from "@/components/RecoveryScreen";
 import { LockScreen } from "@/components/LockScreen";
 import { maybeAutoBackup } from "@/lib/db/sync";
+import { pruneHistory } from "@/lib/db/history";
+import { localStore } from "@/lib/db/store";
 import { setDataMode, useDataMode } from "@/lib/db/mode";
 import { useSession } from "@/lib/payroll";
 import { desktop, SECURITY_STATUS_KEY, type SecurityStatus } from "@/lib/desktop";
@@ -35,6 +37,15 @@ function autoBackup(everyMs?: number) {
     })
     .finally(() => { backingUp = null; });
   return backingUp;
+}
+
+/** Removes edit history older than Settings → Edit history keeps (nothing, by default). */
+async function keepHistoryTrimmed() {
+  try {
+    await pruneHistory(await localDb(), (await localStore.getSettings())?.history_keep_days ?? null);
+  } catch (e) {
+    console.error("Trimming the edit history failed:", e);
+  }
 }
 
 /** The data opened fine after a crash or power cut; say so, in case the last few changes didn't make it. */
@@ -84,6 +95,7 @@ function DataGate() {
       reportEncryption(queryClient.getQueryData<SecurityStatus | null>(SECURITY_STATUS_KEY));
       void warnIfUnclean();
       void reportOldDatabase();
+      void keepHistoryTrimmed();
       await autoBackup();
       // The desktop app asks before its window closes, so the last changes get backed up too.
       desktop?.onClosing(() => autoBackup(0));
@@ -126,7 +138,7 @@ function NotDesktop() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-6">
       <div className="glass-panel max-w-md p-7 text-center">
-        <div className="font-display text-xl font-extrabold tracking-tight">Meridian runs in its desktop window</div>
+        <div className="font-display text-xl font-extrabold tracking-tight">KoPayroll runs in its desktop window</div>
         <p className="mt-2 text-sm text-muted-foreground">{new NotDesktopError().message}</p>
       </div>
     </div>

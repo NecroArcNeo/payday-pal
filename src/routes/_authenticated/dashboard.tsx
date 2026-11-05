@@ -1,5 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell, StatCard, btnPrimary } from "@/components/AppShell";
+import { SkeletonBlock } from "@/components/Loading";
 import { RecordsTable } from "@/components/RecordsTable";
 import { currentWeek, fullName, money, useAllRecords, useEmployees, usePayRates, usePayrollSettings, useRecords, useShifts } from "@/lib/payroll";
 import { employeePay, shiftFor } from "@/lib/pay";
@@ -10,16 +11,17 @@ import { DEFAULT_SETTINGS, ReportChart } from "@/components/ReportChart";
 const DASHBOARD_CHART = { ...DEFAULT_SETTINGS, range: "last_12_weeks" as const, group: "week" as const };
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
-  head: () => ({ meta: [{ title: "Dashboard — Meridian Payroll" }] }),
+  head: () => ({ meta: [{ title: "Dashboard — KoPayroll" }] }),
   component: Dashboard,
 });
 
 function Dashboard() {
   const week = currentWeek();
-  const { data: employees = [] } = useEmployees();
+  const { data: employees = [], isSuccess: employeesLoaded } = useEmployees();
   const { data: rateHistory } = usePayRates();
-  const { data: records = [] } = useRecords(week.from, week.to);
-  const { data: all = [] } = useAllRecords(week.from, week.to);
+  const { data: records = [], isSuccess: recentLoaded } = useRecords(week.from, week.to);
+  const { data: all = [], isSuccess: weekLoaded } = useAllRecords(week.from, week.to);
+  const loading = !employeesLoaded || !weekLoaded;
   const { data: shifts = [] } = useShifts();
   const { data: settings } = usePayrollSettings();
   const rules = { threshold: settings?.ot_threshold ?? 40, otMultiplier: settings?.ot_multiplier ?? 1.5, weekendOvertime: settings?.weekend_overtime ?? true };
@@ -45,10 +47,10 @@ function Dashboard() {
       actions={<Link to="/payroll" className={btnPrimary}>Run payroll</Link>}
     >
       <section className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard label="Gross pay" value={money(gross)} sub={`${byEmp.size} employees · ${hours.toFixed(2)} h`} />
-        <StatCard label="Total hours" value={hours.toFixed(2)} sub={`${lunch.toFixed(2)} h unpaid break`} delay={60} />
-        <StatCard label="Employees" value={String(employees.length)} sub={`${employees.filter((e) => e.user_id).length} with accounts`} delay={120} />
-        <StatCard label="Records" value={`${all.length} rows`} sub="this week" highlight delay={180} />
+        <StatCard loading={loading} label="Gross pay" value={money(gross)} sub={`${byEmp.size} employees · ${hours.toFixed(2)} h`} />
+        <StatCard loading={loading} label="Total hours" value={hours.toFixed(2)} sub={`${lunch.toFixed(2)} h unpaid break`} delay={60} />
+        <StatCard loading={!employeesLoaded} label="Employees" value={String(employees.length)} sub={`${employees.filter((e) => e.user_id).length} with accounts`} delay={120} />
+        <StatCard loading={!weekLoaded} label="Records" value={`${all.length} rows`} sub="this week" highlight delay={180} />
       </section>
       <section className="glass-panel space-y-2 p-5">
         <div className="flex items-center justify-between gap-3">
@@ -59,7 +61,7 @@ function Dashboard() {
       </section>
       <section className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2">
-          <RecordsTable records={records} />
+          <RecordsTable records={records} loading={!recentLoaded} />
         </div>
         <div className="space-y-6">
           <div className="glass-panel p-5">
@@ -72,7 +74,8 @@ function Dashboard() {
           <div className="glass-panel p-5">
             <div className="label-mono">Top earners · this week</div>
             <div className="mt-3 space-y-2">
-              {top.length === 0 && <div className="text-sm text-muted-foreground">No hours logged yet.</div>}
+              {loading && [0, 1, 2].map((i) => <SkeletonBlock key={i} className="h-4 w-full" />)}
+              {!loading && top.length === 0 && <div className="text-sm text-muted-foreground">No hours logged yet.</div>}
               {top.map((t) => (
                 <div key={t.id} className="flex items-center justify-between text-sm">
                   <EmployeeLink id={t.id} name={t.name} />

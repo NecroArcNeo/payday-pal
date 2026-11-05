@@ -7,7 +7,7 @@ import { SQLITE_BASE_VERSION, SQLITE_MIGRATIONS, SQLITE_SCHEMA } from "./sqlite-
 /** The app only runs as the desktop app: the database is in its main process, reached through the bridge. */
 export class NotDesktopError extends Error {
   constructor() {
-    super("Meridian Payroll runs in its desktop window. Start it with `npm run dev` (or the installed app), not in a browser tab.");
+    super("KoPayroll runs in its desktop window. Start it with `npm run dev` (or the installed app), not in a browser tab.");
   }
 }
 

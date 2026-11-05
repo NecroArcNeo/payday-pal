@@ -32,9 +32,21 @@ export const COLUMNS: Record<TableName, readonly Column[]> = {
     c("shift_id", "uuid"), c("unlocked", "bool"), c("frozen_pay", "json"),
   ],
   pay_adjustments: [c("id", "uuid"), c("employee_id", "uuid"), c("pay_date", "date"), c("category", "text"), c("amount", "real"), c("note", "text"), c("created_at", "timestamp")],
+  // Schema 13: what's taken from gross pay, and the saved record of each period paid.
+  deductions: [
+    c("id", "uuid"), c("employee_id", "uuid"), c("name", "text"), c("kind", "text"), c("amount", "real", 2), c("repeats", "text"),
+    c("starts_on", "date"), c("ends_on", "date"), c("note", "text"), c("sort_order", "int"), c("created_at", "timestamp"),
+  ],
+  pay_runs: [c("id", "uuid"), c("period_from", "date"), c("period_to", "date"), c("paid_on", "date"), c("note", "text"), c("created_at", "timestamp")],
+  pay_run_lines: [
+    c("id", "uuid"), c("pay_run_id", "uuid"), c("employee_id", "uuid"), c("employee_name", "text"), c("employee_code", "text"),
+    c("hours", "real", 2), c("regular_hours", "real", 2), c("overtime_hours", "real", 2), c("extra_pay", "real", 2), c("gross", "real", 2),
+    c("deductions", "json"), c("deductions_total", "real", 2), c("net", "real", 2),
+  ],
   payroll_settings: [
     c("id", "bool"), c("ot_threshold", "real"), c("ot_multiplier", "real"), c("visible_columns", "json"), c("updated_at", "timestamp"),
     c("weekend_overtime", "bool"), c("employee_defaults", "json"), c("locked_through", "date"),
+    c("deductions_on", "bool"), c("pay_runs_on", "bool"), c("history_keep_days", "int"),
   ],
 };
 

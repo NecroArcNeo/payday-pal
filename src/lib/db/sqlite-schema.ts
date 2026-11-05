@@ -138,9 +138,12 @@ function changeSeqTriggers(t: TableName) {
   begin update _meta set value = cast(value as integer) + 1 where key = 'change_seq'; end;`).join("\n");
 }
 
-/** Every row written while the undo_log flag is on, before and after, as JSON with every column. */
-function undoTriggers(t: TableName) {
-  const image = (row: "old" | "new") => `json_object(${COLUMNS[t].map((col) => `'${col.name}', ${row}.${col.name}`).join(", ")})`;
+/**
+ * Every row written while the undo_log flag is on, before and after, as JSON with every column. A migration that adds
+ * columns to a table drops and makes these again (`remakeUndoTriggers`), so the images keep every column.
+ */
+function undoTriggers(t: TableName, columns: readonly { name: string }[] = COLUMNS[t]) {
+  const image = (row: "old" | "new") => `json_object(${columns.map((col) => `'${col.name}', ${row}.${col.name}`).join(", ")})`;
   return OPS.map((op) => `create trigger ${t}_undo_${op} after ${op} on ${t} when ${flagOn("undo_log")}
   begin insert into _undo_log (tbl, op, old, new) values ('${t}', '${op.toUpperCase()}',
     ${op === "insert" ? "null" : image("old")}, ${op === "delete" ? "null" : image("new")}); end;`).join("\n");
@@ -227,19 +230,106 @@ ${OPS.map((op) => `create trigger pay_rates_lock_${op} before ${op} on pay_rates
   begin select raise(abort, 'Days up to ' || ${DAY} || ' are locked as paid, so their pay rate can''t change. Unlock them on the Payroll page first.'); end;`).join("\n")}
 `;
 
-/** The whole schema as of version 12, for a new database. */
+/** The tables and columns of schema 12, which SQLITE_SCHEMA makes; later ones come from SQLITE_MIGRATIONS. */
+const V12_TABLES: readonly TableName[] = ["employee_field_defs", "shifts", "employees", "pay_rates", "time_records", "pay_adjustments", "payroll_settings"];
+const ADDED_LATER: Partial<Record<TableName, readonly string[]>> = { payroll_settings: ["deductions_on", "pay_runs_on", "history_keep_days"] };
+const v12Columns = (t: TableName) => COLUMNS[t].filter((col) => !ADDED_LATER[t]?.includes(col.name));
+
+/** The whole schema as of version 12, for a new database (the migrations then bring it up to date). */
 export const SQLITE_SCHEMA = [
   TABLES_SQL,
   HOURS_TRIGGERS,
   RATE_HISTORY,
   lockTriggers("time_records", "work_date"),
   lockTriggers("pay_adjustments", "pay_date"),
-  ...TABLES.map(changeSeqTriggers),
-  ...TABLES.map(undoTriggers),
+  ...V12_TABLES.map(changeSeqTriggers),
+  ...V12_TABLES.map((t) => undoTriggers(t, v12Columns(t))),
 ].join("\n");
+
+/** Makes a table's undo triggers again with all of its columns, after a migration added some. */
+const remakeUndoTriggers = (t: TableName) => [...OPS.map((op) => `drop trigger ${t}_undo_${op};`), undoTriggers(t)].join("\n");
+
+/**
+ * Schema 13: deductions (what's taken from gross pay, per employee), pay runs (the saved record of each period paid,
+ * one line per person, written once), the settings that turn both on, and the edit history. `_history` is this
+ * device's own (like `_undo_log`, not a payroll table): it holds the rows every change wrote, private details included,
+ * so it's never sent to the cloud; local backups carry it (snapshot.ts).
+ */
+const V13 = `
+alter table payroll_settings add column deductions_on integer not null default 0 ${isBool("deductions_on")};
+alter table payroll_settings add column pay_runs_on integer not null default 0 ${isBool("pay_runs_on")};
+-- Edit history older than this many days is removed at start; null keeps it all.
+alter table payroll_settings add column history_keep_days integer check (history_keep_days is null or history_keep_days > 0);
+
+create table deductions (
+  id text primary key default ${UUID},
+  employee_id text not null references employees(id) on delete cascade,
+  name text not null check (length(trim(name)) between 1 and 60),
+  -- A fixed amount, or a percent of gross pay.
+  kind text not null default 'fixed' check (kind in ('fixed', 'percent')),
+  amount real not null default 0 check (amount >= 0 and (kind <> 'percent' or amount <= 100)),
+  -- Fixed amounts: once per pay period, once per Mon–Sun week in it, or once (in the period holding starts_on).
+  repeats text not null default 'period' check (repeats in ('period', 'week', 'once')),
+  starts_on text ${isDate("starts_on")},
+  ends_on text ${isDate("ends_on")},
+  note text,
+  sort_order integer not null default 0,
+  created_at text not null default ${NOW},
+  check (repeats <> 'once' or starts_on is not null),
+  check (ends_on is null or starts_on is null or ends_on >= starts_on)
+);
+create index deductions_employee on deductions (employee_id);
+
+create table pay_runs (
+  id text primary key default ${UUID},
+  period_from text not null ${isDate("period_from")},
+  period_to text not null ${isDate("period_to")},
+  paid_on text not null ${isDate("paid_on")},
+  note text,
+  created_at text not null default ${NOW},
+  check (period_to >= period_from)
+);
+
+-- What each person was paid in a run, as the Payroll page worked it out then. The name and ID are kept so a run
+-- still reads after the employee is deleted (employee_id then goes null).
+create table pay_run_lines (
+  id text primary key default ${UUID},
+  pay_run_id text not null references pay_runs(id) on delete cascade,
+  employee_id text references employees(id) on delete set null,
+  employee_name text not null,
+  employee_code text not null default '',
+  hours real not null default 0,
+  regular_hours real not null default 0,
+  overtime_hours real not null default 0,
+  extra_pay real not null default 0,
+  gross real not null default 0,
+  deductions text not null default '[]' ${isJson("deductions")},
+  deductions_total real not null default 0,
+  net real not null default 0
+);
+create index pay_run_lines_run on pay_run_lines (pay_run_id);
+create index pay_run_lines_employee on pay_run_lines (employee_id);
+
+create table _history (
+  id text primary key default ${UUID},
+  at text not null default ${NOW},
+  device text,
+  kind text not null check (kind in ('edit', 'undo', 'redo', 'restore')),
+  label text not null,
+  -- The rows written, before and after (undo.ts UndoOp[]); empty for a restore, which replaces everything.
+  changes text not null default '[]' ${isJson("changes")},
+  -- The employees and rows it touched, so a profile or record can list its own history.
+  employees text not null default '[]' ${isJson("employees")},
+  rows text not null default '[]' ${isJson("rows")}
+);
+create index _history_at on _history (at);
+
+${remakeUndoTriggers("payroll_settings")}
+${(["deductions", "pay_runs", "pay_run_lines"] as const).map((t) => `${changeSeqTriggers(t)}\n${undoTriggers(t)}`).join("\n")}
+`;
 
 /** The schema version SQLITE_SCHEMA is. */
 export const SQLITE_BASE_VERSION = 12;
 
 /** Changes after the starting schema, each run once in order. Never edit a shipped entry — append a new one. */
-export const SQLITE_MIGRATIONS: string[] = [];
+export const SQLITE_MIGRATIONS: string[] = [V13];

@@ -16,12 +16,18 @@ import { MarkTags, MarksPanel, markedRow, RowMarksButton, useRowMarks } from "@/
 import { RecordPanel } from "@/components/RecordPanel";
 import { RecordMenu } from "@/components/RecordMenu";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { SkeletonRows } from "@/components/Loading";
+import { askConfirm, LEAVE_UNSAVED, modalOpen } from "@/lib/choice-prompt";
+import { SortTh, TableSort } from "@/components/SortControl";
+import type { Sort, SortColumns } from "@/lib/table-sort";
 
 export type EntryMode = "clock" | "hours";
 
 /** The Time records table: one entry type at a time, selectable rows, a side panel to see and edit a record, and a "load more" footer. */
-export function RecordsLedger({ rows, total, mode, onModeChange, employees, selected, onToggle, onToggleAll, onChanged, onDelete, footer, title }: {
-  rows: RecordWithEmp[]; total: number; mode: EntryMode; onModeChange: (m: EntryMode) => void; employees: Employee[];
+export function RecordsLedger({ rows, total, mode, onModeChange, employees, selected, onToggle, onToggleAll, onChanged, onDelete, footer, title, loading = false, sort, sortColumns, onSort }: {
+  rows: RecordWithEmp[]; total: number;
+  /** How the list is sorted (the page sorts it, in the database or here), for the headers' sort buttons. */
+  sort: Sort; sortColumns: SortColumns<RecordWithEmp>; onSort: (s: Sort) => void; /** Nothing read yet (the first load): placeholders instead of "no records". */ loading?: boolean; mode: EntryMode; onModeChange: (m: EntryMode) => void; employees: Employee[];
   selected: Set<string>; onToggle: (id: string) => void; onToggleAll: () => void;
   onChanged: () => void; onDelete: (id: string) => void; footer?: React.ReactNode; title: React.ReactNode;
 }) {
@@ -54,15 +60,15 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
   // when moving, and setting it on every keystroke shouldn't re-render the whole table.
   const dirty = useRef(false);
   const onDirty = useCallback((d: boolean) => { dirty.current = d; }, []);
-  const open = useCallback((id: string | null) => {
-    if (dirty.current && !confirm("Leave this record without saving your changes?")) return false;
+  const open = useCallback(async (id: string | null) => {
+    if (dirty.current && !(await askConfirm(LEAVE_UNSAVED))) return false;
     dirty.current = false;
     setOpenId(id);
     return true;
   }, []);
-  const move = (step: -1 | 1) => {
+  const move = async (step: -1 | 1) => {
     const next = rows[openIndex + step];
-    if (next && open(next.id)) document.querySelector(`[data-record="${next.id}"]`)?.scrollIntoView({ block: "nearest" });
+    if (next && (await open(next.id))) document.querySelector(`[data-record="${next.id}"]`)?.scrollIntoView({ block: "nearest" });
   };
   // Escape closes the panel; ↑/↓ step through the list, except while typing in a field (where they move the caret
   // or change a number).
@@ -74,11 +80,12 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
   useEffect(() => {
     if (!openId) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || e.ctrlKey || e.altKey || e.metaKey) return;
-      if (e.key === "Escape") { open(null); return; }
+      // A question or menu on top has the keyboard (Escape there answers it, not this).
+      if (e.defaultPrevented || e.ctrlKey || e.altKey || e.metaKey || modalOpen()) return;
+      if (e.key === "Escape") { void open(null); return; }
       const t = e.target as HTMLElement;
       if (t.closest("input, select, textarea, [contenteditable=true]")) return;
-      if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); moveRef.current(e.key === "ArrowDown" ? 1 : -1); }
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); void moveRef.current(e.key === "ArrowDown" ? 1 : -1); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -93,7 +100,7 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
         {mode === "clock" && <span className="flex items-center gap-2 text-xs text-muted-foreground">Breaks in <BreakUnitToggle /></span>}
         <div className="flex rounded-xl bg-secondary p-1 text-xs font-medium ring-1 ring-border">
           {(["clock", "hours"] as const).map((m) => (
-            <button key={m} onClick={() => { if (open(null)) onModeChange(m); }}
+            <button key={m} onClick={() => void open(null).then((ok) => { if (ok) onModeChange(m); })}
               className={`rounded-lg px-3 py-1.5 ${mode === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>
               {m === "clock" ? "Clock in / out" : "Daily hours"}
             </button>
@@ -105,24 +112,26 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
       <div className="overflow-x-auto">
         <DataTable id="records" className="w-full text-sm" stickyHeader>
           <thead className="grid-head">
+            <TableSort sort={sort} columns={sortColumns} onSort={onSort}>
             <tr className="font-mono text-[11px] uppercase tracking-[0.12em]">
               <th className="w-10 pl-5"><input type="checkbox" aria-label="Select all loaded" checked={allPicked} onChange={onToggleAll} disabled={!rows.length} /></th>
-              <th className="px-3 py-3 text-left font-medium"><EditableLabel k="employee" name="Employee" /></th>
-              <th className="px-3 py-3 text-left font-medium"><EditableLabel k="date" name="Date" /></th>
-              <th className="px-3 py-3 text-left font-medium"><EditableLabel k="shift" name="Shift" /></th>
+              <SortTh k="employee" className="px-3 py-3 text-left font-medium"><EditableLabel k="employee" name="Employee" /></SortTh>
+              <SortTh k="date" className="px-3 py-3 text-left font-medium"><EditableLabel k="date" name="Date" /></SortTh>
+              <SortTh k="shift" className="px-3 py-3 text-left font-medium"><EditableLabel k="shift" name="Shift" /></SortTh>
               {mode === "clock" && (
                 <>
-                  <th className="px-3 py-3 text-left font-medium"><EditableLabel k="clock_in" name="Clock in" /></th>
-                  <th className="px-3 py-3 text-left font-medium"><EditableLabel k="clock_out" name="Clock out" /></th>
-                  <th className="px-3 py-3 text-right font-medium"><BreakHeader unit={breakUnit} /></th>
+                  <SortTh k="clock_in" className="px-3 py-3 text-left font-medium"><EditableLabel k="clock_in" name="Clock in" /></SortTh>
+                  <SortTh k="clock_out" className="px-3 py-3 text-left font-medium"><EditableLabel k="clock_out" name="Clock out" /></SortTh>
+                  <SortTh k="break" className="px-3 py-3 text-right font-medium"><BreakHeader unit={breakUnit} /></SortTh>
                 </>
               )}
-              <th className="px-3 py-3 text-right font-medium"><EditableLabel k="hours" name="Hours" /></th>
-              <th className="px-3 py-3 text-right font-medium"><EditableLabel k="hourly_rate" name="Rate" /></th>
+              <SortTh k="hours" className="px-3 py-3 text-right font-medium"><EditableLabel k="hours" name="Hours" /></SortTh>
+              <SortTh k="hourly_rate" className="px-3 py-3 text-right font-medium"><EditableLabel k="hourly_rate" name="Rate" /></SortTh>
               <RecordPayHeaders />
-              <th className="px-3 py-3 text-left font-medium"><EditableLabel k="note" name="Note" /></th>
+              <SortTh k="note" className="px-3 py-3 text-left font-medium"><EditableLabel k="note" name="Note" /></SortTh>
               <th className="w-20" />
             </tr>
+            </TableSort>
           </thead>
           <ContextMenu modal={false} onOpenChange={(o) => { if (!o) setMenuId(null); }}>
           <ContextMenuTrigger asChild>
@@ -133,7 +142,8 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
               const id = (e.target as HTMLElement).closest<HTMLElement>("tr[data-record]")?.dataset["record"];
               if (id) setMenuId(id); else e.preventDefault();
             }}>
-            {rows.length === 0 && (
+            {loading && rows.length === 0 && <SkeletonRows cols={cols} skip={1} />}
+            {!loading && rows.length === 0 && (
               <tr><td colSpan={cols} className="px-5 py-10 text-center font-body text-muted-foreground">
                 No {mode === "clock" ? "clock in/out" : "daily hours"} records match.
               </td></tr>

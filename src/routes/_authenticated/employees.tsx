@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { z } from "zod";
@@ -14,16 +14,23 @@ import { CategoryInput } from "@/components/ProfileCategories";
 import { codeTakenMessage, employeeWithCode, friendlySaveError } from "@/lib/employee-code";
 import { planRateChange, type RatePlan } from "@/lib/pay-rates";
 import { askRateDate, writeRateHistory } from "@/lib/rate-change";
-import { fullName, money, useEmployeeDefaults, useEmployees, useFieldDefs, usePayRates, usePrivateFields, useShifts, type Employee, type FieldDef, type Shift } from "@/lib/payroll";
+import { fullName, money, useEmployeeDefaults, useEmployees, useFieldDefs, usePayRates, usePayrollSettings, usePrivateFields, useShifts, type Employee, type FieldDef, type Shift } from "@/lib/payroll";
 import { NO_DEFAULTS, withDefaults } from "@/lib/employee-fields";
 import { PAY_TYPES, shiftFor } from "@/lib/pay";
 import { describeEmployeeFilter, isFiltering, NO_FILTER, searchEmployees, type EmployeeFilter } from "@/lib/employee-search";
 import { IdCard, Pencil, Trash2, X } from "lucide-react";
 import { EditableLabel } from "@/components/EditableLabel";
 import { useLabels } from "@/lib/labels";
+import { SkeletonRows } from "@/components/Loading";
+import { EmployeePanel } from "@/components/EmployeePanel";
+import { EmployeeContextMenu, EmployeeMenuButton } from "@/components/EmployeeMenu";
+import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { SortControl, SortTh, TableSort, useTableSort } from "@/components/SortControl";
+import { sortTable, type SortColumns } from "@/lib/table-sort";
+import { askChoice, askConfirm, LEAVE_UNSAVED, modalOpen } from "@/lib/choice-prompt";
 
 export const Route = createFileRoute("/_authenticated/employees")({
-  head: () => ({ meta: [{ title: "Employees — Meridian Payroll" }] }),
+  head: () => ({ meta: [{ title: "Employees — KoPayroll" }] }),
   component: EmployeesPage,
 });
 
@@ -39,11 +46,12 @@ const schema = z.object({
 const empty = { employee_code: "", first_name: "", last_name: "", email: "", department: "", hourly_rate: "", shift_id: "", pay_type: "hourly" };
 
 function EmployeesPage() {
-  const { data: employees = [] } = useEmployees();
+  const { data: employees = [], isLoading } = useEmployees();
   const { data: defs = [] } = useFieldDefs();
   const { label } = useLabels();
   const { data: shifts = [] } = useShifts();
   const { data: defaults = NO_DEFAULTS } = useEmployeeDefaults();
+  const { data: settings } = usePayrollSettings();
   const qc = useQueryClient();
   // The add form starts from the default profile.
   const defaultShift = shiftFor(defaults["shift_id"] as string | undefined, shifts).id ?? "";
@@ -81,14 +89,54 @@ function EmployeesPage() {
     qc.invalidateQueries({ queryKey: ["employees"] });
   };
 
-  const remove = async (id: string) => {
-    if (!confirm("Delete this employee and all their time records?")) return;
-    const { error } = await db().remove("employees", id);
-    if (error) { toast.error(error.message); return; }
-    qc.invalidateQueries();
-  };
+  // Sorted by any column (name A to Z at first); the search narrows it, and ↑/↓ in the panel follow this order.
+  const columns = useMemo<SortColumns<Employee>>(() => ({
+    employee: { label: "Employee", kind: "text", value: fullName },
+    employee_code: { label: "ID", kind: "text", value: (e) => e.employee_code },
+    job_title: { label: "Position", kind: "text", value: (e) => e.job_title },
+    department: { label: "Department", kind: "text", value: (e) => e.department },
+    shift: { label: "Shift", kind: "text", value: (e) => shiftFor(e.shift_id, shifts).name },
+    email: { label: "Email", kind: "text", value: (e) => e.email },
+    hourly_rate: { label: "Rate", kind: "number", value: (e) => Number(e.hourly_rate) },
+  }), [shifts]);
+  const [sort, setSort] = useTableSort("meridian-employees-sort", columns, { by: "employee", desc: false });
+  const list = useMemo(() => sortTable(searchEmployees(employees, q), sort, columns), [employees, q, sort, columns]);
 
-  const list = useMemo(() => searchEmployees(employees, q), [employees, q]);
+  // The side panel: whose profile is open beside the roster. It stays open while the search changes (so typing a
+  // search never throws away an unsaved edit), and closes by itself if that employee is deleted.
+  const [openId, setOpenId] = useState<string | null>(null);
+  const openEmp = openId ? employees.find((e) => e.id === openId) : undefined;
+  const openIndex = openEmp ? list.indexOf(openEmp) : -1;
+  // Unsaved changes in the panel's form (a ref: only read when moving, so typing doesn't re-render the roster).
+  const dirty = useRef(false);
+  const onDirty = useCallback((d: boolean) => { dirty.current = d; }, []);
+  const open = useCallback(async (id: string | null) => {
+    if (dirty.current && !(await askConfirm(LEAVE_UNSAVED))) return false;
+    dirty.current = false;
+    setOpenId(id);
+    return true;
+  }, []);
+  useEffect(() => { if (openId && !isLoading && !openEmp) { dirty.current = false; setOpenId(null); } }, [openId, openEmp, isLoading]);
+  const move = async (step: -1 | 1) => {
+    // From someone the search hides, ↓ goes to the first shown and ↑ to the last.
+    const next = openIndex < 0 ? list[step === 1 ? 0 : list.length - 1] : list[openIndex + step];
+    if (next && (await open(next.id))) document.querySelector(`[data-employee="${next.id}"]`)?.scrollIntoView({ block: "nearest" });
+  };
+  const moveRef = useRef(move);
+  moveRef.current = move;
+  // Escape closes the panel; ↑/↓ step through the roster, except while typing in a field or while a dialog (a
+  // question, a menu) has the keyboard.
+  useEffect(() => {
+    if (!openId) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.ctrlKey || e.altKey || e.metaKey || modalOpen()) return;
+      if (e.key === "Escape") { void open(null); return; }
+      if ((e.target as HTMLElement).closest("input, select, textarea, [contenteditable=true], [role=tablist], [role=separator]")) return;
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); void moveRef.current(e.key === "ArrowDown" ? 1 : -1); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [openId, open]);
   const picked = employees.filter((e) => selected.has(e.id));
   const hiddenPicked = picked.filter((e) => !list.includes(e)).length;
   const allShownPicked = list.length > 0 && list.every((e) => selected.has(e.id));
@@ -99,8 +147,14 @@ function EmployeesPage() {
     return n;
   });
 
-  const removeSelected = async () => {
-    const ids = picked.map((e) => e.id);
+  // The row menus (⋯ and right-click): which row was right-clicked, and what every row's menu can do.
+  const [menuId, setMenuId] = useState<string | null>(null);
+  const menuEmp = menuId ? employees.find((e) => e.id === menuId) : undefined;
+  const menuProps = (e: Employee) => ({ emp: e, selected: selected.has(e.id), onOpen: () => void open(e.id), onToggle: () => toggle(e.id), onDelete: () => void removePeople([e]) });
+
+  // Deleting people, one (the row menu) or the selection: says who and what goes with them, backs up first.
+  const removePeople = async (people: Employee[]) => {
+    const ids = people.map((e) => e.id);
     setBusy(true);
     try {
       // Show exactly what goes with them before asking.
@@ -108,13 +162,39 @@ function EmployeesPage() {
       const set = new Set(ids);
       const recs = shifts.filter((s) => set.has(s.employee_id)).length;
       const adj = extras.filter((a) => set.has(a.employee_id)).length;
-      const names = picked.slice(0, 8).map(fullName).join(", ") + (picked.length > 8 ? `, and ${picked.length - 8} more` : "");
-      if (!confirm(`Delete ${ids.length} employee${ids.length === 1 ? "" : "s"} (${names})?\n\nThis also deletes their ${recs} time record${recs === 1 ? "" : "s"} and ${adj} extra-pay entr${adj === 1 ? "y" : "ies"}. A backup is saved first, so you can restore it from Sync & backup.`)) return;
+      const who = ids.length === 1 ? fullName(people[0]!) : `${ids.length} employees`;
+      // Records on days locked as paid can't be deleted (the database refuses), so neither can their people: say so
+      // before asking, rather than failing after, and offer what keeps their records instead.
+      const lockedThrough = settings?.locked_through ?? null;
+      const locked = lockedThrough ? (await db().listRecordsMatching({ employeeIds: ids, to: lockedThrough })).filter((r) => !r.unlocked) : [];
+      if (locked.length) {
+        const blocked = people.filter((e) => locked.some((r) => r.employee_id === e.id));
+        const answer = await askChoice({
+          title: blocked.length === 1 ? `${fullName(blocked[0]!)} has paid days, so can't be deleted` : `${blocked.length} of them have paid days, so can't be deleted`,
+          detail: `Days up to ${lockedThrough} are locked as paid, and their records then are kept as they were paid. Marking them resigned keeps every record and stops them being offered when adding hours.`
+            + (blocked.length < people.length ? "\n\nThe others can be deleted: untick these and delete again." : ""),
+          items: blocked.map((e) => { const n = locked.filter((r) => r.employee_id === e.id).length; return `${fullName(e)} · ${n} paid record${n === 1 ? "" : "s"}`; }),
+          choices: [{ id: "cancel", label: "Cancel" }, { id: "resign", label: blocked.length === 1 ? "Mark resigned instead" : `Mark ${blocked.length} resigned instead`, primary: true }],
+        });
+        if (answer?.id === "resign") {
+          const { error } = await db().updateMany("employees", blocked.map((e) => ({ id: e.id, patch: { active: false } })) as never);
+          if (error) throw error;
+          toast.success(`Marked ${blocked.length === 1 ? fullName(blocked[0]!) : `${blocked.length} employees`} resigned. Ctrl+Z undoes it.`);
+          qc.invalidateQueries({ queryKey: ["employees"] });
+        }
+        return;
+      }
+      if (!(await askConfirm({
+        title: `Delete ${who}?`,
+        detail: `${recs || adj ? `This also deletes their ${recs} time record${recs === 1 ? "" : "s"} and ${adj} extra-pay entr${adj === 1 ? "y" : "ies"}.` : `${ids.length === 1 ? "They have" : "None of them has"} any time records or extra pay.`}\n\nA backup is saved first, so you can restore it from Sync & backup.`,
+        ...(ids.length > 1 ? { items: people.map((e) => `${fullName(e)} · ${e.employee_code}`) } : {}),
+        confirm: `Delete ${who}`, danger: true,
+      }))) return;
       await backupBefore("bulk-delete");
       const { error } = await db().removeMany("employees", ids);
       if (error) throw error;
-      toast.success(`Deleted ${ids.length} employee${ids.length === 1 ? "" : "s"}. A backup was saved in Sync & backup.`);
-      setSelected(new Set());
+      toast.success(`Deleted ${who}. A backup was saved in Sync & backup.`);
+      setSelected((s) => { const n = new Set(s); for (const id of ids) n.delete(id); return n; });
       qc.invalidateQueries();
     } catch (e) {
       toast.error(`Nothing was deleted: ${(e as Error).message}`);
@@ -130,7 +210,7 @@ function EmployeesPage() {
   const codeOwner = employeeWithCode(employees, form["employee_code"] ?? "");
 
   return (
-    <AppShell eyebrow="Directory" title={`${employees.length} employees`}>
+    <AppShell eyebrow="Directory" title={isLoading ? "Employees" : `${employees.length} employees`}>
       <form onSubmit={save} className="glass-panel grid gap-3 p-5 md:grid-cols-9">
         <div>
           {field("employee_code", "Employee ID", "text", !!codeOwner)}
@@ -166,7 +246,10 @@ function EmployeesPage() {
             <div className="font-display font-extrabold tracking-tight">Roster</div>
             <Link to="/employees/template" className={btnGhost} title="The profile every new employee starts with"><IdCard className="mr-1 inline h-4 w-4" />Default profile</Link>
           </div>
-          <SearchInput value={q} onChange={setQ} employees={employees} className="w-full max-w-2xl" />
+          <div className="flex w-full max-w-3xl flex-wrap items-center justify-end gap-3">
+            <SearchInput value={q} onChange={setQ} employees={employees} className="min-w-[16rem] flex-1" />
+            <SortControl value={sort} onChange={setSort} columns={columns} />
+          </div>
         </div>
 
         {picked.length > 0 && (
@@ -177,7 +260,7 @@ function EmployeesPage() {
             </span>
             <div className="flex gap-2">
               <button onClick={() => setBulkEdit(true)} disabled={busy} className={btnPrimary}><Pencil className="mr-1 inline h-4 w-4" />Edit {picked.length}</button>
-              <button onClick={removeSelected} disabled={busy} className={`${btnGhost} hover:!text-destructive`}><Trash2 className="mr-1 inline h-4 w-4" />Delete {picked.length}</button>
+              <button onClick={() => void removePeople(picked)} disabled={busy} className={`${btnGhost} hover:!text-destructive`}><Trash2 className="mr-1 inline h-4 w-4" />Delete {picked.length}</button>
               <button onClick={() => setSelected(new Set())} className={btnGhost} aria-label="Clear selection"><X className="h-4 w-4" /></button>
             </div>
           </div>
@@ -185,26 +268,42 @@ function EmployeesPage() {
 
         <DataTable id="employees" className="w-full text-sm">
           <thead>
+            <TableSort sort={sort} columns={columns} onSort={setSort}>
             <tr className="border-b border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
               <th className="w-10 pl-5"><input type="checkbox" aria-label="Select all shown" checked={allShownPicked} onChange={toggleShown} disabled={!list.length} /></th>
-              <th className="px-3 py-3 text-left font-medium"><EditableLabel k="employee" name="Employee" /></th>
-              <th className="px-3 py-3 text-left font-medium"><EditableLabel k="employee_code" name="ID" /></th>
-              <th className="px-3 py-3 text-left font-medium"><EditableLabel k="job_title" name="Position" /></th>
-              <th className="px-3 py-3 text-left font-medium"><EditableLabel k="department" name="Department" /></th>
-              <th className="px-3 py-3 text-left font-medium"><EditableLabel k="shift" name="Shift" /></th>
-              <th className="px-3 py-3 text-left font-medium"><EditableLabel k="email" name="Email" /></th>
-              <th className="px-3 py-3 text-right font-medium"><EditableLabel k="hourly_rate" name="Rate" /></th>
+              <SortTh k="employee" className="px-3 py-3 text-left font-medium"><EditableLabel k="employee" name="Employee" /></SortTh>
+              <SortTh k="employee_code" className="px-3 py-3 text-left font-medium"><EditableLabel k="employee_code" name="ID" /></SortTh>
+              <SortTh k="job_title" className="px-3 py-3 text-left font-medium"><EditableLabel k="job_title" name="Position" /></SortTh>
+              <SortTh k="department" className="px-3 py-3 text-left font-medium"><EditableLabel k="department" name="Department" /></SortTh>
+              <SortTh k="shift" className="px-3 py-3 text-left font-medium"><EditableLabel k="shift" name="Shift" /></SortTh>
+              <SortTh k="email" className="px-3 py-3 text-left font-medium"><EditableLabel k="email" name="Email" /></SortTh>
+              <SortTh k="hourly_rate" className="px-3 py-3 text-right font-medium"><EditableLabel k="hourly_rate" name="Rate" /></SortTh>
               <th className="w-20" />
             </tr>
+            </TableSort>
           </thead>
-          <tbody>
-            {list.length === 0 && (
+          <ContextMenu modal={false} onOpenChange={(o) => { if (!o) setMenuId(null); }}>
+          <ContextMenuTrigger asChild>
+          <tbody
+            // Which row the right-click menu is for; outside a row (the "no employees" line) there's no menu, and the
+            // browser's own isn't wanted either, so the event stops here (Radix skips a prevented event).
+            onContextMenu={(ev) => {
+              const id = (ev.target as HTMLElement).closest<HTMLElement>("tr[data-employee]")?.dataset["employee"];
+              if (id) setMenuId(id); else ev.preventDefault();
+            }}>
+            {isLoading && <SkeletonRows cols={9} skip={1} />}
+            {!isLoading && list.length === 0 && (
               <tr><td colSpan={9} className="px-5 py-10 text-center text-muted-foreground">
                 {employees.length ? `No employee matches ${describeEmployeeFilter(q)}.` : "No employees yet — add one above or import a file."}
               </td></tr>
             )}
             {list.map((e) => (
-              <tr key={e.id} className={`border-b border-border last:border-0 hover:bg-secondary ${selected.has(e.id) ? "bg-accent/40" : ""}`}>
+              <tr key={e.id} data-employee={e.id}
+                // A click on the row (not its tick box, links or buttons, nor the end of a text selection) opens the
+                // profile beside the roster; the name still opens the full page.
+                // (The ⋯ menu is portalled, but React still passes its clicks up through this row: [role=menu] skips them.)
+                onClick={(ev) => { if (!(ev.target as HTMLElement).closest("a, button, input, label, [role=menu]") && !getSelection()?.toString()) void open(e.id); }}
+                className={`cursor-pointer border-b border-border last:border-0 hover:bg-secondary ${selected.has(e.id) ? "bg-accent/40" : ""} ${e.id === openId ? "outline outline-2 -outline-offset-2 outline-primary" : ""}`}>
                 <td className="pl-5"><input type="checkbox" aria-label={`Select ${fullName(e)}`} checked={selected.has(e.id)} onChange={() => toggle(e.id)} /></td>
                 <td className="px-3 py-3 font-medium">
                   <Link to="/employees/$id" params={{ id: e.id }} className="hover:underline">{fullName(e)}</Link>
@@ -217,17 +316,25 @@ function EmployeesPage() {
                 <td className="px-3 py-3 text-muted-foreground">{e.email ? <EmailLink email={e.email} /> : "—"}</td>
                 <td className="px-3 py-3 text-right font-mono text-[13px]">{money(Number(e.hourly_rate))}<div className="font-body text-[10px] text-muted-foreground">{e.pay_type === "salary" ? "salary" : "hourly"}</div></td>
                 <td className="py-3 pl-3 pr-6">
-                  <div className="flex justify-end gap-3.5 text-muted-foreground">
+                  <div className="flex items-center justify-end gap-3.5 text-muted-foreground">
                     <Link to="/employees/$id" params={{ id: e.id }} aria-label={`Edit ${fullName(e)}`} title="Edit profile"><Pencil className="h-4 w-4 hover:text-foreground" /></Link>
-                    <button onClick={() => remove(e.id)} aria-label="Delete"><Trash2 className="h-4 w-4 hover:text-destructive" /></button>
+                    <EmployeeMenuButton {...menuProps(e)} />
                   </div>
                 </td>
               </tr>
             ))}
           </tbody>
+          </ContextMenuTrigger>
+          {menuEmp && <EmployeeContextMenu {...menuProps(menuEmp)} />}
+          </ContextMenu>
         </DataTable>
         {isFiltering(q) && list.length > 0 && <div className="border-t border-border px-5 py-2 text-xs text-muted-foreground">Showing {list.length} of {employees.length}</div>}
       </div>
+
+      {openEmp && (
+        <EmployeePanel emp={openEmp} employees={employees} onMove={move} onClose={() => open(null)} onDirty={onDirty}
+          position={openIndex >= 0 ? `${openIndex + 1} of ${list.length}` : "hidden by the search"} />
+      )}
     </AppShell>
   );
 }

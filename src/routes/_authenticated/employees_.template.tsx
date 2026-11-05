@@ -10,7 +10,7 @@ import { EMPLOYEE_SECTIONS as sections, PER_PERSON_FIELDS, type EmployeeDefaults
 import { ArrowLeft } from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated/employees_/template")({
-  head: () => ({ meta: [{ title: "Default profile — Meridian Payroll" }] }),
+  head: () => ({ meta: [{ title: "Default profile — KoPayroll" }] }),
   component: TemplatePage,
 });
 

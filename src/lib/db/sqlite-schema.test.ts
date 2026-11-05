@@ -4,12 +4,13 @@ import { describe, expect, it } from "vitest";
 import { openDatabase, runQuery } from "../../../electron/database.mjs";
 import { COLUMNS, decodeRow, encodeRow, encodeValue, roundDecimal } from "./codec";
 import { TABLES } from "./schema";
-import { SQLITE_SCHEMA } from "./sqlite-schema";
+import { SQLITE_MIGRATIONS, SQLITE_SCHEMA } from "./sqlite-schema";
 
 type Db = { prepare(sql: string): { get(...a: unknown[]): any; all(...a: unknown[]): any[]; run(...a: unknown[]): unknown }; exec(sql: string): void };
 const fresh = () => {
   const { db, endTransaction } = openDatabase(":memory:") as { db: Db; endTransaction: () => void };
-  db.exec(SQLITE_SCHEMA);
+  // As a new database gets it: the schema 12 starting point, then every migration.
+  for (const sql of [SQLITE_SCHEMA, ...SQLITE_MIGRATIONS]) db.exec(sql);
   return { db, endTransaction, q: (sql: string, ...p: unknown[]) => runQuery(db, sql, p).rows as any[] };
 };
 const EMP = "e1";

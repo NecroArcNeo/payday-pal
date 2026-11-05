@@ -118,9 +118,11 @@ export function stripPrivate<T extends Row>(row: T, keys: string[], how: "null" 
 
 /** What push sends: the snapshot with every private value removed, including from the default profile. */
 export function redactSnapshot(s: Snapshot, keys: string[]): Snapshot {
-  if (!keys.length) return s;
+  // The edit history holds every value ever written, private ones included: it never leaves the device.
+  const { history: _local, ...rest } = s;
+  if (!keys.length) return rest;
   return {
-    ...s,
+    ...rest,
     data: {
       ...s.data,
       employees: s.data.employees.map((e) => stripPrivate(e, keys)),

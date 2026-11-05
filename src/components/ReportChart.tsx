@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart, XAxis, YAxis } from "recharts";
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart, ReferenceArea, XAxis, YAxis } from "recharts";
 import { toast } from "sonner";
 import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, type ChartConfig } from "@/components/ui/chart";
 import { StatCard, btnGhost, inputCls } from "@/components/AppShell";
@@ -12,10 +13,15 @@ import { downloadBlob } from "@/lib/db/backups";
 import { isoDate, money, useAdjustments, useEmployees, usePayRates, usePayrollSettings, useShifts } from "@/lib/payroll";
 import { payByRecord, weekEnd, weekStart } from "@/lib/pay";
 import { usePref } from "@/lib/prefs";
+import { SkeletonBlock } from "@/components/Loading";
+import { TallBox } from "@/components/ResizeHandle";
 import {
-  autoGroup, buildReport, compareReports, GROUPS, METRICS, previousRange, rangeLabel, REPORT_RANGES, reportRange, sameTimeLastYear, SPLITS,
-  type CompareRow, type GroupBy, type Metric, type Report, type ReportRange, type SplitBy, type Unit,
+  autoGroup, buildReport, compareReports, DEFAULT_STATS, GROUPS, METRICS, previousRange, rangeLabel, REPORT_RANGES, reportRange, reportStats, sameTimeLastYear, SPLITS, STATS,
+  type CompareRow, type GroupBy, type Metric, type Report, type ReportRange, type SplitBy, type StatKey, type Unit,
 } from "@/lib/report";
+import { SortTh, TableSort, useTableSort } from "@/components/SortControl";
+import { sortTable, type SortColumns } from "@/lib/table-sort";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
 // A chart of one metric over any range, with the choices to change it, summary cards and the numbers as a table.
 // The Reports page, the employee profile and the Dashboard all use it; the maths is buildReport (src/lib/report.ts).
@@ -28,8 +34,17 @@ const COMPARES: Record<Compare, string> = { off: "No", previous: "Previous perio
 export type ReportSettings = {
   range: ReportRange | "custom"; from: string; to: string; metric: Metric; kind: ChartKind; group: GroupBy | "auto"; split: SplitBy;
   compare: Compare; cmpFrom: string; cmpTo: string;
+  /** The statistics cards: over the chart's period, or dates of their own (typed, or dragged across the chart). */
+  statsRange: "chart" | "custom"; statsFrom: string; statsTo: string;
+  /** What the cards' average, highest and lowest are per: the chart's grouping ("auto"), or one of their own. */
+  statsPer: GroupBy | "auto";
+  /** Which cards show, in STATS order. */
+  stats: StatKey[];
 };
-export const DEFAULT_SETTINGS: ReportSettings = { range: "last_3_months", from: "", to: "", metric: "pay", kind: "bar", group: "auto", split: "none", compare: "off", cmpFrom: "", cmpTo: "" };
+export const DEFAULT_SETTINGS: ReportSettings = {
+  range: "last_3_months", from: "", to: "", metric: "pay", kind: "bar", group: "auto", split: "none", compare: "off", cmpFrom: "", cmpTo: "",
+  statsRange: "chart", statsFrom: "", statsTo: "", statsPer: "auto", stats: DEFAULT_STATS,
+};
 
 // Up to 9 series (8 people and everyone else): the theme's 5 chart colours, then 4 more that read in light and dark.
 const PALETTE = ["var(--chart-1)", "var(--chart-2)", "var(--chart-4)", "var(--chart-5)", "var(--chart-3)", "oklch(0.62 0.19 330)", "oklch(0.65 0.15 150)", "oklch(0.6 0.2 25)", "oklch(0.6 0.03 260)"];
@@ -57,6 +72,9 @@ function validSettings(s: Partial<ReportSettings> | null | undefined, base: Repo
     metric: ok(v.metric, METRICS, base.metric), kind: ok(v.kind, KINDS, base.kind),
     group: v.group === "auto" ? "auto" : ok(v.group, GROUPS, "month"), split: ok(v.split, SPLITS, base.split),
     compare: ok(v.compare, COMPARES, base.compare), cmpFrom: day(v.cmpFrom), cmpTo: day(v.cmpTo),
+    statsRange: v.statsRange === "custom" ? "custom" : "chart", statsFrom: day(v.statsFrom), statsTo: day(v.statsTo),
+    statsPer: v.statsPer === "auto" ? "auto" : ok(v.statsPer, GROUPS, "auto" as GroupBy),
+    stats: Array.isArray(v.stats) ? (Object.keys(STATS) as StatKey[]).filter((k) => (v.stats as unknown[]).includes(k)) : base.stats,
   };
 }
 
@@ -100,10 +118,21 @@ export function ReportChart({ prefKey, employeeIds, single = false, compact = fa
     : s.compare === "custom" && s.cmpFrom && s.cmpTo && s.cmpFrom <= s.cmpTo ? { from: s.cmpFrom, to: s.cmpTo }
     : previousRange(from, to);
 
-  // Two loads: this period and the one it's compared with. The Dashboard's chart has no comparison, so it asks for
-  // the same range twice, which React Query answers from one load (same query key).
+  // The statistics cards: over the chart's period and grouping, or over dates of their own (compared with the same
+  // length just before), per day/week/month/year as chosen.
+  const statsOwn = !compact && s.statsRange === "custom" && !!s.statsFrom && !!s.statsTo && s.statsFrom <= s.statsTo;
+  const st = statsOwn ? { from: s.statsFrom, to: s.statsTo } : { from, to };
+  const statsAuto = statsOwn ? autoGroup(st.from, st.to) : groupBy;
+  const statsPer: GroupBy = s.statsPer === "auto" ? statsAuto : s.statsPer;
+  const stBefore = statsOwn ? previousRange(st.from, st.to) : against;
+
+  // Four loads: this period, the one it's compared with, and the statistics' own dates and the ones before them. When
+  // the statistics follow the chart (and on the Dashboard, which has neither), they ask for ranges already asked for,
+  // which React Query answers from the same load (same query key).
   const now = useReportData(from, to);
   const then = useReportData(compact ? from : against.from, compact ? to : against.to);
+  const stNow = useReportData(compact ? from : st.from, compact ? to : st.to);
+  const stThen = useReportData(compact ? from : stBefore.from, compact ? to : stBefore.to);
   const { data: employees } = useEmployees();
   const { data: shifts } = useShifts();
   const { data: rates } = usePayRates();
@@ -111,19 +140,31 @@ export function ReportChart({ prefKey, employeeIds, single = false, compact = fa
   const idsKey = employeeIds?.join(",") ?? "";
 
   const result = useMemo(() => {
-    if (!now.records || !now.adjustments || !then.records || !then.adjustments || !employees || !shifts || !settings) return null;
+    if (!now.records || !now.adjustments || !then.records || !then.adjustments || !stNow.records || !stNow.adjustments || !stThen.records || !stThen.adjustments) return null;
+    if (!employees || !shifts || !settings) return null;
     const rules = { threshold: settings.ot_threshold, otMultiplier: settings.ot_multiplier, weekendOvertime: settings.weekend_overtime };
     const ids = idsKey ? idsKey.split(",") : undefined;
     const common = { employees, shifts, rates, rules, groupBy, metric: s.metric, splitBy: split, employeeIds: ids };
-    const report = (records: NonNullable<typeof now.records>, adjustments: NonNullable<typeof now.adjustments>, r: { from: string; to: string }) =>
-      buildReport({ ...common, records, adjustments, pay: payByRecord(records, employees, shifts, rules, rates), ...r });
+    // Pay per record is the slow part; loads that are the same (statistics following the chart) share it.
+    const payFor = new Map<unknown, ReturnType<typeof payByRecord>>();
+    const pay = (records: Parameters<typeof payByRecord>[0]) => payFor.get(records) ?? payFor.set(records, payByRecord(records, employees, shifts, rules, rates)).get(records)!;
+    type Records = NonNullable<typeof now.records>;
+    type Adjustments = NonNullable<typeof now.adjustments>;
+    const report = (records: Records, adjustments: Adjustments, r: { from: string; to: string }, more: { groupBy?: GroupBy; splitBy?: SplitBy } = {}) =>
+      buildReport({ ...common, records, adjustments, pay: pay(records), ...r, ...more });
     const a = report(now.records, now.adjustments, { from, to });
     const b = compact ? null : report(then.records, then.adjustments, against);
-    return { now: a, before: b, rows: comparing && b ? compareReports(a, b) : null };
-  }, [now.records, now.adjustments, then.records, then.adjustments, employees, shifts, rates, settings, idsKey, groupBy, s.metric, split, from, to, against.from, against.to, compact, comparing]);
+    // The cards add every series up, so their report isn't split.
+    const flat = { groupBy: statsPer, splitBy: "none" as const };
+    const stats = compact ? null : { now: report(stNow.records, stNow.adjustments, st, flat), before: report(stThen.records, stThen.adjustments, stBefore, flat) };
+    return { now: a, before: b, rows: comparing && b ? compareReports(a, b) : null, stats };
+  }, [now.records, now.adjustments, then.records, then.adjustments, stNow.records, stNow.adjustments, stThen.records, stThen.adjustments, employees, shifts, rates, settings, idsKey, groupBy, s.metric, split, from, to, against.from, against.to, st.from, st.to, stBefore.from, stBefore.to, statsPer, compact, comparing]);
 
   const chartBox = useRef<HTMLDivElement>(null);
   const [saving, setSaving] = useState(false);
+  // Dragging across the chart (or clicking one bar) picks the statistics' dates: the first and last day/week… pressed
+  // over, as indexes into the chart's buckets, while the button is down.
+  const [drag, setDrag] = useState<{ a: number; b: number } | null>(null);
 
   const report = result?.now;
   const rows = result?.rows ?? null;
@@ -151,7 +192,9 @@ export function ReportChart({ prefKey, employeeIds, single = false, compact = fa
     </div>
   );
 
-  if (!report || !result) return <>{controls}<div className="glass-panel grid place-items-center text-sm text-muted-foreground" style={{ height }}>Loading…</div></>;
+  // The chart's height can be dragged (its bottom edge), remembered per place like the other choices.
+  const heightKey = `meridian-report-height:${prefKey}`;
+  if (!report || !result) return <>{controls}<TallBox prefKey={heightKey} height={height} label="Chart height"><SkeletonBlock className="h-full w-full rounded-2xl" /></TallBox></>;
 
   // Recharts reads keys with dots as paths, so series get plain keys (s0, s1…) and their names go in the config.
   // When comparing there are two: this period (s0) and the compared one (s1).
@@ -169,6 +212,31 @@ export function ReportChart({ prefKey, employeeIds, single = false, compact = fa
   const tooltip = <ChartTooltip cursor={kind !== "line"} content={<ValueTooltip unit={unit} config={config} sum={!rows && multi && additive} />} />;
   const legend = multi || rows ? <ChartLegend content={<ChartLegendContent />} /> : null;
 
+  // Picking the statistics' dates on the chart (not a pie, nor a comparison, whose bars are two periods). Recharts
+  // reports which bucket the pointer is over as activeTooltipIndex.
+  const selectable = !compact && !rows && kind !== "pie";
+  const at = (e: { activeTooltipIndex?: number } | null | undefined) => e?.activeTooltipIndex ?? null;
+  const pick = selectable ? {
+    onMouseDown: (e: { activeTooltipIndex?: number } | null) => { const i = at(e); if (i !== null) setDrag({ a: i, b: i }); },
+    onMouseMove: (e: { activeTooltipIndex?: number } | null) => { const i = at(e); if (drag && i !== null && i !== drag.b) setDrag({ a: drag.a, b: i }); },
+    onMouseUp: () => {
+      if (!drag) return;
+      const lo = report.buckets[Math.min(drag.a, drag.b)], hi = report.buckets[Math.max(drag.a, drag.b)];
+      setDrag(null);
+      if (lo && hi) set({ statsRange: "custom", statsFrom: lo.from, statsTo: hi.to });
+    },
+    onMouseLeave: () => setDrag(null),
+  } : {};
+  // The band shows the dates being dragged, or the statistics' own dates where they overlap the chart.
+  const overlapping = report.buckets.flatMap((b, i) => (b.to >= st.from && b.from <= st.to ? [i] : []));
+  const band = drag ? [Math.min(drag.a, drag.b), Math.max(drag.a, drag.b)] as const
+    : statsOwn && overlapping.length ? [overlapping[0]!, overlapping.at(-1)!] as const
+    : null;
+  // Left out of a saved picture or PDF, which show the chart itself.
+  const highlight = selectable && band && band[0] >= 0 && !saving
+    ? <ReferenceArea x1={data[band[0]]!.label} x2={data[band[1]]!.label} fill="var(--primary)" fillOpacity={0.12} strokeOpacity={0} />
+    : null;
+
   const chart = kind === "pie" ? (
     <PieChart>
       {tooltip}
@@ -178,21 +246,21 @@ export function ReportChart({ prefKey, employeeIds, single = false, compact = fa
       <ChartLegend content={<ChartLegendContent nameKey="name" />} />
     </PieChart>
   ) : kind === "line" ? (
-    <LineChart data={data} margin={{ left: 4, right: 12, top: 8 }}>
+    <LineChart data={data} margin={{ left: 4, right: 12, top: 8 }} {...pick}>
       <CartesianGrid vertical={false} /><XAxis dataKey="label" {...axis} minTickGap={16} /><YAxis {...axis} width={56} tickFormatter={(v: number) => short(v, unit)} />
-      {tooltip}{legend}
+      {highlight}{tooltip}{legend}
       {keys.map((k, i) => <Line key={k} dataKey={k} type="monotone" stroke={`var(--color-${k})`} strokeWidth={2} dot={data.length <= 31} {...(rows && i === 1 ? { strokeDasharray: "5 4" } : {})} />)}
     </LineChart>
   ) : kind === "area" ? (
-    <AreaChart data={data} margin={{ left: 4, right: 12, top: 8 }}>
+    <AreaChart data={data} margin={{ left: 4, right: 12, top: 8 }} {...pick}>
       <CartesianGrid vertical={false} /><XAxis dataKey="label" {...axis} minTickGap={16} /><YAxis {...axis} width={56} tickFormatter={(v: number) => short(v, unit)} />
-      {tooltip}{legend}
+      {highlight}{tooltip}{legend}
       {keys.map((k) => <Area key={k} dataKey={k} type="monotone" {...(additive && !rows ? { stackId: "a" } : {})} stroke={`var(--color-${k})`} fill={`var(--color-${k})`} fillOpacity={0.25} />)}
     </AreaChart>
   ) : (
-    <BarChart data={data} margin={{ left: 4, right: 12, top: 8 }}>
+    <BarChart data={data} margin={{ left: 4, right: 12, top: 8 }} {...pick}>
       <CartesianGrid vertical={false} /><XAxis dataKey="label" {...axis} minTickGap={8} /><YAxis {...axis} width={56} tickFormatter={(v: number) => short(v, unit)} />
-      {tooltip}{legend}
+      {highlight}{tooltip}{legend}
       {keys.map((k, i) => <Bar key={k} dataKey={k} fill={`var(--color-${k})`} {...(stacked ? { stackId: "a" } : {})}
         radius={stacked ? (i === keys.length - 1 ? [4, 4, 0, 0] : 0) : 4} />)}
     </BarChart>
@@ -200,7 +268,9 @@ export function ReportChart({ prefKey, employeeIds, single = false, compact = fa
 
   const body = (
     <div className="relative" ref={chartBox}>
-      <ChartContainer config={config} className="!aspect-auto w-full" style={{ height }}>{chart}</ChartContainer>
+      <TallBox prefKey={heightKey} height={height} label="Chart height">
+        <ChartContainer config={config} className="!aspect-auto h-full w-full">{chart}</ChartContainer>
+      </TallBox>
       {empty && <div className="pointer-events-none absolute inset-0 grid place-items-center text-sm text-muted-foreground">No records from {from} to {to}{rows ? ` or ${against.from} to ${against.to}` : ""}.</div>}
       {(now.fetching || then.fetching) && <div className="absolute right-2 top-2 text-[11px] text-muted-foreground">Updating…</div>}
     </div>
@@ -216,7 +286,8 @@ export function ReportChart({ prefKey, employeeIds, single = false, compact = fa
   const save = async (as: "png" | "pdf") => {
     const el = chartBox.current?.querySelector<HTMLElement>("[data-chart]");
     if (!el || saving) return;
-    setSaving(true);
+    // Drawn again at once without the statistics' band (flushSync), so the picture is taken without it.
+    flushSync(() => setSaving(true));
     try {
       const { chartCanvas, canvasPng } = await import("@/lib/export/chart-image");
       const showLegend = multi || rows || kind === "pie";
@@ -235,12 +306,18 @@ export function ReportChart({ prefKey, employeeIds, single = false, compact = fa
     }
   };
 
+  // Container queries (the cards' columns) follow the chart's own width: it's a full page on Reports and in a side
+  // panel on Employees.
   return (
-    <div className="space-y-4">
+    <div className="@container space-y-4">
       {controls}
       <p className="text-xs text-muted-foreground">{METRICS[s.metric].hint}. {from} to {to}, per {groupBy}.{rows ? ` Compared with ${against.from} to ${against.to}, ${groupBy} by ${groupBy} in order.` : ""}</p>
-      <Cards report={report} before={result.before} beforeLabel={s.compare === "off" || s.compare === "previous" ? "Previous period" : s.compare === "last_year" ? "Same time last year" : "Compared period"}
-        groupBy={groupBy} additive={additive} today={today} />
+      {result.stats && (
+        <Statistics s={s} set={set} chart={{ from, to }} st={st} own={statsOwn} per={statsPer} auto={statsAuto} additive={additive} today={today}
+          now={result.stats.now} before={result.stats.before}
+          beforeLabel={statsOwn ? "Same length before" : s.compare === "off" || s.compare === "previous" ? "Previous period" : s.compare === "last_year" ? "Same time last year" : "Compared period"}
+          beforeRange={stBefore} selectable={selectable} />
+      )}
       <div className="glass-panel p-4">
         <div className="mb-2 flex justify-end gap-2">
           <button type="button" onClick={() => save("png")} disabled={saving} className={btnGhost} title="Save the chart as a PNG picture">Save picture</button>
@@ -297,21 +374,61 @@ function ValueTooltip({ active, payload, unit, config, sum }: {
   );
 }
 
-function Cards({ report, before, beforeLabel, groupBy, additive, today }: { report: Report; before: Report | null; beforeLabel: string; groupBy: GroupBy; additive: boolean; today: string }) {
-  const unit = report.unit;
-  // Each bucket's figure: its series added up, or (pay per hour, which doesn't add up) its only series.
-  const totals = report.buckets.map((_, i) => (additive ? report.values[i]!.reduce((a, b) => a + b, 0) : report.values[i]![0]!));
-  const best = totals.reduce((bi, v, i) => (v > totals[bi]! ? i : bi), 0);
-  // The average is over the days, weeks… that have started, so the rest of this month doesn't pull it down.
-  const started = report.buckets.filter((b) => b.from <= today).length;
-  const c = before ? change(report.total, before.total) : null;
+/**
+ * The statistics: which dates they're over (the chart's period, dates typed in, or dragged across the chart), what
+ * the average is per, which cards show, and the cards themselves. The numbers come from reportStats over a report of
+ * just those dates (worked out with the payroll rules over whole weeks, like the chart), so "hours worked from Jan 15
+ * to May 22" is exactly those days.
+ */
+function Statistics({ s, set, chart, st, own, per, auto, additive, today, now, before, beforeLabel, beforeRange, selectable }: {
+  s: ReportSettings; set: (patch: Partial<ReportSettings>) => void; chart: { from: string; to: string }; st: { from: string; to: string };
+  own: boolean; per: GroupBy; auto: GroupBy; additive: boolean; today: string; now: Report; before: Report;
+  beforeLabel: string; beforeRange: { from: string; to: string }; selectable: boolean;
+}) {
+  const unit = now.unit;
+  const stats = reportStats(now, today, additive);
+  const c = change(now.total, before.total);
+  const per_ = per.toLowerCase();
+  const range = rangeLabel(st.from, st.to);
+  const shown = s.stats;
+  const cards: Record<StatKey, React.ReactNode> = {
+    total: <StatCard label={unit === "count" || !additive ? "Whole period" : "Total"} value={formatValue(stats.total, unit)} sub={range} highlight />,
+    average: <StatCard label={`Average per ${per_}`} value={stats.averageOver ? formatValue(stats.average, unit) : "—"}
+      sub={stats.averageOver ? `over ${stats.averageOver} ${per_}${stats.averageOver === 1 ? "" : "s"}` : `no ${per_} has started yet`} />,
+    highest: <StatCard label={`Highest ${per_}`} value={stats.highest ? formatValue(stats.highest.value, unit) : "—"} {...(stats.highest ? { sub: stats.highest.bucket.label } : {})} />,
+    lowest: <StatCard label={`Lowest ${per_}`} value={stats.lowest ? formatValue(stats.lowest.value, unit) : "—"} {...(stats.lowest ? { sub: stats.lowest.bucket.label } : {})} />,
+    compare: <StatCard label={beforeLabel} value={formatValue(before.total, unit)}
+      sub={c === null ? `no records ${rangeLabel(beforeRange.from, beforeRange.to)}` : `${pct(c)} this period · ${rangeLabel(beforeRange.from, beforeRange.to)}`} />,
+  };
+  const toggle = (k: StatKey, on: boolean) => set({ stats: (Object.keys(STATS) as StatKey[]).filter((x) => (x === k ? on : shown.includes(x))) });
   return (
-    <section className="grid grid-cols-2 gap-4 md:grid-cols-4">
-      <StatCard label={unit === "count" || !additive ? "Whole period" : "Total"} value={formatValue(report.total, unit)} highlight />
-      <StatCard label={`Average per ${groupBy}`} value={formatValue(totals.slice(0, started).reduce((a, b) => a + b, 0) / Math.max(1, started), unit)} delay={60} />
-      <StatCard label={`Highest ${groupBy}`} value={totals[best] ? formatValue(totals[best]!, unit) : "—"} {...(totals[best] ? { sub: report.buckets[best]!.label } : {})} delay={120} />
-      <StatCard label={beforeLabel} value={before ? formatValue(before.total, unit) : "—"}
-        sub={c === null ? "no records to compare" : `${pct(c)} this period`} delay={180} />
+    <section className="space-y-3">
+      <div className="flex flex-wrap items-end gap-3">
+        <Choice label="Statistics for" value={own ? "custom" : "chart"}
+          onChange={(v) => set(v === "custom" ? { statsRange: "custom", statsFrom: s.statsFrom || chart.from, statsTo: s.statsTo || chart.to } : { statsRange: "chart" })}
+          options={[["chart", "The chart's period"], ["custom", "Chosen dates…"]]} />
+        {s.statsRange === "custom" && <Dates from={s.statsFrom || chart.from} to={s.statsTo || chart.to} onChange={(f, t) => set({ statsRange: "custom", statsFrom: f, statsTo: t })} label="Statistics" />}
+        <Choice label="Average per" value={s.statsPer} onChange={(v) => set({ statsPer: v as GroupBy | "auto" })}
+          options={[["auto", `Auto (${GROUPS[auto].toLowerCase()})`], ...Object.entries(GROUPS)]} />
+        <DropdownMenu modal={false}>
+          <DropdownMenuTrigger className={btnGhost}>Cards ({shown.length})</DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-52">
+            <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Show these statistics</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            {(Object.entries(STATS) as [StatKey, string][]).map(([k, label]) => (
+              // Ticking keeps the menu open (preventDefault on select), to tick several in one go.
+              <DropdownMenuCheckboxItem key={k} checked={shown.includes(k)} onCheckedChange={(on) => toggle(k, on)} onSelect={(e) => e.preventDefault()}>{label}</DropdownMenuCheckboxItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        {own && <button type="button" onClick={() => set({ statsRange: "chart" })} className={`${btnGhost} !py-1.5 text-xs`}>Back to the chart's period</button>}
+        {selectable && <span className="pb-2 text-xs text-muted-foreground">{own ? range : "Tip: drag across the chart (or click a bar) to see the statistics for just those dates."}</span>}
+      </div>
+      {shown.length > 0 && (
+        <div className="grid grid-cols-2 gap-4 @2xl:grid-cols-4">
+          {(Object.keys(STATS) as StatKey[]).filter((k) => shown.includes(k)).map((k) => <div key={k}>{cards[k]}</div>)}
+        </div>
+      )}
     </section>
   );
 }
@@ -355,8 +472,17 @@ function numbersGrid(report: Report, before: Report | null, rows: CompareRow[] |
 }
 
 function NumbersTable({ grid, unit, prefKey, fileName }: { grid: Grid; unit: Unit; prefKey: string; fileName: string }) {
+  // Sorted by any column; the period columns (text labels like "Oct 2026") sort in time order, by their row. Columns
+  // are keyed by position and heading, so a sort by "Kitchen" stays while the period changes. The whole-period line
+  // stays at the bottom.
+  const columns: SortColumns<number> = Object.fromEntries(grid.head.map((h, i) => [`${i}|${h}`, grid.right.includes(i)
+    ? { label: h, kind: "number" as const, value: (ri: number) => { const c = grid.rows[ri]![i]!; return typeof c === "string" ? null : c.n; } }
+    : { label: h, kind: "date" as const, desc: false, value: (ri: number) => ri }]));
+  const [sort, setSort] = useTableSort(`meridian-report-table-sort:${prefKey}`, columns, { by: `0|${grid.head[0]}`, desc: false });
+  const order = sortTable(grid.rows.map((_, i) => i), sort, columns);
   const exportCsv = () => {
-    const csv = [grid.head, ...[...grid.rows, grid.foot].map((r) => r.map(csvValue))].map((l) => l.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
+    // In the order shown.
+    const csv = [grid.head, ...[...order.map((ri) => grid.rows[ri]!), grid.foot].map((r) => r.map(csvValue))].map((l) => l.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
     downloadBlob(new Blob([csv], { type: "text/csv" }), `${fileName}.csv`);
   };
   const align = (i: number) => (grid.right.includes(i) ? "text-right" : "text-left font-body");
@@ -369,13 +495,15 @@ function NumbersTable({ grid, unit, prefKey, fileName }: { grid: Grid; unit: Uni
       <div className="max-h-[28rem] overflow-auto">
         <DataTable id={`report-${prefKey}`} className="w-full text-sm">
           <thead>
+            <TableSort sort={sort} columns={columns} onSort={setSort}>
             <tr className="border-b border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
-              {grid.head.map((h, i) => <th key={i} className={`px-4 py-3 font-medium ${grid.right.includes(i) ? "text-right" : "text-left"}`}>{h}</th>)}
+              {grid.head.map((h, i) => <SortTh k={`${i}|${h}`} key={i} className={`px-4 py-3 font-medium ${grid.right.includes(i) ? "text-right" : "text-left"}`}>{h}</SortTh>)}
             </tr>
+            </TableSort>
           </thead>
           <tbody className="font-mono text-[13px]">
-            {grid.rows.map((r, ri) => (
-              <tr key={ri} className="border-b border-border last:border-0 hover:bg-secondary" title={grid.titles[ri]}>
+            {order.map((ri) => grid.rows[ri]!).map((r, k) => (
+              <tr key={order[k]} className="border-b border-border last:border-0 hover:bg-secondary" title={grid.titles[order[k]!]}>
                 {r.map((c, i) => <td key={i} className={`px-4 py-2 ${align(i)}`}>{shown(c, unit)}</td>)}
               </tr>
             ))}

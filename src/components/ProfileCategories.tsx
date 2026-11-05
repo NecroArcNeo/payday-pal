@@ -13,6 +13,7 @@ import { useLabels } from "@/lib/labels";
 import { customKey } from "@/lib/db/privacy";
 import { Plus, Trash2, TriangleAlert } from "lucide-react";
 import { DateInput } from "@/components/DateInput";
+import { askConfirm, askText } from "@/lib/choice-prompt";
 
 const NEW_SECTION = "\u0000new";
 const cleanSection = (s: string | null | undefined) => {
@@ -42,7 +43,7 @@ export function useCategoryActions() {
     if (error) toast.error(error.message); else refresh();
   };
   const remove = async (defId: string, label: string) => {
-    if (!confirm(`Remove the "${label}" category for all employees?`)) return;
+    if (!(await askConfirm({ title: `Remove the "${label}" category?`, detail: "It goes from every employee's profile, with the values filled in for it.", confirm: "Remove category", danger: true }))) return;
     const { error } = await db().remove("employee_field_defs", defId);
     if (error) toast.error(error.message); else refresh();
   };
@@ -60,7 +61,12 @@ export function useCategoryActions() {
     if (bad.length) {
       const eg = bad.slice(0, 3).map((x) => `${fullName(x.e)}: "${x.from}"`).join(", ");
       const what = bad.length === 1 ? "employee has a value that isn't" : "employees have values that aren't";
-      if (!confirm(`${bad.length} ${what} a valid ${fieldTypeLabel(type)} (${eg}${bad.length > 3 ? ", …" : ""}).\n\nThey'll be kept as they are and marked on each profile so you can fix them. Change "${def.label}" to ${fieldTypeLabel(type)}?`)) return;
+      if (!(await askConfirm({
+        title: `Change "${def.label}" to ${fieldTypeLabel(type)}?`,
+        detail: `${bad.length} ${what} a valid ${fieldTypeLabel(type)}. They'll be kept as they are and marked on each profile so you can fix them.`,
+        items: bad.map((x) => `${fullName(x.e)}: "${x.from}"`),
+        confirm: `Change to ${fieldTypeLabel(type)}`,
+      }))) return;
     }
     const convert = values.filter((x) => x.to !== x.from && fitsType(type, x.to));
     if (convert.length) {
@@ -92,7 +98,7 @@ export function useCategoryActions() {
   /** Removes a user-made section; its categories (and their values) move to Other details. */
   const removeSection = async (name: string) => {
     const list = inSection(name);
-    if (!confirm(`Remove the "${name}" section? Its ${list.length} categor${list.length === 1 ? "y moves" : "ies move"} to ${OTHER_SECTION}, keeping every employee's values.`)) return;
+    if (!(await askConfirm({ title: `Remove the "${name}" section?`, detail: `Its ${list.length} categor${list.length === 1 ? "y moves" : "ies move"} to ${OTHER_SECTION}, keeping every employee's values.`, confirm: "Remove section" }))) return;
     const { error } = await db().updateMany("employee_field_defs", list.map((d) => ({ id: d.id, patch: { section: null } })));
     if (error) toast.error(error.message); else refresh();
   };
@@ -101,10 +107,7 @@ export function useCategoryActions() {
 
 /** Asks for a new section's name. Null when cancelled. */
 function askSectionName() {
-  const name = prompt("Name the new section, e.g. Uniform or Certifications")?.trim();
-  if (!name) return null;
-  if (name.length > 60) { toast.error("Keep the section name under 60 characters"); return null; }
-  return name;
+  return askText({ title: "New section", label: "Section name", placeholder: "e.g. Uniform or Certifications", maxLength: 60, confirm: "Add section" });
 }
 
 /** Built-in sections, the user's own, Other details, and "New section…". Value null = Other details. */
@@ -119,8 +122,7 @@ export function SectionSelect({ value, onChange, className, extra = [] }: {
     <select className={className} value={current || ""} aria-label="Section"
       onChange={(e) => {
         if (e.target.value !== NEW_SECTION) { onChange(e.target.value || null); return; }
-        const name = askSectionName();
-        if (name) onChange(name);
+        void askSectionName().then((name) => { if (name) onChange(name); });
       }}>
       {names.map((n) => <option key={n} value={n}>{label(`section:${n}`, n)}</option>)}
       <option value="">{label(`section:${OTHER_SECTION}`, OTHER_SECTION)}</option>

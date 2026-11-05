@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { usePayslipData } from "@/lib/payslip";
 import { zipSync } from "fflate";
 import { toast } from "sonner";
 import { Check, Files, Pencil, Play, Trash2 } from "lucide-react";
@@ -16,6 +17,8 @@ import {
 } from "@/lib/payroll";
 import { periodPresets } from "@/lib/periods";
 import { DateInput } from "@/components/DateInput";
+import { TaskProgress } from "@/components/Loading";
+import { askConfirm } from "@/lib/choice-prompt";
 
 const isDate = (d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d);
 
@@ -35,7 +38,8 @@ export function BulkExport({ from, to }: { from: string; to: string }) {
 type Choice = { employeeIds: string[]; output: string; skipEmpty: boolean };
 const NEW_CHOICE: Choice = { employeeIds: [], output: "xlsx", skipEmpty: false };
 
-function BulkExportDialog({ initialFrom, initialTo, onClose }: { initialFrom: string; initialTo: string; onClose: () => void }) {
+/** The dialog itself; a pay run opens it with its own period and people (`initialPeople`). */
+export function BulkExportDialog({ initialFrom, initialTo, initialPeople, onClose }: { initialFrom: string; initialTo: string; initialPeople?: string[]; onClose: () => void }) {
   const [from, setFrom] = useState(initialFrom);
   const [to, setTo] = useState(initialTo);
   const badRange = !isDate(from) || !isDate(to) || from > to;
@@ -45,6 +49,7 @@ function BulkExportDialog({ initialFrom, initialTo, onClose }: { initialFrom: st
   const { data: rateHistory, isLoading: ratesLoading } = usePayRates();
   const { data: shifts = [] } = useShifts();
   const { data: defs = [] } = useFieldDefs();
+  const payslip = usePayslipData();
   const { data: settings } = usePayrollSettings();
   const { data: records = [], isLoading: recordsLoading } = useAllRecords(weekStart(badRange ? initialFrom : from), weekEnd(badRange ? initialTo : to));
   const { data: adjustments = [], isLoading: adjLoading } = useAdjustments(from, to);
@@ -52,7 +57,7 @@ function BulkExportDialog({ initialFrom, initialTo, onClose }: { initialFrom: st
   const templates = useTemplates();
   const [routines, setRoutines] = useRoutines();
 
-  const [choice, setChoice] = useState<Choice>(NEW_CHOICE);
+  const [choice, setChoice] = useState<Choice>(initialPeople ? { ...NEW_CHOICE, employeeIds: initialPeople } : NEW_CHOICE);
   /** The routine loaded into the form to change, if any. */
   const [editing, setEditing] = useState<ExportRoutine | null>(null);
   const [routineName, setRoutineName] = useState("");
@@ -70,6 +75,8 @@ function BulkExportDialog({ initialFrom, initialTo, onClose }: { initialFrom: st
   };
   // PDFs take a moment each, so the buttons wait while a run is going.
   const [busy, setBusy] = useState(false);
+  // How far an export has got: one step per person (a PDF takes a moment each).
+  const [progress, setProgress] = useState<{ done: number; total: number; name: string } | null>(null);
 
   /** Makes each person's file, then downloads one file, or a zip of them all. */
   const run = async (c: Choice) => {
@@ -85,29 +92,40 @@ function BulkExportDialog({ initialFrom, initialTo, onClose }: { initialFrom: st
     let skipped = 0;
     let last: ExportedFile | null = null;
     setBusy(true);
-    for (const emp of people) {
-      if (c.skipEmpty && !records.some((r) => r.employee_id === emp.id && r.work_date >= from && r.work_date <= to)) { skipped++; continue; }
-      try {
-        const f = await exportFile(kind, employeeTimesheet(emp, { from, to, today, records, adjustments, shifts, defs, rateHistory: rateHistory?.get(emp.id), rules }), `timesheet ${fullName(emp)} ${emp.employee_code} ${from} to ${to}`);
-        // Two people can't end up with the same name in the zip, which would keep only one of them.
-        let name = f.name;
-        for (let i = 2; files[name]; i++) name = f.name.replace(/(\.\w+)$/, ` (${i})$1`);
-        files[name] = f.bytes;
-        last = { ...f, name };
-      } catch (e) { failed.push(`${fullName(emp)}: ${(e as Error).message}`); }
+    try {
+      for (const [i, emp] of people.entries()) {
+        setProgress({ done: i, total: people.length, name: fullName(emp) });
+        // Let the bar paint before the next file is made (making one can hold the page for a moment).
+        await new Promise((r) => setTimeout(r, 0));
+        if (c.skipEmpty && !records.some((r) => r.employee_id === emp.id && r.work_date >= from && r.work_date <= to)) { skipped++; continue; }
+        try {
+          const f = await exportFile(kind, employeeTimesheet(emp, { from, to, today, records, adjustments, shifts, defs, rateHistory: rateHistory?.get(emp.id), rules, deductions: payslip.deductionsOf(emp.id), runs: payslip.runs }), `timesheet ${fullName(emp)} ${emp.employee_code} ${from} to ${to}`);
+          // Two people can't end up with the same name in the zip, which would keep only one of them.
+          let name = f.name;
+          for (let i = 2; files[name]; i++) name = f.name.replace(/(\.\w+)$/, ` (${i})$1`);
+          files[name] = f.bytes;
+          last = { ...f, name };
+        } catch (e) { failed.push(`${fullName(emp)}: ${(e as Error).message}`); }
+      }
+      const made = Object.keys(files).length;
+      if (made > 1) setProgress({ done: people.length, total: people.length, name: "Putting them in a zip file…" });
+      await new Promise((r) => setTimeout(r, 0));
+      if (made === 1 && last) downloadBlob(new Blob([last.bytes as Uint8Array<ArrayBuffer>], { type: last.type }), last.name);
+      else if (made > 1) downloadBlob(new Blob([zipSync(files) as Uint8Array<ArrayBuffer>], { type: "application/zip" }), `timesheets ${from} to ${to}.zip`);
+      const missing = c.employeeIds.length - people.length;
+      const notes = [
+        skipped && `${skipped} with no time records left out`,
+        missing && `${missing} no longer in the employee list`,
+      ].filter(Boolean).join("; ");
+      if (made) toast.success(`Exported ${made} timesheet${made === 1 ? "" : "s"}${made > 1 ? " in a zip file" : ""}${notes ? ` (${notes})` : ""}.`);
+      else if (!failed.length) toast.error(`Nothing to export${notes ? `: ${notes}` : ". Pick some people first."}`);
+      if (failed.length) toast.error(`${failed.length} couldn't be exported. ${failed.slice(0, 3).join(" · ")}${failed.length > 3 ? ` · and ${failed.length - 3} more` : ""}`, { duration: 15000 });
+    } catch (e) {
+      toast.error(`The export stopped: ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+      setProgress(null);
     }
-    setBusy(false);
-    const made = Object.keys(files).length;
-    if (made === 1 && last) downloadBlob(new Blob([last.bytes as Uint8Array<ArrayBuffer>], { type: last.type }), last.name);
-    else if (made > 1) downloadBlob(new Blob([zipSync(files) as Uint8Array<ArrayBuffer>], { type: "application/zip" }), `timesheets ${from} to ${to}.zip`);
-    const missing = c.employeeIds.length - people.length;
-    const notes = [
-      skipped && `${skipped} with no time records left out`,
-      missing && `${missing} no longer in the employee list`,
-    ].filter(Boolean).join("; ");
-    if (made) toast.success(`Exported ${made} timesheet${made === 1 ? "" : "s"}${made > 1 ? " in a zip file" : ""}${notes ? ` (${notes})` : ""}.`);
-    else if (!failed.length) toast.error(`Nothing to export${notes ? `: ${notes}` : ". Pick some people first."}`);
-    if (failed.length) toast.error(`${failed.length} couldn't be exported. ${failed.slice(0, 3).join(" · ")}${failed.length > 3 ? ` · and ${failed.length - 3} more` : ""}`, { duration: 15000 });
   };
 
   const saveRoutine = (asNew: boolean) => {
@@ -119,8 +137,8 @@ function BulkExportDialog({ initialFrom, initialTo, onClose }: { initialFrom: st
     toast.success(`Routine "${name}" saved. Next time, pick the dates and press its Export button.`);
   };
   const load = (r: ExportRoutine) => { setEditing(r); setRoutineName(r.name); setChoice({ employeeIds: r.employeeIds, output: r.output, skipEmpty: r.skipEmpty }); };
-  const removeRoutine = (r: ExportRoutine) => {
-    if (!confirm(`Delete the "${r.name}" routine? No timesheets are affected.`)) return;
+  const removeRoutine = async (r: ExportRoutine) => {
+    if (!(await askConfirm({ title: `Delete the "${r.name}" routine?`, detail: "No timesheets are affected.", confirm: "Delete routine", danger: true }))) return;
     setRoutines(routines.filter((x) => x.id !== r.id));
     if (editing?.id === r.id) { setEditing(null); setRoutineName(""); }
   };
@@ -219,6 +237,7 @@ function BulkExportDialog({ initialFrom, initialTo, onClose }: { initialFrom: st
           </section>
         </div>
 
+        {progress && <TaskProgress done={progress.done} total={progress.total} label={progress.done < progress.total ? `Making ${progress.name}'s timesheet` : progress.name} />}
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
           <div className="flex flex-wrap items-center gap-2">
             <input className={`${inputCls} !w-48 !py-1.5 text-sm`} placeholder="Routine name" value={routineName} onChange={(e) => setRoutineName(e.target.value)} aria-label="Routine name" />

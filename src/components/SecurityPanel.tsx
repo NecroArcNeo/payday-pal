@@ -11,6 +11,7 @@ import { deviceIdentity } from "@/lib/db/sync";
 import { desktop, SECURITY_STATUS_KEY, type SecurityStatus } from "@/lib/desktop";
 import { deleteEscrow, uploadEscrow } from "@/lib/key-escrow";
 import { askPassword } from "@/lib/password-prompt";
+import { askConfirm } from "@/lib/choice-prompt";
 import { useSession } from "@/lib/payroll";
 
 /**
@@ -78,7 +79,7 @@ export function SecurityPanel() {
   });
 
   const newRecoveryKey = () => act(async () => {
-    if (s.recovery && !confirm("Make a new recovery key? The old one stops working.")) return;
+    if (s.recovery && !(await askConfirm({ title: "Make a new recovery key?", detail: "The old one stops working.", confirm: "Make a new key", danger: true }))) return;
     const now = await current("Make a new recovery key");
     if (now === undefined) return;
     const { status: next, recoveryKey } = await security.newRecoveryKey(now);
@@ -94,7 +95,11 @@ export function SecurityPanel() {
       toast.success("Email reset turned off.");
       return;
     }
-    if (!confirm("Turn on email reset?\n\nIf you forget the app password, a code emailed to your cloud account will unlock this computer's data. That makes the data as safe as that email account: anyone who can read its mail and has this computer could open it.")) return;
+    if (!(await askConfirm({
+      title: "Turn on email reset?",
+      detail: "If you forget the app password, a code emailed to your cloud account will unlock this computer's data. That makes the data as safe as that email account: anyone who can read its mail and has this computer could open it.",
+      confirm: "Turn on email reset",
+    }))) return;
     const now = await current("Turn on email reset");
     if (now === undefined) return;
     const { status: next, escrowKey } = await security.enableCloudReset(now);
@@ -154,7 +159,7 @@ function RecoveryKeyDialog({ recoveryKey, onDone }: { recoveryKey: string; onDon
     toast.success("Copied. Paste it somewhere safe, then clear it from wherever you pasted it temporarily.");
   };
   const save = () => downloadBlob(
-    new Blob([`Meridian Payroll recovery key\r\n\r\n${recoveryKey}\r\n\r\nUnlocks this computer's payroll data if the app password is forgotten. Keep it away from the computer.\r\n`], { type: "text/plain" }),
+    new Blob([`KoPayroll recovery key\r\n\r\n${recoveryKey}\r\n\r\nUnlocks this computer's payroll data if the app password is forgotten. Keep it away from the computer.\r\n`], { type: "text/plain" }),
     "meridian-recovery-key.txt",
   );
   return (

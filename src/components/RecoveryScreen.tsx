@@ -7,6 +7,7 @@ import { localDb } from "@/lib/db/local";
 import { countRows, describeCounts, validateSnapshot, type Snapshot } from "@/lib/db/snapshot";
 import { restoreSnapshot } from "@/lib/db/sync";
 import { desktop } from "@/lib/desktop";
+import { askConfirm } from "@/lib/choice-prompt";
 
 const when = (iso: string) => new Date(iso).toLocaleString();
 /** How many of the newest backups to offer; older ones are on Sync & backup once the data opens again. */
@@ -29,12 +30,16 @@ export function RecoveryScreen({ error }: { error: Error }) {
 
   const restore = async (snapshot: Snapshot, from: string) => {
     const s = validateSnapshot(snapshot);
-    if (!confirm(`Restore ${from} (${describeCounts(countRows(s))})?\n\nChanges made after it was saved won't be in the restored data. The damaged database is moved aside and kept, not deleted.`)) return;
+    if (!(await askConfirm({
+      title: `Restore ${from}?`,
+      detail: `It holds ${describeCounts(countRows(s))}.\n\nChanges made after it was saved won't be in the restored data. The damaged database is moved aside and kept, not deleted.`,
+      confirm: "Restore this backup",
+    }))) return;
     setBusy(true);
     setProblem(null);
     try {
       const aside = await desktop!.db.setAside();
-      await restoreSnapshot(await localDb(), s, saveBackup);
+      await restoreSnapshot(await localDb(), s, saveBackup, { from: `${from}, after the database couldn't be opened` });
       setDone({ from, aside });
     } catch (e) {
       setProblem((e as Error).message);

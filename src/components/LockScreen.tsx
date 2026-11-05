@@ -44,7 +44,7 @@ export function LockScreen({ status, onUnlocked }: { status: SecurityStatus; onU
       <div className="absolute right-6 top-6"><ThemeToggle /></div>
       <div className="glass-panel anim-rise relative w-full max-w-md space-y-4 p-7">
         <div>
-          <div className="label-mono">Meridian Payroll</div>
+          <div className="label-mono">KoPayroll</div>
           <h1 className="mt-1 font-display text-2xl font-extrabold tracking-tight">{broken ? "The data's key can't be used" : "Locked"}</h1>
           {broken && <p className="mt-2 text-sm text-muted-foreground">{status.error}</p>}
           {!broken && status.deviceFailed && (

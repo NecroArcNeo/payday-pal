@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useSession } from "@/lib/payroll";
 import { setDataMode, useDataMode } from "@/lib/db/mode";
@@ -7,8 +7,12 @@ import { usePref } from "@/lib/prefs";
 import { ThemeToggle } from "./ThemeToggle";
 import { EditableLabel } from "./EditableLabel";
 import { UndoButtons } from "./UndoButtons";
-import { Cloud, GripVertical, HardDrive, LogOut } from "lucide-react";
+import { Cloud, GripVertical, HardDrive, LogOut, Settings } from "lucide-react";
+import { SettingsWindow } from "./SettingsWindow";
+import { openSettings } from "@/lib/settings-window";
 import { CommandPalette } from "./CommandPalette";
+import { FetchBar, SkeletonBlock } from "./Loading";
+import { ResizeHandle, useDragSize } from "./ResizeHandle";
 
 const adminNav = [
   { to: "/dashboard", label: "Dashboard" },
@@ -19,6 +23,7 @@ const adminNav = [
   { to: "/payroll", label: "Payroll" },
   { to: "/reports", label: "Reports" },
   { to: "/sync", label: "Sync & backup" },
+  { to: "/history", label: "Edit history" },
 ] as const;
 type NavTo = (typeof adminNav)[number]["to"];
 
@@ -46,6 +51,10 @@ export function AppShell({ eyebrow, title, actions, children }: { eyebrow: strin
   const nav = useNavOrder();
   const [dragging, setDragging] = useState<NavTo | null>(null);
   const [over, setOver] = useState<NavTo | null>(null);
+  // The page list's width: drag its right edge (double-click resets), remembered like the other panels' widths.
+  const side = useDragSize("meridian-panel-width:nav", 256, 200, 420);
+  const sideRef = useRef<HTMLElement>(null);
+  const followSide = (w: number) => { if (sideRef.current) sideRef.current.style.width = `${w}px`; };
 
   // Only disconnects the cloud account; this device's data stays as it is.
   const signOut = async () => {
@@ -58,12 +67,13 @@ export function AppShell({ eyebrow, title, actions, children }: { eyebrow: strin
       <div className="anim-breathe pointer-events-none fixed -left-40 -top-48 h-[42rem] w-[42rem] rounded-full bg-glow-a blur-3xl" />
       <div className="anim-breathe pointer-events-none fixed -right-52 top-1/3 h-[40rem] w-[40rem] rounded-full bg-glow-b blur-3xl" />
 
+      <FetchBar />
       <div className="relative flex min-h-screen">
-        <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-glass backdrop-blur-xl md:flex">
+        <aside ref={sideRef} style={{ width: side.size }} className="relative hidden shrink-0 flex-col border-r border-border bg-glass backdrop-blur-xl md:flex">
           <div className="flex items-center gap-2 border-b border-border px-5 py-5">
-            <div className="grid h-7 w-7 place-items-center rounded-lg bg-primary font-display text-sm font-extrabold text-primary-foreground">M</div>
+            <div className="grid h-7 w-7 place-items-center rounded-lg bg-primary font-display text-sm font-extrabold text-primary-foreground">K</div>
             <div>
-              <div className="font-display text-[15px] font-extrabold leading-none tracking-tight">Meridian</div>
+              <div className="font-display text-[15px] font-extrabold leading-none tracking-tight">KoPayroll</div>
               <div className="mt-1 font-mono text-[10px] tracking-widest text-muted-foreground">PAYROLL OS</div>
             </div>
           </div>
@@ -114,6 +124,7 @@ export function AppShell({ eyebrow, title, actions, children }: { eyebrow: strin
               )}
             </div>
           </div>
+          <ResizeHandle edge="right" size={side.size} clamp={side.clamp} onSize={followSide} onDone={side.save} onReset={side.reset} label="Page list width" />
         </aside>
 
         <main className="min-w-0 flex-1">
@@ -135,6 +146,11 @@ export function AppShell({ eyebrow, title, actions, children }: { eyebrow: strin
                 {mode === "cloud" ? "Editing cloud" : "This device"}
               </Link>
               <ThemeToggle />
+              <button onClick={() => openSettings()} aria-label="Settings" title="Settings (Ctrl+,)"
+                className="grid h-9 w-9 place-items-center rounded-xl bg-secondary text-muted-foreground ring-1 ring-border hover:text-foreground">
+                <Settings className="h-4 w-4" />
+              </button>
+              <SettingsWindow />
             </div>
           </header>
           <div className="space-y-6 p-8">{children}</div>
@@ -144,15 +160,16 @@ export function AppShell({ eyebrow, title, actions, children }: { eyebrow: strin
   );
 }
 
-export function StatCard({ label, value, sub, highlight, delay = 0 }: { label: string; value: string; sub?: string; highlight?: boolean; delay?: number }) {
+export function StatCard({ label, value, sub, highlight, delay = 0, loading = false }: { label: string; value: string; sub?: string | undefined; highlight?: boolean; delay?: number; loading?: boolean }) {
   return (
     <div
       className={`anim-rise rounded-2xl p-4 backdrop-blur-xl ${highlight ? "bg-accent ring-1 ring-primary/20" : "glass-panel"}`}
       style={{ animationDelay: `${delay}ms` }}
     >
       <div className={`label-mono ${highlight ? "!text-accent-foreground" : ""}`}>{label}</div>
-      <div className={`mt-1 font-display text-2xl font-extrabold tracking-tight ${highlight ? "text-accent-foreground" : ""}`}>{value}</div>
-      {sub && <div className={`mt-1 text-[11px] ${highlight ? "text-accent-foreground/80" : "text-muted-foreground"}`}>{sub}</div>}
+      {/* While loading, a placeholder the size of the figure rather than a $0.00 that isn't true yet. */}
+      {loading ? <SkeletonBlock className="mt-2 h-7 w-28" /> : <div className={`mt-1 font-display text-2xl font-extrabold tracking-tight ${highlight ? "text-accent-foreground" : ""}`}>{value}</div>}
+      {sub && !loading && <div className={`mt-1 text-[11px] ${highlight ? "text-accent-foreground/80" : "text-muted-foreground"}`}>{sub}</div>}
     </div>
   );
 }

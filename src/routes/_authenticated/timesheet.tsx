@@ -1,9 +1,13 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { payslipFor } from "@/lib/export/employee-timesheet";
+import { usePayslipData } from "@/lib/payslip";
+import { useMemo } from "react";
 import { AppShell, StatCard, btnGhost, inputCls } from "@/components/AppShell";
 import { EmployeePicker } from "@/components/EmployeeSearch";
-import { RECORD_PAY_COLUMNS, RecordPayCells, RecordPayHeaders, RecordShiftCell } from "@/components/RecordPay";
+import { RECORD_PAY_COLUMNS, RecordPayCells, RecordPayHeaders, RecordShiftCell, useRecordSortColumns } from "@/components/RecordPay";
 import { BreakHeader, BreakUnitToggle } from "@/components/BreakField";
 import { DataTable } from "@/components/DataTable";
+import { SkeletonRows } from "@/components/Loading";
 import { EmailLink } from "@/components/EmailLink";
 import { CategoryValue } from "@/components/ProfileCategories";
 import { EditableLabel } from "@/components/EditableLabel";
@@ -21,15 +25,20 @@ import { BulkExport } from "@/components/BulkExport";
 import { employeeTimesheet, timesheetCategories } from "@/lib/export/employee-timesheet";
 import { periodPresets } from "@/lib/periods";
 import { Printer } from "lucide-react";
-import { SortControl } from "@/components/SortControl";
-import { usePref } from "@/lib/prefs";
-import { sortRecords, validSort, type Sort, type SortKey } from "@/lib/record-sort";
+import { SortControl, SortTh, TableSort, useTableSort } from "@/components/SortControl";
+import { sortTable, type Sort, type SortColumns } from "@/lib/table-sort";
 import { DateInput } from "@/components/DateInput";
 import { EmployeeLink } from "@/components/EmployeeLink";
 
-const SORT_KEYS = ["date", "hours", "pay"] as const satisfies readonly SortKey[];
 /** A timesheet reads in time order. */
-const OLDEST: Sort<(typeof SORT_KEYS)[number]> = { by: "date", desc: false };
+const OLDEST: Sort = { by: "date", desc: false };
+/** The extra-pay table's columns. */
+const EXTRA_COLUMNS: SortColumns<Adjustment> = {
+  date: { label: "Pay date", kind: "date", desc: false, value: (a) => a.pay_date },
+  category: { label: "Category", kind: "text", value: (a) => a.category },
+  note: { label: "Note", kind: "text", value: (a) => a.note },
+  amount: { label: "Amount", kind: "number", value: (a) => Number(a.amount) },
+};
 
 /** Shown in the sheet's heading, so not repeated in the details grid. */
 const IN_HEADER = ["first_name", "last_name", "employee_code"];
@@ -42,7 +51,7 @@ type Search = { employee?: string | undefined; from?: string | undefined; to?: s
 const isDate = (d: unknown): d is string => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d);
 
 export const Route = createFileRoute("/_authenticated/timesheet")({
-  head: () => ({ meta: [{ title: "Timesheet — Meridian Payroll" }] }),
+  head: () => ({ meta: [{ title: "Timesheet — KoPayroll" }] }),
   // The employee and range live in the URL, so a timesheet can be linked to, bookmarked or reopened.
   validateSearch: (s: Record<string, unknown>): Search => ({
     employee: typeof s["employee"] === "string" ? s["employee"] : undefined,
@@ -124,6 +133,7 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
   rules: { threshold: number; otMultiplier: number; weekendOvertime: boolean };
 }) {
   const shift = shiftFor(emp.shift_id, shifts);
+  const payslip = usePayslipData();
   const [breakUnit] = useBreakUnit();
   // Every rate paid in the period, oldest first; the latest for the shift and salary notes.
   const rates = ratesBetween(rateHistory, emp.hourly_rate, from, to);
@@ -131,17 +141,27 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
   const salary = emp.pay_type === "salary";
   const pay = employeePay(records, { rate: Number(emp.hourly_rate), rates: rateHistory, shiftMultiplier: shift.multiplier, rules, payType: emp.pay_type, shifts, from, to });
   const lineById = new Map(pay.lines.map((l) => [l.id, l]));
-  const [savedSort, setSort] = usePref<Sort>("meridian-timesheet-sort", OLDEST);
-  const sort = validSort(savedSort, SORT_KEYS, OLDEST);
+  // Any of the table's columns (one person, so no employee; no rate column here). A timesheet reads oldest first.
+  const recordCols = useRecordSortColumns<TimeRecord>(lineById, false);
+  const columns = useMemo(() => {
+    const { hourly_rate: _rate, ...rest } = recordCols;
+    return { ...rest, date: { ...rest["date"]!, desc: false } };
+  }, [recordCols]);
+  const [sort, setSort] = useTableSort("meridian-timesheet-sort", columns, OLDEST);
   const inRange = records
     .filter((r) => r.work_date >= from && r.work_date <= to)
     .sort((a, b) => a.work_date.localeCompare(b.work_date) || (a.clock_in ?? "").localeCompare(b.clock_in ?? ""));
-  // By date: in time order (each day's entries by clock-in), or all of it reversed. Otherwise by hours or pay, ties newest first.
-  const shown = sort.by === "date" ? (sort.desc ? inRange.reverse() : inRange) : sortRecords(inRange, sort, { pay: (r) => lineById.get(r.id)?.pay });
+  // By date: in time order (each day's entries by clock-in), or all of it reversed. By another column, ties stay in
+  // time order (the sort is stable).
+  const shown = sort.by === "date" ? (sort.desc ? inRange.reverse() : inRange) : sortTable(inRange, sort, columns);
+  const [extraSort, setExtraSort] = useTableSort("meridian-timesheet-extra-sort", EXTRA_COLUMNS, { by: "date", desc: false });
+  const extraRows = sortTable([...adjustments].sort((a, b) => a.pay_date.localeCompare(b.pay_date)), extraSort, EXTRA_COLUMNS);
   const extras = adjustments.reduce((s, a) => s + Number(a.amount), 0);
+  // Net pay for the period, as a payslip shows it (a recorded pay run's own figures when there is one).
+  const slip = payslipFor(emp.id, from, to, pay.total + extras, payslip.deductionsOf(emp.id), payslip.runs);
   // Categories filed under Personal are personal details, which stay off timesheets.
   const templateCategories = timesheetCategories(defs);
-  const exportData = employeeTimesheet(emp, { from, to, today: isoDate(new Date()), records, adjustments, shifts, defs, rateHistory, rules });
+  const exportData = employeeTimesheet(emp, { from, to, today: isoDate(new Date()), records, adjustments, shifts, defs, rateHistory, rules, deductions: payslip.deductionsOf(emp.id), runs: payslip.runs });
   const lunchHours = shown.reduce((s, r) => s + r.lunch_minutes, 0) / 60;
 
   // Group by Mon–Sun week for subtotals. Sorted by hours or pay, a week's records are scattered, so there's one group and no subtotals.
@@ -232,8 +252,9 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
         )}
       </div>
 
-      <section className="grid grid-cols-2 gap-4 md:grid-cols-4">
+      <section className={`grid grid-cols-2 gap-4 ${slip?.net != null ? "md:grid-cols-5" : "md:grid-cols-4"}`}>
         <StatCard label="Gross pay" value={money(pay.total + extras)} {...(extras ? { sub: `incl. ${money(extras)} extra pay` } : {})} highlight />
+        {slip?.net != null && <StatCard label="Net pay" value={money(slip.net)} sub={`after ${money(slip.deductionsTotal ?? 0)} in deductions${slip.paidOn ? `, paid ${slip.paidOn}` : ""}`} delay={30} />}
         <StatCard label="Hours worked" value={(pay.regular + pay.overtime).toFixed(2)} sub={`${pay.days} day${pay.days === 1 ? "" : "s"} · ${lunchHours.toFixed(2)} h unpaid break`} delay={60} />
         <StatCard label="Regular hours" value={pay.regular.toFixed(2)} sub={money(pay.regPay)} delay={120} />
         <StatCard label="Overtime hours" value={pay.overtime.toFixed(2)} sub={salary ? "salaried: no overtime" : money(pay.otPay)} delay={180} />
@@ -244,7 +265,7 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
           <div className="flex items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-3">
               <div className="font-display font-extrabold tracking-tight">Hours and pay</div>
-              <SortControl value={sort} onChange={setSort} keys={SORT_KEYS} natural={{ date: false }} />
+              <SortControl value={sort} onChange={setSort} columns={columns} />
             </div>
             <span className="flex items-center gap-2 text-xs text-muted-foreground print:hidden">Breaks in <BreakUnitToggle /></span>
           </div>
@@ -258,22 +279,23 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
         <div className="overflow-x-auto">
           <DataTable id="timesheet" className="w-full text-sm">
             <thead>
+              <TableSort sort={sort} columns={columns} onSort={setSort}>
               <tr className="border-b border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
-                <th className={`${th} pl-5 text-left`}><EditableLabel k="date" name="Date" /></th>
-                <th className={`${th} text-left`}><EditableLabel k="shift" name="Shift" /></th>
-                <th className={`${th} text-left`}><EditableLabel k="clock_in" name="In" /></th>
-                <th className={`${th} text-left`}><EditableLabel k="clock_out" name="Out" /></th>
-                <th className={`${th} text-right`}><BreakHeader unit={breakUnit} /></th>
-                <th className={`${th} text-right`}><EditableLabel k="hours" name="Hours" /></th>
+                <SortTh k="date" className={`${th} pl-5 text-left`}><EditableLabel k="date" name="Date" /></SortTh>
+                <SortTh k="shift" className={`${th} text-left`}><EditableLabel k="shift" name="Shift" /></SortTh>
+                <SortTh k="clock_in" className={`${th} text-left`}><EditableLabel k="clock_in" name="In" /></SortTh>
+                <SortTh k="clock_out" className={`${th} text-left`}><EditableLabel k="clock_out" name="Out" /></SortTh>
+                <SortTh k="break" className={`${th} text-right`}><BreakHeader unit={breakUnit} /></SortTh>
+                <SortTh k="hours" className={`${th} text-right`}><EditableLabel k="hours" name="Hours" /></SortTh>
                 <RecordPayHeaders className={`${th} text-right`} />
-                <th className={`${th} pr-5 text-left`}><EditableLabel k="note" name="Note" /></th>
+                <SortTh k="note" className={`${th} pr-5 text-left`}><EditableLabel k="note" name="Note" /></SortTh>
               </tr>
+              </TableSort>
             </thead>
             <tbody className="font-mono text-[13px]">
-              {shown.length === 0 && (
-                <tr><td colSpan={7 + RECORD_PAY_COLUMNS} className="px-5 py-10 text-center font-body text-muted-foreground">
-                  {loading ? "Loading…" : "No hours recorded in this range."}
-                </td></tr>
+              {loading && <SkeletonRows cols={7 + RECORD_PAY_COLUMNS} />}
+              {!loading && shown.length === 0 && (
+                <tr><td colSpan={7 + RECORD_PAY_COLUMNS} className="px-5 py-10 text-center font-body text-muted-foreground">No hours recorded in this range.</td></tr>
               )}
               {weeks.map((w) => (
                 <WeekRows key={w.start || "all"} start={w.start} rows={w.rows} lineById={lineById} breakUnit={breakUnit} shifts={shifts} employeeShiftId={emp.shift_id} total={totalCells(subtotal(w.rows))} showSubtotal={weeks.length > 1} />
@@ -295,8 +317,18 @@ function Sheet({ emp, from, to, records, adjustments, shifts, defs, rules, loadi
         <div className="glass-panel overflow-hidden">
           <div className="border-b border-border px-5 py-4 font-display font-extrabold tracking-tight">Extra pay</div>
           <DataTable id="timesheet-extra-pay" className="w-full text-sm">
+            <thead>
+              <TableSort sort={extraSort} columns={EXTRA_COLUMNS} onSort={setExtraSort}>
+              <tr className="border-b border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
+                <SortTh k="date" className={`${th} pl-5 text-left`}><EditableLabel k="pay_date" name="Pay date" /></SortTh>
+                <SortTh k="category" className={`${th} text-left`}><EditableLabel k="category" name="Category" /></SortTh>
+                <SortTh k="note" className={`${th} text-left`}><EditableLabel k="note" name="Note" /></SortTh>
+                <SortTh k="amount" className={`${th} pr-5 text-right`}><EditableLabel k="amount" name="Amount" /></SortTh>
+              </tr>
+              </TableSort>
+            </thead>
             <tbody className="font-mono text-[13px]">
-              {[...adjustments].sort((a, b) => a.pay_date.localeCompare(b.pay_date)).map((a) => (
+              {extraRows.map((a) => (
                 <tr key={a.id} className="border-b border-border last:border-0">
                   <td className="whitespace-nowrap px-5 py-2.5"><span className="inline-block w-9 font-body text-muted-foreground">{weekday(a.pay_date)}</span>{a.pay_date}</td>
                   <td className="px-3 py-2.5 font-body">{a.category}</td>

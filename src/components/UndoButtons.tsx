@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Redo2, Undo2 } from "lucide-react";
 import { useDataMode } from "@/lib/db/mode";
 import { localUndo } from "@/lib/db/undo";
+import { modalOpen } from "@/lib/choice-prompt";
 
 const NOT_TYPING = ["checkbox", "radio", "button", "submit", "reset", "range", "color", "file"];
 /** In a text box Ctrl+Z undoes the typing, as everywhere else in Windows; the app's undo is for everywhere else. */
@@ -41,10 +42,10 @@ export function UndoButtons() {
   }, [mode, qc]);
 
   useEffect(() => {
-    // Not while a dialog is open (it may be partway through a change), except a non-modal one like the Time
-    // records side panel, which sits beside the page.
+    // Not while a dialog, a question (askConfirm waits partway through a change) or a menu is open, except a non-modal
+    // dialog like the side panels, which sit beside the page.
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey) || e.altKey || typingIn(e.target) || document.querySelector('[role="dialog"]:not([aria-modal="false"])')) return;
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || typingIn(e.target) || modalOpen()) return;
       const k = e.key.toLowerCase();
       const what = k === "z" ? (e.shiftKey ? "redo" : "undo") : k === "y" && !e.shiftKey ? "redo" : null;
       if (!what) return;

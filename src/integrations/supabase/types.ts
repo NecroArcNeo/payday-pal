@@ -14,6 +14,123 @@ export type Database = {
   }
   public: {
     Tables: {
+      deductions: {
+        Row: {
+          id: string
+          employee_id: string
+          name: string
+          kind: string
+          amount: number
+          repeats: string
+          starts_on: string | null
+          ends_on: string | null
+          note: string | null
+          sort_order: number
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          employee_id: string
+          name: string
+          kind?: string
+          amount?: number
+          repeats?: string
+          starts_on?: string | null
+          ends_on?: string | null
+          note?: string | null
+          sort_order?: number
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          employee_id?: string
+          name?: string
+          kind?: string
+          amount?: number
+          repeats?: string
+          starts_on?: string | null
+          ends_on?: string | null
+          note?: string | null
+          sort_order?: number
+          created_at?: string
+        }
+        Relationships: []
+      }
+      pay_runs: {
+        Row: {
+          id: string
+          period_from: string
+          period_to: string
+          paid_on: string
+          note: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          period_from: string
+          period_to: string
+          paid_on: string
+          note?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          period_from?: string
+          period_to?: string
+          paid_on?: string
+          note?: string | null
+          created_at?: string
+        }
+        Relationships: []
+      }
+      pay_run_lines: {
+        Row: {
+          id: string
+          pay_run_id: string
+          employee_id: string | null
+          employee_name: string
+          employee_code: string
+          hours: number
+          regular_hours: number
+          overtime_hours: number
+          extra_pay: number
+          gross: number
+          deductions: Json
+          deductions_total: number
+          net: number
+        }
+        Insert: {
+          id?: string
+          pay_run_id: string
+          employee_id?: string | null
+          employee_name: string
+          employee_code?: string
+          hours?: number
+          regular_hours?: number
+          overtime_hours?: number
+          extra_pay?: number
+          gross?: number
+          deductions?: Json
+          deductions_total?: number
+          net?: number
+        }
+        Update: {
+          id?: string
+          pay_run_id?: string
+          employee_id?: string | null
+          employee_name?: string
+          employee_code?: string
+          hours?: number
+          regular_hours?: number
+          overtime_hours?: number
+          extra_pay?: number
+          gross?: number
+          deductions?: Json
+          deductions_total?: number
+          net?: number
+        }
+        Relationships: []
+      }
       employee_field_defs: {
         Row: {
           created_at: string
@@ -215,8 +332,11 @@ export type Database = {
       }
       payroll_settings: {
         Row: {
+          deductions_on: boolean
           employee_defaults: Json
+          history_keep_days: number | null
           locked_through: string | null
+          pay_runs_on: boolean
           id: boolean
           ot_multiplier: number
           ot_threshold: number
@@ -225,8 +345,11 @@ export type Database = {
           visible_columns: string[]
         }
         Insert: {
+          deductions_on?: boolean
           employee_defaults?: Json
+          history_keep_days?: number | null
           locked_through?: string | null
+          pay_runs_on?: boolean
           id?: boolean
           ot_multiplier?: number
           ot_threshold?: number
@@ -235,8 +358,11 @@ export type Database = {
           visible_columns?: string[]
         }
         Update: {
+          deductions_on?: boolean
           employee_defaults?: Json
+          history_keep_days?: number | null
           locked_through?: string | null
+          pay_runs_on?: boolean
           id?: boolean
           ot_multiplier?: number
           ot_threshold?: number

@@ -34,13 +34,15 @@ export function profileValues(row: Record<string, unknown>): ProfileValues {
  * The profile page's form. `template` shows the default profile: the same
  * layout, with the per-person fields (ID and name) locked.
  */
-export function ProfileForm({ source, employees, template, submitLabel, onSave }: {
+export function ProfileForm({ source, employees, template, submitLabel, onSave, onDirty }: {
   /** Reloads the form whenever this changes. */
   source: ProfileValues | null;
   employees: Employee[];
   template?: boolean;
   submitLabel: string;
   onSave: (v: ProfileValues) => void | Promise<void>;
+  /** Told whether the form differs from `source` (unsaved changes). */
+  onDirty?: ((dirty: boolean) => void) | undefined;
 }) {
   const [form, setForm] = useState<Record<string, string>>({});
   const [custom, setCustom] = useState<Record<string, string>>({});
@@ -58,18 +60,25 @@ export function ProfileForm({ source, employees, template, submitLabel, onSave }
 
   const submit = (e: React.FormEvent) => { e.preventDefault(); onSave({ form, custom }); };
 
+  // Unsaved changes: any value that isn't what was loaded (an empty box and a missing value count as the same).
+  const differs = (a: Record<string, string>, b: Record<string, string>) => [...new Set([...Object.keys(a), ...Object.keys(b)])].some((k) => (a[k] ?? "") !== (b[k] ?? ""));
+  const dirty = !!source && (differs(form, source.form) || differs(custom, source.custom));
+  useEffect(() => { onDirty?.(dirty); }, [dirty, onDirty]);
+
+  // Columns follow the form's own width (container queries, `@container` below), not the window's: the same form is a
+  // full page on the profile and a side panel on Employees, which can be narrow or dragged wide.
   return (
-    <form onSubmit={submit} className="space-y-5">
+    <form onSubmit={submit} className="@container space-y-5">
       {profileSections(defs).filter((s) => s.fields.length || s.defs.length).map((s) => (
         <div key={s.title} className="glass-panel p-5">
           {s.custom ? <SectionHeading title={s.title} /> : <div className="mb-4 font-display font-extrabold tracking-tight"><EditableLabel k={`section:${s.title}`} name={s.title} /></div>}
-          <div className="grid gap-3 md:grid-cols-3">
+          <div className="grid gap-3 @lg:grid-cols-2 @3xl:grid-cols-3">
             {s.fields.map((f) => {
               const locked = template && PER_PERSON_FIELDS.includes(f.k);
               const privateHere = isPrivate(f.k);
               const off = locked || (cloud && privateHere);
               return (
-                <label key={f.k} className={f.span ? "md:col-span-3" : ""}>
+                <label key={f.k} className={f.span ? "col-span-full" : ""}>
                   <span className="flex items-baseline justify-between gap-2">
                     <span className="label-mono flex items-center gap-1"><EditableLabel k={f.k} name={f.label} />{privateHere && <PrivateMark cloud={cloud} />}</span>
                     {f.type === "email" && <EmailButton email={form[f.k] ?? ""} />}
