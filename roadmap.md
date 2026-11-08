@@ -20,7 +20,7 @@
 
 ## Open
 - [ ] **Turn on BitLocker** for C: (Settings → Privacy & security → Device encryption) and keep the recovery key off the laptop
-- [ ] **Move data into the desktop app**: browser version → Download backup file → desktop app → Restore from file
+- [x] **Move data into the desktop app** (done by you, Nov 5, 2026)
 - [ ] Set up Supabase cloud sync (apply `drizzle/migrations` 0003 … latest in order; see README)
 - [x] Edit history / undo for record and profile edits (L7): done Nov 4, 2026 (Edit history page)
 - [ ] Optional: auto-update for the desktop app (GitHub Releases); code signing only if handing it to people outside a trusted circle
@@ -39,9 +39,9 @@
 - [x] Fixed: test databases missing files (`could not open file "base/5/6104"`). Not the app or a force-kill: PGlite dated a new database's files January 1970 (seconds read as milliseconds), and Windows' temp-file cleanup deleted the "old" files in test folders under Temp. The file layer now leaves those dates out and repairs 1970 dates on open (`repairFileDates`) (Nov 2, 2026)
 - [x] Database moved to SQLite + SQLCipher (Nov 3, 2026): one encrypted file with a per-page HMAC instead of PGlite's ~1,000 files through our own XTS layer (secure-fs/durable-fs deleted); ~13 MB of memory instead of ~310 MB; opens in ms; `quick_check` at every start; desktop only (`npm run dev` opens the window). Also fixed: a crash in the first seconds after the very first start could lock the data for good (the keyring was saved before Windows' protection key was on disk)
 - [ ] Encrypted cloud vault: the cloud keeps only sealed snapshots it can't read; "Edit cloud directly" goes; second computers join with a link code; the recovery key can restore from the cloud (plan Step 6)
-- [ ] Remove the browser leftovers: cloud editing mode (`cloudStore`, `DataMode`), Google sign-in, the IndexedDB backups branch, the web/SSR build (plan Step 5)
-- [ ] Crash loop (kill during writes ~200 times, each restart passes `integrity_check`) and a tampered-file test in the desktop app (plan Step 7)
-- [ ] Restore the browser version's exported backup file into the desktop app and check the counts match
+- [x] Removed the browser leftovers (Nov 5, 2026; plan Step 5): "Edit cloud directly" (`cloudStore`, `DataMode`) and the header's data-mode badge, Google sign-in, the browser backups branch, the web server build (nitro, SSR entry, server middleware, the Supabase admin client). Kept for cloud sync: push/pull, cloud backups, email sign-in, email key reset, the cloud migrations
+- [x] Crash loop and tamper test (plan Step 7, Nov 5, 2026): the app was force-killed at random moments while saving 200 times (scratchpad `crash.mjs`, window hidden with `MERIDIAN_HIDDEN`); every restart passed `integrity_check`, every save the app had reported was there (about 16,000 batches) and no batch was half-saved. Flipping bytes in payroll.db is refused with the recovery screen
+- [x] Restored the browser version's backup file into the desktop app (done by you, Nov 5, 2026)
 - [x] Side panel on Time records: click a row to see how its pay is worked out and edit it (Nov 1, 2026)
 - [x] Right-click menu on Time records rows, and Ctrl+K search (Nov 2, 2026)
 - [x] Loading placeholders, progress bars and resizing (Nov 4, 2026): tables, cards and charts show placeholders while loading instead of "no records yet"; a thin bar at the top while data is read; Export several shows "12 of 30", Import its steps. Clicking an employee opens their profile beside the list (drag its edge wider); the Time records panel's width, the page list on the left, chart heights and the template editor's split can be dragged too, and are remembered
@@ -50,9 +50,22 @@
 - [x] Sort every table by any column (Nov 4, 2026): a sort button in each column's header (the name still renames it) and "Sort by" listing every column, remembered per table; Time records sorts in the database where it can and in the app otherwise; backups by when or kind
 - [x] Copy backups to another drive (Nov 4, 2026): pick a folder (USB stick, another drive) on Sync & backup; after every backup the newest is also saved there as a password-protected backup file that Restore from file opens on any computer, even after this one's disk is wiped; keeps the newest 5–100 (ones you saved yourself always), an unplugged drive is shown and retried, the copy made on closing finishes before the app quits
 - [x] Settings window, deductions and net pay, pay runs, edit history (Nov 4, 2026): the gear (or Ctrl+,) opens Settings with Features, Pay rules (overtime, shifts), Checks & colours, Display (theme, breaks, renamed labels), Privacy & security, Backups and Edit history. Deductions (tax, health plan…: fixed per pay period, per week or once, or a percent of gross) give net pay on Payroll, the Timesheet and payslips; pay runs save what each person was paid and lock the period, with payslips showing the paid date and year-to-date totals; both can be turned off. Every change is kept in an edit history (who, when, each field before and after), on its own page and on each profile and record
-- [ ] Bulk "add a deduction to selected employees" on the Employees page
-- [ ] Remove the unused UI components (26 in src/components/ui, and the packages only they use)
-- [ ] Ideas for later (Oct 31, 2026): payroll run checklist (flag missing clock-outs, overlaps, long days, then lock and export), paste rows from Excel into Time records, payslips (PDF), Ctrl+K quick search, open where I left off, saved weekly patterns
+- [x] Renamed to KoPayroll (Nov 5, 2026): Meridian Payroll is an existing company's name. The data folder moves from `%APPDATA%\Meridian Payroll` to `%APPDATA%\KoPayroll` on the first start
+- [x] Bulk "Add deduction" for the selected employees on the Employees page (Nov 5, 2026): asks about people who already have one of that name, one Ctrl+Z takes it back from all
+- [x] Removed the unused UI components (Nov 5, 2026): 30 files in src/components/ui and the 21 packages only they used
+- [x] Paste rows into Time records (Nov 6, 2026): copy rows in Excel, Google Sheets, a web page, a PDF or an email, press Ctrl+V on Time records (or Paste rows); they open on Import as hours, with its column mapping, duplicate skipping and backup
+- [x] Select rows by dragging (Nov 6, 2026) on Employees and Time records, and Shift+click for a range
+- [x] Open where I left off (Nov 6, 2026): the app reopens on the last page, with Payroll's period, Time records' filters and Reports' choices
+- [x] Saved weekly patterns (Nov 6, 2026): Time records → Patterns…: a usual week and who works it, used to fill any weeks (skips holidays, locked days and shifts already there; one Ctrl+Z)
+- [x] Public holidays with your own rules (Nov 6, 2026): Settings → Holidays: a rate for hours worked, paid hours for people who are off ("Add holiday pay"), copy a year to the next
+- [x] Edit Time records like a spreadsheet (Nov 6, 2026): "Edit in cells": type into cells, Enter/Tab/arrows, paste blocks from Excel
+- [x] Catch likely typos (Nov 6, 2026): a rate 5× higher or lower, a record over 16 hours (AM/PM slips), a new employee with an existing name
+- [x] Daily restore check of the newest backup (Nov 6, 2026), in a worker thread, with "Check now" on Sync & backup
+- [x] Breaks start at 1 hour (Nov 6, 2026): new records, pattern days, shifts given usual hours
+- [x] Fold any box into a bar (Nov 6, 2026): the "Fold" tab on a box's top edge; remembered on this computer; Ctrl+K "Show all folded boxes"
+- [x] Shift times fill in by themselves (Nov 6, 2026): new records (and says when a shift has no usual hours), the record side panel (with Put back), patterns
+- [x] Ctrl+K finds about 50 features and takes you to the button itself; forgives typos and knows other words (wages, payslip, vacation, tax…)
+- [ ] Ideas (Nov 5, 2026): leave and holiday balances, a bank payment file, employer costs on pay runs, a year-end summary per employee
 - [ ] Optional: speed — memoize table rows (opening an edit with 500 rows is slow on old PCs); check PGlite updates (0.5.12+)
 - [x] Timesheet export with selectable templates (done Oct 28, 2026: your own Excel templates)
 

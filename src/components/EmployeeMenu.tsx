@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { BarChart3, CheckSquare, Clock, FileText, MoreHorizontal, PanelRightOpen, Trash2, User, UserCheck, UserX } from "lucide-react";
 import { ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator, ContextMenuShortcut } from "@/components/ui/context-menu";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { db, storeFor, useDataMode } from "@/lib/db/mode";
+import { db } from "@/lib/db/mode";
 import { fullName, type Employee } from "@/lib/payroll";
 import { keepDialogFocus } from "@/lib/choice-prompt";
 
@@ -26,12 +26,11 @@ export type EmployeeMenuProps = {
 /** Going to an employee's pages: shared by this menu and Ctrl+K. */
 export function useEmployeePages() {
   const navigate = useNavigate();
-  const mode = useDataMode();
   return {
     profile: (id: string) => navigate({ to: "/employees/$id", params: { id } }),
     /** Time records shows one entry type at a time: open the one their latest record uses, so they aren't hidden. */
     records: async (id: string) => {
-      const latest = await storeFor(mode).listRecordsPage({ employeeIds: [id] }, 0, 1).catch(() => null);
+      const latest = await db().listRecordsPage({ employeeIds: [id] }, 0, 1).catch(() => null);
       const kind = latest?.rows[0]?.entry_mode;
       return navigate({ to: "/records", search: { emp: id, ...(kind === "clock" || kind === "hours" ? { mode: kind } : {}) } });
     },

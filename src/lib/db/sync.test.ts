@@ -47,6 +47,7 @@ const applySyncMigration = async (cloud: PGlite) => {
   await cloud.exec(migration("0014_unlock_records.sql"));
   await cloud.exec(migration("0015_frozen_pay.sql"));
   await cloud.exec(migration("0017_deductions_pay_runs.sql"));
+  await cloud.exec(migration("0018_holidays_patterns.sql"));
 };
 
 function cloudAs(db: PGlite, uid: string): CloudSync {
@@ -579,7 +580,11 @@ describe("snapshots", () => {
     const { store } = await seed(a, "E1");
     await store.saveSettings({ ot_threshold: 38, ot_multiplier: 2, weekend_overtime: true, visible_columns: ["days"] });
     await store.insert("employee_field_defs", { label: "Shirt size" });
+    await store.insert("holidays", { holiday_date: "2026-12-25", name: "Christmas", multiplier: 2, paid_hours: 8 });
+    const ada = (await store.listEmployees())[0]!;
+    await store.insert("work_patterns", { name: "Weekdays", days: [{ entry_mode: "clock", clock_in: "09:00", clock_out: "17:00", lunch_minutes: 30 }, null, null, null, null, null, null], employee_ids: [ada.id] });
     const snap = await exportSnapshot(a);
+    expect([snap.data.holidays.length, snap.data.work_patterns.length]).toEqual([1, 1]);
     const b = await newLocal();
     await replaceWithSnapshot(b, JSON.parse(JSON.stringify(snap)));
     expect((await exportSnapshot(b)).data).toEqual(snap.data);
@@ -653,6 +658,22 @@ describe("push and pull", () => {
     const desktop = await newLocal();
     expect((await pull(deps(desktop, cloudAs(cloud, A), A).d)).kind).toBe("done");
     expect((await exportSnapshot(desktop)).data).toEqual((await exportSnapshot(laptop)).data);
+  });
+
+  it("carries holidays and weekly patterns through the cloud", async () => {
+    const laptop = await newLocal();
+    const store = createLocalStore(async () => laptop);
+    await seed(laptop, "E1");
+    const ada = (await store.listEmployees())[0]!;
+    await store.insert("holidays", { holiday_date: "2026-12-25", name: "Christmas", multiplier: 2.5, paid_hours: 7.5 });
+    await store.insert("work_patterns", { name: "Mornings", days: [{ entry_mode: "hours", hours: 4 }, null, null, null, null, null, null], employee_ids: [ada.id] });
+    expect((await push(deps(laptop, cloudAs(cloud, A), A).d)).kind).toBe("done");
+    const desktop = await newLocal();
+    expect((await pull(deps(desktop, cloudAs(cloud, A), A).d)).kind).toBe("done");
+    const got = await exportSnapshot(desktop);
+    expect(got.data.holidays).toEqual((await exportSnapshot(laptop)).data.holidays);
+    expect(got.data.holidays[0]).toMatchObject({ holiday_date: "2026-12-25", name: "Christmas", multiplier: 2.5, paid_hours: 7.5 });
+    expect(got.data.work_patterns[0]).toMatchObject({ name: "Mornings", employee_ids: [ada.id] });
   });
 
   it("carries shift default times through the cloud", async () => {

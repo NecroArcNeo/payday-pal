@@ -1,9 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
-import { db, storeFor, undoable, useDataMode } from "@/lib/db/mode";
+import { db, undoable } from "@/lib/db/mode";
 import { backupBefore } from "@/lib/db/safety";
 import { AppShell, btnGhost, btnPrimary, inputCls } from "@/components/AppShell";
 import { EmployeePicker } from "@/components/EmployeeSearch";
@@ -12,11 +12,14 @@ import { DataTable } from "@/components/DataTable";
 import { Check, Plus, X } from "lucide-react";
 import { TaskProgress } from "@/components/Loading";
 import { NO_DEFAULTS } from "@/lib/employee-fields";
-import { fullName, useEmployeeDefaults, useEmployees, useFieldDefs, useShifts, type Employee, type FieldDef } from "@/lib/payroll";
+import { useEmployeeDefaults, useEmployees, useFieldDefs, useShifts, type Employee, type FieldDef } from "@/lib/payroll";
 import {
   columnLetter, fieldsFor, guessColumns, guessSetup, lastFilledRow, MAX_ROWS, norm, parsePeople, parseRecords, readWorkbook, recordKey, rowNumber,
   type DateOrder, type PersonRow, type RecordRow, type Role, type Sheet, type SheetSetup, type Target,
 } from "@/lib/import/parse";
+import { PASTED, takePasted } from "@/lib/import/paste";
+import { PasteRowsButton, usePasteRows } from "@/components/PasteRows";
+import { FoldBox } from "@/components/FoldBox";
 
 const IMPORT_STEPS = 4;
 
@@ -86,7 +89,6 @@ const template = () => {
 
 function ImportPage() {
   const qc = useQueryClient();
-  const mode = useDataMode();
   const { data: employees = [] } = useEmployees();
   const { data: defs = [] } = useFieldDefs();
   const typeOf = useMemo(() => { const m = new Map(defs.map((d) => [d.id, d.field_type])); return (id: string) => m.get(id); }, [defs]);
@@ -104,20 +106,38 @@ function ImportPage() {
   const [drag, setDrag] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  /** Shows a file's sheets (or pasted rows) to set up; `hours` makes them hours whatever the guess (pasted on Time records). */
+  const load = (name: string, list: Sheet[], hours = false) => {
+    setFile(name);
+    skippedAs.current.clear();
+    setSheets(list);
+    setSetups(list.map((s) => {
+      const g = guessSetup(s, defs);
+      const setup = recall(s, g, defs) ?? g;
+      return hours && setup.role !== "records" ? { ...setup, role: "records", columns: guessColumns(s, setup.headerRow, "records", defs) } : setup;
+    }));
+    setActive(Math.max(0, list.findIndex((s) => s.grid.length)));
+  };
   const handle = async (f: File) => {
     if (f.size > 20 * 1024 * 1024) { toast.error("File must be under 20MB"); return; }
     try {
       const list = readWorkbook(await f.arrayBuffer(), f.name);
       if (!list.some((s) => s.grid.length)) { toast.error("This file has no data"); return; }
-      setFile(f.name);
-      skippedAs.current.clear();
-      setSheets(list);
-      setSetups(list.map((s) => { const g = guessSetup(s, defs); return recall(s, g, defs) ?? g; }));
-      setActive(Math.max(0, list.findIndex((s) => s.grid.length)));
+      load(f.name, list);
     } catch {
       toast.error("Couldn't read that file. Is it a CSV or Excel file?");
     }
   };
+  // Rows pasted here (Ctrl+V or the button), or on Time records, which opens this page with them as hours. No toast:
+  // the "Pasted rows" sheet and its preview show it, and a toast would sit over the Import button.
+  const paste = (sheet: Sheet, hours = false) => { if (!busy) load(PASTED, [sheet], hours); };
+  usePasteRows((s) => paste(s));
+  useEffect(() => {
+    const handed = takePasted();
+    if (handed) paste(handed, true);
+    // Once, on opening: the hand-off is taken the first time.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const update = (i: number, patch: Partial<SheetSetup>) => {
     // Remember what a skipped sheet was, so bringing it back restores it as it was.
@@ -160,9 +180,9 @@ function ImportPage() {
     ? allRecords.reduce((a, r) => ({ from: r.work_date < a.from ? r.work_date : a.from, to: r.work_date > a.to ? r.work_date : a.to }), { from: "9999-12-31", to: "0000-01-01" })
     : null;
   const existingKeys = useQuery({
-    queryKey: ["import-record-keys", mode, range?.from, range?.to],
+    queryKey: ["import-record-keys", range?.from, range?.to],
     enabled: !!range,
-    queryFn: () => storeFor(mode).listRecordKeys(range!.from, range!.to),
+    queryFn: () => db().listRecordKeys(range!.from, range!.to),
   });
   const duplicates = useMemo(() => findDuplicates(allRecords, existingKeys.data ?? []), [allRecords, existingKeys.data]);
 
@@ -237,26 +257,31 @@ function ImportPage() {
   const setup = current === undefined ? undefined : setups[current];
 
   return (
-    <AppShell eyebrow="Import" title="Import from CSV or Excel">
-      <div className="glass-panel space-y-4 p-6">
-        <div className="flex items-center justify-between gap-4">
-          <p className="text-sm text-muted-foreground">
-            Choose a file, then for each sheet pick which rows to import and which app field each column goes into. Nothing is saved until you press Import.
-          </p>
-          <button onClick={template} className={btnGhost}>Download template</button>
+    <AppShell eyebrow="Import" title="Import from a file or pasted rows">
+      <FoldBox id="import:file" title="File or pasted rows">
+        <div className="glass-panel space-y-4 p-6">
+          <div className="flex items-center justify-between gap-4">
+            <p className="text-sm text-muted-foreground">
+              Choose a file or paste rows copied from anywhere (Ctrl+V), then for each sheet pick which rows to import and which app field each column goes into. Nothing is saved until you press Import.
+            </p>
+            <div className="flex shrink-0 items-center gap-2">
+              <PasteRowsButton onSheet={(s) => paste(s)} />
+              <button onClick={template} className={btnGhost}>Download template</button>
+            </div>
+          </div>
+          <div
+            onClick={() => inputRef.current?.click()}
+            onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+            onDragLeave={() => setDrag(false)}
+            onDrop={(e) => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files[0]; if (f) handle(f); }}
+            className={`cursor-pointer rounded-xl border-2 border-dashed p-10 text-center transition-colors ${drag ? "border-primary bg-accent" : "border-primary/30 bg-accent/50"}`}
+          >
+            <div className="font-mono text-sm text-accent-foreground">{file ? `${file} · choose another file` : "Drop CSV / XLSX, or paste rows with Ctrl+V"}</div>
+            <div className="mt-1 text-xs text-muted-foreground">or click to browse · up to {MAX_ROWS.toLocaleString()} rows per sheet</div>
+            <input ref={inputRef} type="file" accept=".csv,.xlsx,.xls,.xlsm,.ods" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handle(f); e.target.value = ""; }} />
+          </div>
         </div>
-        <div
-          onClick={() => inputRef.current?.click()}
-          onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
-          onDragLeave={() => setDrag(false)}
-          onDrop={(e) => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files[0]; if (f) handle(f); }}
-          className={`cursor-pointer rounded-xl border-2 border-dashed p-10 text-center transition-colors ${drag ? "border-primary bg-accent" : "border-primary/30 bg-accent/50"}`}
-        >
-          <div className="font-mono text-sm text-accent-foreground">{file ? `${file} · choose another file` : "Drop CSV / XLSX"}</div>
-          <div className="mt-1 text-xs text-muted-foreground">or click to browse · up to {MAX_ROWS.toLocaleString()} rows per sheet</div>
-          <input ref={inputRef} type="file" accept=".csv,.xlsx,.xls,.xlsm,.ods" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handle(f); e.target.value = ""; }} />
-        </div>
-      </div>
+      </FoldBox>
 
       {sheets.length > 0 && (
         <>
@@ -313,35 +338,37 @@ function ImportPage() {
               : setup.role === "records" ? { count: preview.records[current]?.ok.length ?? 0, errs: preview.records[current]?.errs.length ?? 0, blank: preview.records[current]?.blankDays ?? 0 } : null}
           />}
 
-          <div className="glass-panel space-y-3 p-5">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="text-sm">
-                <div className="font-medium">
-                  {preview.newPeople.length} people ({addedPeople} new, {preview.newPeople.length - addedPeople} updated) · {recordsToSave} time records
+          <FoldBox id="import:summary" title="Ready to import">
+            <div className="glass-panel space-y-3 p-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="text-sm">
+                  <div className="font-medium">
+                    {preview.newPeople.length} people ({addedPeople} new, {preview.newPeople.length - addedPeople} updated) · {recordsToSave} time records
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    Into this device{newCategories.size ? ` · ${newCategories.size} new categor${newCategories.size === 1 ? "y" : "ies"}` : ""}
+                    {problems.length ? ` · ${problems.length} rows won't be imported` : ""} · a backup is saved first
+                  </div>
                 </div>
-                <div className="text-xs text-muted-foreground">
-                  Into {mode === "cloud" ? "your cloud account" : "this device"}{newCategories.size ? ` · ${newCategories.size} new categor${newCategories.size === 1 ? "y" : "ies"}` : ""}
-                  {problems.length ? ` · ${problems.length} rows won't be imported` : ""} · a backup is saved first
+                <div className="flex items-center gap-3">
+                  {allRecords.length > 0 && (
+                    <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <input type="checkbox" checked={skipDuplicates} onChange={(e) => setSkipDuplicates(e.target.checked)} />
+                      Skip {duplicates.size} shift{duplicates.size === 1 ? "" : "s"} already in the app
+                    </label>
+                  )}
+                  <button disabled={!total || busy} onClick={() => undoable(file === PASTED ? "imported pasted rows" : "imported a file", commit)} className={btnPrimary}>{busy ? "Importing…" : `Import ${total} rows`}</button>
                 </div>
               </div>
-              <div className="flex items-center gap-3">
-                {allRecords.length > 0 && (
-                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <input type="checkbox" checked={skipDuplicates} onChange={(e) => setSkipDuplicates(e.target.checked)} />
-                    Skip {duplicates.size} shift{duplicates.size === 1 ? "" : "s"} already in the app
-                  </label>
-                )}
-                <button disabled={!total || busy} onClick={() => undoable("imported a file", commit)} className={btnPrimary}>{busy ? "Importing…" : `Import ${total} rows`}</button>
-              </div>
+              {step && <TaskProgress done={step.done} total={IMPORT_STEPS} label={`${step.label}…`} />}
+              {problems.length > 0 && (
+                <ul className="max-h-48 space-y-1 overflow-auto rounded-xl bg-secondary p-3 font-mono text-[11px] text-destructive">
+                  {problems.slice(0, 200).map((e, i) => <li key={i}>{e}</li>)}
+                  {problems.length > 200 && <li>…and {problems.length - 200} more</li>}
+                </ul>
+              )}
             </div>
-            {step && <TaskProgress done={step.done} total={IMPORT_STEPS} label={`${step.label}…`} />}
-            {problems.length > 0 && (
-              <ul className="max-h-48 space-y-1 overflow-auto rounded-xl bg-secondary p-3 font-mono text-[11px] text-destructive">
-                {problems.slice(0, 200).map((e, i) => <li key={i}>{e}</li>)}
-                {problems.length > 200 && <li>…and {problems.length - 200} more</li>}
-              </ul>
-            )}
-          </div>
+          </FoldBox>
         </>
       )}
     </AppShell>
@@ -422,133 +449,135 @@ function SheetEditor({ sheet, setup, defs, employees, onChange, result }: {
   if (!rows) return <div className="glass-panel p-6 text-sm text-muted-foreground">This sheet is empty.</div>;
 
   return (
-    <div className="glass-panel space-y-4 p-5">
-      <div className="flex flex-wrap items-end gap-4">
-        <div>
-          <div className="label-mono mb-1">This sheet has</div>
-          <div className="flex rounded-xl bg-secondary p-1 text-xs font-medium ring-1 ring-border">
-            {(["people", "records", "ignore"] as const).map((r) => (
-              <button key={r} onClick={() => setRole(r)}
-                className={`rounded-lg px-3 py-1.5 ${setup.role === r ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>
-                {r === "people" ? "Employees" : r === "records" ? "Hours / timesheet" : "Skip sheet"}
-              </button>
-            ))}
+    <FoldBox id="import:sheet" title="This sheet">
+      <div className="glass-panel space-y-4 p-5">
+        <div className="flex flex-wrap items-end gap-4">
+          <div>
+            <div className="label-mono mb-1">This sheet has</div>
+            <div className="flex rounded-xl bg-secondary p-1 text-xs font-medium ring-1 ring-border">
+              {(["people", "records", "ignore"] as const).map((r) => (
+                <button key={r} onClick={() => setRole(r)}
+                  className={`rounded-lg px-3 py-1.5 ${setup.role === r ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>
+                  {r === "people" ? "Employees" : r === "records" ? "Hours / timesheet" : "Skip sheet"}
+                </button>
+              ))}
+            </div>
           </div>
+          {setup.role !== "ignore" && (
+            <>
+              <label>
+                <div className="label-mono mb-1">Header row</div>
+                <div className="flex items-center gap-2">
+                  <RowNumberInput className="w-20" disabled={setup.headerRow === null} what="The header row"
+                    value={setup.headerRow === null ? null : toRowNo(setup.headerRow)} min={toRowNo(0)} max={toRowNo(rows - 1)}
+                    onCommit={(n) => setHeader(fromRowNo(n))} />
+                  <label className="flex items-center gap-1 text-xs text-muted-foreground">
+                    <input type="checkbox" checked={setup.headerRow === null} onChange={(e) => setHeader(e.target.checked ? null : Math.max(setup.firstRow - 1, 0))} /> none
+                  </label>
+                </div>
+              </label>
+              <div>
+                <div className="label-mono mb-1">Import rows</div>
+                <div className="flex items-center gap-2 text-sm">
+                  <RowNumberInput className="w-24" value={toRowNo(setup.firstRow)} min={toRowNo(0)} max={toRowNo(rows - 1)} what="The first row"
+                    onCommit={(n) => { const i = fromRowNo(n); onChange({ firstRow: i, lastRow: Math.max(setup.lastRow, i) }); }} />
+                  to
+                  <RowNumberInput className="w-24" value={toRowNo(setup.lastRow)} min={toRowNo(0)} max={toRowNo(rows - 1)} what="The last row"
+                    onCommit={(n) => { const i = fromRowNo(n); onChange({ lastRow: i, firstRow: Math.min(setup.firstRow, i) }); }} />
+                </div>
+              </div>
+              <label>
+                <div className="label-mono mb-1">Dates are written</div>
+                <select className={`${inputCls} w-auto`} value={setup.dateOrder} onChange={(e) => onChange({ dateOrder: e.target.value as DateOrder })}>
+                  <option value="mdy">Month/Day/Year (10/25/2026)</option>
+                  <option value="dmy">Day/Month/Year (25/10/2026)</option>
+                  <option value="ymd">Year-Month-Day only</option>
+                </select>
+              </label>
+              {setup.role === "records" && (
+                <label>
+                  <div className="label-mono mb-1">{hasEmployeeColumn ? "Rows with no employee belong to" : "Whose hours are these?"}</div>
+                  <EmployeePicker employees={employees} hideResigned value={setup.sheetEmployeeId} onChange={(id) => onChange({ sheetEmployeeId: id })}
+                    emptyLabel={hasEmployeeColumn ? "— nobody (skip them) —" : "— pick an employee —"} className="w-64"
+                    invalid={!hasEmployeeColumn && !setup.sheetEmployeeId} />
+                </label>
+              )}
+            </>
+          )}
         </div>
+
         {setup.role !== "ignore" && (
           <>
-            <label>
-              <div className="label-mono mb-1">Header row</div>
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
               <div className="flex items-center gap-2">
-                <RowNumberInput className="w-20" disabled={setup.headerRow === null} what="The header row"
-                  value={setup.headerRow === null ? null : toRowNo(setup.headerRow)} min={toRowNo(0)} max={toRowNo(rows - 1)}
-                  onCommit={(n) => setHeader(fromRowNo(n))} />
-                <label className="flex items-center gap-1 text-xs text-muted-foreground">
-                  <input type="checkbox" checked={setup.headerRow === null} onChange={(e) => setHeader(e.target.checked ? null : Math.max(setup.firstRow - 1, 0))} /> none
-                </label>
+                Clicking a row number sets the
+                <div className="flex rounded-lg bg-secondary p-0.5 ring-1 ring-border">
+                  {(["header", "first", "last"] as const).map((k) => (
+                    <button key={k} onClick={() => setClickSets(k)}
+                      className={`rounded-md px-2 py-1 ${clickSets === k ? "bg-primary text-primary-foreground" : "hover:text-foreground"}`}>
+                      {k === "header" ? "header row" : k === "first" ? "first row" : "last row"}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </label>
-            <div>
-              <div className="label-mono mb-1">Import rows</div>
-              <div className="flex items-center gap-2 text-sm">
-                <RowNumberInput className="w-24" value={toRowNo(setup.firstRow)} min={toRowNo(0)} max={toRowNo(rows - 1)} what="The first row"
-                  onCommit={(n) => { const i = fromRowNo(n); onChange({ firstRow: i, lastRow: Math.max(setup.lastRow, i) }); }} />
-                to
-                <RowNumberInput className="w-24" value={toRowNo(setup.lastRow)} min={toRowNo(0)} max={toRowNo(rows - 1)} what="The last row"
-                  onCommit={(n) => { const i = fromRowNo(n); onChange({ lastRow: i, firstRow: Math.min(setup.firstRow, i) }); }} />
-              </div>
+              {result && (
+                <div>
+                  <span className="font-medium text-foreground">{result.count} {setup.role === "people" ? "employees" : "time records"}</span>
+                  {result.errs > 0 && <span className="text-destructive"> · {result.errs} problems</span>}
+                  {result.blank > 0 && <span> · {result.blank} days with no hours skipped</span>}
+                </div>
+              )}
             </div>
-            <label>
-              <div className="label-mono mb-1">Dates are written</div>
-              <select className={`${inputCls} w-auto`} value={setup.dateOrder} onChange={(e) => onChange({ dateOrder: e.target.value as DateOrder })}>
-                <option value="mdy">Month/Day/Year (10/25/2026)</option>
-                <option value="dmy">Day/Month/Year (25/10/2026)</option>
-                <option value="ymd">Year-Month-Day only</option>
-              </select>
-            </label>
-            {setup.role === "records" && (
-              <label>
-                <div className="label-mono mb-1">{hasEmployeeColumn ? "Rows with no employee belong to" : "Whose hours are these?"}</div>
-                <EmployeePicker employees={employees} hideResigned value={setup.sheetEmployeeId} onChange={(id) => onChange({ sheetEmployeeId: id })}
-                  emptyLabel={hasEmployeeColumn ? "— nobody (skip them) —" : "— pick an employee —"} className="w-64"
-                  invalid={!hasEmployeeColumn && !setup.sheetEmployeeId} />
-              </label>
-            )}
+
+            <div className="max-h-[32rem] overflow-auto rounded-xl ring-1 ring-border">
+              <DataTable id="import-preview" className="text-[12px]">
+                <thead className="sticky top-0 z-10 bg-background">
+                  <tr className="border-b border-border">
+                    <th className="sticky left-0 z-20 bg-background px-2 py-1" />
+                    {Array.from({ length: sheet.width }, (_, j) => (
+                      <th key={j} data-col={columnLetter(sheet, j)} className="min-w-[9rem] px-1.5 py-1.5 text-left align-bottom font-normal">
+                        <div className="font-mono text-[10px] text-muted-foreground">{columnLetter(sheet, j)}{headerText(j) ? ` · ${headerText(j)}` : ""}</div>
+                        <select value={setup.columns[j] ?? ""} onChange={(e) => setColumn(j, e.target.value)}
+                          className={`mt-1 w-full rounded-lg px-1.5 py-1 text-[12px] ring-1 ${setup.columns[j] ? "bg-primary/10 font-medium text-primary ring-primary/30" : "bg-secondary text-muted-foreground ring-border"}`}>
+                          <option value="">Don't import</option>
+                          <optgroup label="App fields">
+                            {fields.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
+                          </optgroup>
+                          {setup.role === "people" && (
+                            <optgroup label="Employee categories">
+                              {defs.map((d) => <option key={d.id} value={`custom:${d.id}`}>{d.label}</option>)}
+                              <option value={`new:${headerText(j) || `Column ${columnLetter(sheet, j)}`}`}>+ New category “{headerText(j) || `Column ${columnLetter(sheet, j)}`}”</option>
+                            </optgroup>
+                          )}
+                        </select>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {shown.map((i) => i === -1 ? (
+                    <tr key="gap"><td colSpan={sheet.width + 1} className="px-3 py-1 text-center text-muted-foreground">… rows {toRowNo(PREVIEW_HEAD)}–{toRowNo(rows - PREVIEW_TAIL - 1)} not shown …</td></tr>
+                  ) : (
+                    <tr key={i} className={`border-b border-border/50 ${i === setup.headerRow ? "bg-accent font-semibold" : inRange(i) ? "" : "opacity-35"}`}>
+                      <td className="sticky left-0 bg-background px-0 py-0">
+                        <button onClick={() => clickRow(i)} title={`Set as ${clickSets === "header" ? "header row" : clickSets === "first" ? "first row" : "last row"}`}
+                          className={`w-full px-2 py-1 text-right font-mono text-[10px] hover:bg-primary/15 ${inRange(i) ? "text-primary" : "text-muted-foreground"}`}>
+                          {toRowNo(i)}
+                        </button>
+                      </td>
+                      {Array.from({ length: sheet.width }, (_, j) => (
+                        <td key={j} className={`max-w-[14rem] truncate px-2 py-1 ${setup.columns[j] && inRange(i) ? "" : "text-muted-foreground"}`} title={sheet.grid[i]?.[j]?.text}>
+                          {sheet.grid[i]?.[j]?.text}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </DataTable>
+            </div>
           </>
         )}
       </div>
-
-      {setup.role !== "ignore" && (
-        <>
-          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-            <div className="flex items-center gap-2">
-              Clicking a row number sets the
-              <div className="flex rounded-lg bg-secondary p-0.5 ring-1 ring-border">
-                {(["header", "first", "last"] as const).map((k) => (
-                  <button key={k} onClick={() => setClickSets(k)}
-                    className={`rounded-md px-2 py-1 ${clickSets === k ? "bg-primary text-primary-foreground" : "hover:text-foreground"}`}>
-                    {k === "header" ? "header row" : k === "first" ? "first row" : "last row"}
-                  </button>
-                ))}
-              </div>
-            </div>
-            {result && (
-              <div>
-                <span className="font-medium text-foreground">{result.count} {setup.role === "people" ? "employees" : "time records"}</span>
-                {result.errs > 0 && <span className="text-destructive"> · {result.errs} problems</span>}
-                {result.blank > 0 && <span> · {result.blank} days with no hours skipped</span>}
-              </div>
-            )}
-          </div>
-
-          <div className="max-h-[32rem] overflow-auto rounded-xl ring-1 ring-border">
-            <DataTable id="import-preview" className="text-[12px]">
-              <thead className="sticky top-0 z-10 bg-background">
-                <tr className="border-b border-border">
-                  <th className="sticky left-0 z-20 bg-background px-2 py-1" />
-                  {Array.from({ length: sheet.width }, (_, j) => (
-                    <th key={j} data-col={columnLetter(sheet, j)} className="min-w-[9rem] px-1.5 py-1.5 text-left align-bottom font-normal">
-                      <div className="font-mono text-[10px] text-muted-foreground">{columnLetter(sheet, j)}{headerText(j) ? ` · ${headerText(j)}` : ""}</div>
-                      <select value={setup.columns[j] ?? ""} onChange={(e) => setColumn(j, e.target.value)}
-                        className={`mt-1 w-full rounded-lg px-1.5 py-1 text-[12px] ring-1 ${setup.columns[j] ? "bg-primary/10 font-medium text-primary ring-primary/30" : "bg-secondary text-muted-foreground ring-border"}`}>
-                        <option value="">Don't import</option>
-                        <optgroup label="App fields">
-                          {fields.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
-                        </optgroup>
-                        {setup.role === "people" && (
-                          <optgroup label="Employee categories">
-                            {defs.map((d) => <option key={d.id} value={`custom:${d.id}`}>{d.label}</option>)}
-                            <option value={`new:${headerText(j) || `Column ${columnLetter(sheet, j)}`}`}>+ New category “{headerText(j) || `Column ${columnLetter(sheet, j)}`}”</option>
-                          </optgroup>
-                        )}
-                      </select>
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {shown.map((i) => i === -1 ? (
-                  <tr key="gap"><td colSpan={sheet.width + 1} className="px-3 py-1 text-center text-muted-foreground">… rows {toRowNo(PREVIEW_HEAD)}–{toRowNo(rows - PREVIEW_TAIL - 1)} not shown …</td></tr>
-                ) : (
-                  <tr key={i} className={`border-b border-border/50 ${i === setup.headerRow ? "bg-accent font-semibold" : inRange(i) ? "" : "opacity-35"}`}>
-                    <td className="sticky left-0 bg-background px-0 py-0">
-                      <button onClick={() => clickRow(i)} title={`Set as ${clickSets === "header" ? "header row" : clickSets === "first" ? "first row" : "last row"}`}
-                        className={`w-full px-2 py-1 text-right font-mono text-[10px] hover:bg-primary/15 ${inRange(i) ? "text-primary" : "text-muted-foreground"}`}>
-                        {toRowNo(i)}
-                      </button>
-                    </td>
-                    {Array.from({ length: sheet.width }, (_, j) => (
-                      <td key={j} className={`max-w-[14rem] truncate px-2 py-1 ${setup.columns[j] && inRange(i) ? "" : "text-muted-foreground"}`} title={sheet.grid[i]?.[j]?.text}>
-                        {sheet.grid[i]?.[j]?.text}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </DataTable>
-          </div>
-        </>
-      )}
-    </div>
+    </FoldBox>
   );
 }

@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Lock, LockOpen } from "lucide-react";
 import { btnGhost, btnPrimary } from "@/components/AppShell";
-import { db, storeFor, useDataMode } from "@/lib/db/mode";
+import { db } from "@/lib/db/mode";
 import { askChoice } from "@/lib/choice-prompt";
 import { lockThrough } from "@/lib/pay-freeze";
 import { isWeekend } from "@/lib/pay";
@@ -26,11 +26,10 @@ function lastSunday() {
  */
 export function PayLock({ periodEnd, warnings = 0 }: { periodEnd?: string | undefined; warnings?: number | undefined }) {
   const qc = useQueryClient();
-  const dataMode = useDataMode();
   const { data: settings } = usePayrollSettings();
   const locked = settings?.locked_through ?? null;
   // Under ["records"], so it refreshes whenever records change.
-  const { data: count = 0 } = useQuery({ queryKey: ["records", "unlocked", dataMode], queryFn: () => storeFor(dataMode).countUnlockedRecords(), enabled: !!locked });
+  const { data: count = 0 } = useQuery({ queryKey: ["records", "unlocked"], queryFn: () => db().countUnlockedRecords(), enabled: !!locked });
   const unlocked = locked ? count : 0;
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["payroll-settings"] });
@@ -76,7 +75,7 @@ export function PayLock({ periodEnd, warnings = 0 }: { periodEnd?: string | unde
   // its shifts as "already paid". Until the period has ended, "Lock days as paid…" offers up to today instead.
   const canLockPeriod = !!periodEnd && periodEnd <= isoDate(new Date()) && (!locked || periodEnd > locked);
   return (
-    <div className="glass-panel flex flex-wrap items-center justify-between gap-3 px-5 py-3 text-sm">
+    <div data-find="pay-lock" className="glass-panel flex flex-wrap items-center justify-between gap-3 px-5 py-3 text-sm">
       <span className="flex items-center gap-2">
         {locked ? <Lock className="h-4 w-4 text-primary" /> : <LockOpen className="h-4 w-4 text-muted-foreground" />}
         {locked

@@ -11,10 +11,8 @@ import { describeEmployeeFilter, isFiltering, NO_FILTER, searchEmployees, type E
 import { employeeTimesheet } from "@/lib/export/employee-timesheet";
 import { useRoutines, useTemplates, type ExportRoutine } from "@/lib/export/template-store";
 import { exportFile, exportKindFrom, type ExportedFile } from "@/lib/export/timesheet-export";
-import { weekEnd, weekStart } from "@/lib/pay";
-import {
-  fullName, isoDate, useAdjustments, useAllRecords, useEmployees, useFieldDefs, usePayRates, usePayrollSettings, useShifts, weekday,
-} from "@/lib/payroll";
+import { weekEnd, weekStart, payRules } from "@/lib/pay";
+import { fullName, isoDate, useAdjustments, useAllRecords, useEmployees, useFieldDefs, usePayRates, usePayrollSettings, useShifts, weekday, useHolidays } from "@/lib/payroll";
 import { periodPresets } from "@/lib/periods";
 import { DateInput } from "@/components/DateInput";
 import { TaskProgress } from "@/components/Loading";
@@ -27,7 +25,7 @@ export function BulkExport({ from, to }: { from: string; to: string }) {
   const [open, setOpen] = useState(false);
   return (
     <>
-      <button type="button" onClick={() => setOpen(true)} className={btnGhost} title="Export timesheets for several people at once">
+      <button type="button" data-find="export-several" onClick={() => setOpen(true)} className={btnGhost} title="Export timesheets for several people at once">
         <Files className="mr-1 inline h-4 w-4" />Export several…
       </button>
       {open && <BulkExportDialog initialFrom={from} initialTo={to} onClose={() => setOpen(false)} />}
@@ -51,6 +49,7 @@ export function BulkExportDialog({ initialFrom, initialTo, initialPeople, onClos
   const { data: defs = [] } = useFieldDefs();
   const payslip = usePayslipData();
   const { data: settings } = usePayrollSettings();
+  const { data: holidays } = useHolidays();
   const { data: records = [], isLoading: recordsLoading } = useAllRecords(weekStart(badRange ? initialFrom : from), weekEnd(badRange ? initialTo : to));
   const { data: adjustments = [], isLoading: adjLoading } = useAdjustments(from, to);
   const loading = ratesLoading || recordsLoading || adjLoading;
@@ -85,7 +84,8 @@ export function BulkExportDialog({ initialFrom, initialTo, initialPeople, onClos
     const kind = kindOf(c.output);
     if (!kind) { toast.error("That template has been deleted. Pick another way to make the files."); return; }
     const people = c.employeeIds.map((id) => employees.find((e) => e.id === id)).filter((e) => !!e);
-    const rules = { threshold: settings?.ot_threshold ?? 40, otMultiplier: settings?.ot_multiplier ?? 1.5, weekendOvertime: settings?.weekend_overtime ?? true };
+    if (!holidays) { toast.error("Still loading the public holidays. Try again in a moment."); return; }
+    const rules = payRules(settings, holidays);
     const today = isoDate(new Date());
     const files: Record<string, Uint8Array> = {};
     const failed: string[] = [];

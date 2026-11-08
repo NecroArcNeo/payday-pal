@@ -7,7 +7,7 @@ import { btnGhost, btnPrimary, inputCls } from "@/components/AppShell";
 import { SearchInput } from "@/components/EmployeeSearch";
 import { askChoice } from "@/lib/choice-prompt";
 import { planCopy } from "@/lib/copy-week";
-import { db, storeFor, useDataMode } from "@/lib/db/mode";
+import { db } from "@/lib/db/mode";
 import { backupBefore } from "@/lib/db/safety";
 import { describeEmployeeFilter, isFiltering, NO_FILTER, searchEmployees, type EmployeeFilter } from "@/lib/employee-search";
 import { weekStartOf } from "@/lib/export/timesheet-export";
@@ -27,7 +27,7 @@ export function CopyWeek() {
   const [open, setOpen] = useState(false);
   return (
     <>
-      <button type="button" onClick={() => setOpen(true)} className={btnGhost} title="Give people the same shifts as in another week">
+      <button type="button" data-find="copy-week" onClick={() => setOpen(true)} className={btnGhost} title="Give people the same shifts as in another week">
         <CopyPlus className="mr-1 inline h-4 w-4" />Copy a week…
       </button>
       {open && <CopyWeekDialog onClose={() => setOpen(false)} />}
@@ -37,7 +37,6 @@ export function CopyWeek() {
 
 function CopyWeekDialog({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
-  const dataMode = useDataMode();
   const today = isoDate(new Date());
   const [from, setFrom] = useState(() => monday(addDays(today, -7)));
   const [to, setTo] = useState(() => monday(today));
@@ -54,12 +53,12 @@ function CopyWeekDialog({ onClose }: { onClose: () => void }) {
   const lastDay = addDays(to, 7 * weeks - 1);
   // Under ["records"], so adding records anywhere (and this copy) refreshes them.
   const source = useQuery({
-    queryKey: ["records", "copy-from", dataMode, from],
-    queryFn: () => storeFor(dataMode).listRecordsMatching({ from, to: addDays(from, 6) }),
+    queryKey: ["records", "copy-from", from],
+    queryFn: () => db().listRecordsMatching({ from, to: addDays(from, 6) }),
   });
   const target = useQuery({
-    queryKey: ["records", "copy-to", dataMode, to, lastDay],
-    queryFn: () => storeFor(dataMode).listRecordKeys(to, lastDay),
+    queryKey: ["records", "copy-to", to, lastDay],
+    queryFn: () => db().listRecordKeys(to, lastDay),
   });
 
   // Resigned employees can't be given new hours, so they're never copied (as in the New record form).

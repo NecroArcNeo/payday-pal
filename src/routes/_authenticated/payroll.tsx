@@ -1,3 +1,5 @@
+import { useKeptState } from "@/lib/prefs";
+import { isDate as keptDate, validFilter } from "@/lib/last-place";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -7,11 +9,9 @@ import { AppShell, StatCard, btnGhost, btnPrimary, inputCls } from "@/components
 import { EmployeePicker, SearchInput } from "@/components/EmployeeSearch";
 import { DataTable } from "@/components/DataTable";
 import { describeEmployeeFilter, isFiltering, matchesEmployee, NO_FILTER, type EmployeeFilter } from "@/lib/employee-search";
-import {
-  currentWeek, fullName, money, useAdjustments, useAllRecords, useDeductions, useEmployees, useFieldDefs, usePayRates, usePayrollSettings, useShifts,
-  type Employee, type Shift,
-} from "@/lib/payroll";
-import { employeePay, shiftFor, weekEnd, weekStart } from "@/lib/pay";
+import { currentWeek, fullName, money, useAdjustments, useAllRecords, useDeductions, useEmployees, useFieldDefs, usePayRates, usePayrollSettings, useShifts,
+  type Employee, useHolidays } from "@/lib/payroll";
+import { employeePay, shiftFor, weekEnd, weekStart, payRules } from "@/lib/pay";
 import { ratesBetween } from "@/lib/pay-rates";
 import { PayLock } from "@/components/PayLock";
 import { fieldType, formatValue } from "@/lib/field-types";
@@ -21,9 +21,6 @@ import { customKey } from "@/lib/db/privacy";
 import { Columns3, Settings2, Trash2 } from "lucide-react";
 import { openSettings } from "@/lib/settings-window";
 import { EditableLabel } from "@/components/EditableLabel";
-import { BreakInput } from "@/components/BreakField";
-import { useBreakUnit, validBreak, breakRangeText } from "@/lib/breaks";
-import type { TablesUpdate } from "@/integrations/supabase/types";
 import { SortControl, SortTh, TableSort, useTableSort } from "@/components/SortControl";
 import { sortTable, type Sort, type SortColumns, type SortKind, type SortValue } from "@/lib/table-sort";
 import { DateInput } from "@/components/DateInput";
@@ -31,10 +28,10 @@ import { RecordWarnings, useRecordWarnings } from "@/components/RecordWarnings";
 import { EmployeeLink } from "@/components/EmployeeLink";
 import { PeriodHint } from "@/components/PeriodHint";
 import { SkeletonRows } from "@/components/Loading";
-import { askConfirm } from "@/lib/choice-prompt";
 import { deductionsFor } from "@/lib/deductions";
 import { runLine } from "@/lib/pay-runs";
 import { PayRunsList, RecordPayRun } from "@/components/PayRuns";
+import { FoldBox } from "@/components/FoldBox";
 
 export const Route = createFileRoute("/_authenticated/payroll")({
   head: () => ({ meta: [{ title: "Payroll — KoPayroll" }] }),
@@ -59,10 +56,11 @@ const BY_NAME: Sort = { by: "employee", desc: false };
 
 function PayrollPage() {
   const w = currentWeek();
-  const [from, setFrom] = useState(w.from);
-  const [to, setTo] = useState(w.to);
+  // The period and filter are kept for next time (open where I left off); the first time, this week.
+  const [from, setFrom] = useKeptState("meridian-place:payroll-from", w.from, keptDate);
+  const [to, setTo] = useKeptState("meridian-place:payroll-to", w.to, keptDate);
   const [showColumns, setShowColumns] = useState(false);
-  const [q, setQ] = useState<EmployeeFilter>(NO_FILTER);
+  const [q, setQ] = useKeptState<EmployeeFilter>("meridian-place:payroll-filter", NO_FILTER, validFilter);
   const qc = useQueryClient();
   // Load whole Mon–Sun weeks around the period, so weekly overtime is right even when the period starts mid-week.
   const isDate = (d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d);
@@ -79,7 +77,8 @@ function PayrollPage() {
   const threshold = settings?.ot_threshold ?? 40;
   const mult = settings?.ot_multiplier ?? 1.5;
   const weekendOt = settings?.weekend_overtime ?? true;
-  const rules = { threshold, otMultiplier: mult, weekendOvertime: weekendOt };
+  const { data: holidays, isSuccess: holidaysLoaded } = useHolidays();
+  const rules = { ...payRules(settings, holidays), threshold, otMultiplier: mult, weekendOvertime: weekendOt };
   const visible = settings?.visible_columns ?? [];
 
   // Categories under Personal are personal details, which stay off payroll.
@@ -191,7 +190,7 @@ function PayrollPage() {
   return (
     <AppShell eyebrow="Payroll run" title={`${from} – ${to}`} actions={
       <div className="flex gap-2">
-        <button onClick={() => setShowColumns((s) => !s)} className={btnGhost} aria-expanded={showColumns}><Columns3 className="mr-1 inline h-4 w-4" />Columns</button>
+        <button data-find="payroll-columns" onClick={() => setShowColumns((s) => !s)} className={btnGhost} aria-expanded={showColumns}><Columns3 className="mr-1 inline h-4 w-4" />Columns</button>
         <button onClick={() => openSettings("pay")} className={btnGhost} title="Overtime rules and shifts"><Settings2 className="mr-1 inline h-4 w-4" />Pay rules</button>
         <button onClick={exportCsv} className={btnGhost}>Export CSV</button>
       </div>
@@ -206,7 +205,7 @@ function PayrollPage() {
       {recordsLoaded && list.length === 0 && isDate(from) && isDate(to) && <PeriodHint from={from} to={to} onPick={(f, t) => { setFrom(f); setTo(t); }} />}
       {to && (payRunsOn ? (
         <div className="flex flex-wrap items-center gap-3">
-          {recordsLoaded && isDate(from) && isDate(to) && from <= to && <RecordPayRun from={from} to={to} lines={runLines} warnings={checked.open.length} />}
+          {recordsLoaded && holidaysLoaded && isDate(from) && isDate(to) && from <= to && <RecordPayRun from={from} to={to} lines={runLines} warnings={checked.open.length} />}
           <div className="min-w-0 flex-1"><PayLock periodEnd={to} warnings={checked.open.length} /></div>
         </div>
       ) : <PayLock periodEnd={to} warnings={checked.open.length} />)}
@@ -218,76 +217,80 @@ function PayrollPage() {
           onSaved={() => qc.invalidateQueries({ queryKey: ["payroll-settings"] })} onClose={() => setShowColumns(false)} />
       )}
 
-      <section className={`grid grid-cols-2 gap-4 ${deductionsOn ? "md:grid-cols-5" : "md:grid-cols-4"}`}>
-        <StatCard label="Gross pay" value={money(sum((r) => r.gross))} highlight />
-        {deductionsOn && <StatCard label="Net pay" value={money(sum((r) => r.deducted?.net ?? r.gross))} sub={`after ${money(sum((r) => r.deducted?.total ?? 0))} in deductions`} delay={30} />}
-        <StatCard label="Regular hours" value={sum((r) => r.regular).toFixed(2)} delay={60} />
-        <StatCard label="Overtime hours" value={sum((r) => r.overtime).toFixed(2)} delay={120} />
-        <StatCard label="Employees paid" value={String(list.length)} delay={180} />
-      </section>
+      <FoldBox id="payroll:cards" title="Totals" summary={`${money(sum((r) => r.gross))} gross`}>
+        <section className={`grid grid-cols-2 gap-4 ${deductionsOn ? "md:grid-cols-5" : "md:grid-cols-4"}`}>
+          <StatCard label="Gross pay" value={money(sum((r) => r.gross))} highlight />
+          {deductionsOn && <StatCard label="Net pay" value={money(sum((r) => r.deducted?.net ?? r.gross))} sub={`after ${money(sum((r) => r.deducted?.total ?? 0))} in deductions`} delay={30} />}
+          <StatCard label="Regular hours" value={sum((r) => r.regular).toFixed(2)} delay={60} />
+          <StatCard label="Overtime hours" value={sum((r) => r.overtime).toFixed(2)} delay={120} />
+          <StatCard label="Employees paid" value={String(list.length)} delay={180} />
+        </section>
+      </FoldBox>
 
-      <div className="glass-panel overflow-hidden">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-3">
-          <span className="text-xs text-muted-foreground">
-            Overtime ({mult}× rate): {weekendOt ? `every Saturday and Sunday hour, plus weekday hours over ${threshold}` : `hours over ${threshold}`} in a Mon–Sun week.
-            {" "}Shift multipliers scale the rate for regular hours only; overtime is always {mult}× the base rate, never stacked with the shift. Salaried employees get {threshold} h × rate for each week they work, with no overtime. Days with manual pay are paid exactly the amount entered.
-            {isFiltering(q) && ` Showing ${shown.length} of ${list.length}; totals above include everyone.`}
-          </span>
-          <div className="flex w-full flex-wrap items-center gap-3">
-            <SearchInput value={q} onChange={setQ} employees={list.map((r) => r.e)} className="min-w-[16rem] max-w-xl flex-1" />
-            <SortControl value={sort} onChange={setSort} columns={columns} />
+      <FoldBox id="payroll:table" title="Pay for the period">
+        <div className="glass-panel overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-3">
+            <span className="text-xs text-muted-foreground">
+              Overtime ({mult}× rate): {weekendOt ? `every Saturday and Sunday hour, plus weekday hours over ${threshold}` : `hours over ${threshold}`} in a Mon–Sun week.
+              {" "}Shift multipliers scale the rate for regular hours only; overtime is always {mult}× the base rate, never stacked with the shift. Salaried employees get {threshold} h × rate for each week they work, with no overtime. Days with manual pay are paid exactly the amount entered.
+              {isFiltering(q) && ` Showing ${shown.length} of ${list.length}; totals above include everyone.`}
+            </span>
+            <div className="flex w-full flex-wrap items-center gap-3">
+              <SearchInput value={q} onChange={setQ} employees={list.map((r) => r.e)} className="min-w-[16rem] max-w-xl flex-1" />
+              <SortControl value={sort} onChange={setSort} columns={columns} />
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <DataTable id="payroll" className="w-full text-sm">
+              <thead>
+                <TableSort sort={sort} columns={columns} onSort={setSort}>
+                <tr className="border-b border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
+                  <SortTh k="employee" className={`${th} pl-5 text-left`}><EditableLabel k="employee" name="Employee" /></SortTh>
+                  {infoCols.map((c) => <SortTh k={aliasKey(c)} key={c.key} className={`${th} text-left`}><EditableLabel k={aliasKey(c)} name={c.label} /></SortTh>)}
+                  {showDays && <SortTh k="days" className={`${th} text-right`}><EditableLabel k="days" name="Days" /></SortTh>}
+                  {showShift && <SortTh k="shift" className={`${th} text-left`}><EditableLabel k="shift" name="Shift" /></SortTh>}
+                  {showRate && <SortTh k="hourly_rate" className={`${th} text-right`}><EditableLabel k="hourly_rate" name="Rate" /></SortTh>}
+                  <SortTh k="reg_hrs" className={`${th} text-right`}><EditableLabel k="reg_hrs" name="Reg hrs" /></SortTh>
+                  <SortTh k="ot_hrs" className={`${th} text-right`}><EditableLabel k="ot_hrs" name="OT hrs" /></SortTh>
+                  <SortTh k="reg_pay" className={`${th} text-right`}><EditableLabel k="reg_pay" name="Regular pay" /></SortTh>
+                  <SortTh k="ot_pay" className={`${th} text-right`}><EditableLabel k="ot_pay" name="OT pay" /></SortTh>
+                  {hasManual && <SortTh k="manual_pay" className={`${th} text-right`}><EditableLabel k="manual_pay" name="Manual pay" /></SortTh>}
+                  {categories.map((c) => <SortTh k={`extra:${c}`} key={c} className={`${th} text-right`}><EditableLabel k={`extra:${c}`} name={c} /></SortTh>)}
+                  <SortTh k="gross_pay" className={`${th} ${deductionsOn ? "" : "pr-5"} text-right`}><EditableLabel k="gross_pay" name="Gross pay" /></SortTh>
+                  {deductionsOn && deductionCols.map((n) => <SortTh k={`deduction:${n}`} key={n} className={`${th} text-right`}><EditableLabel k={`deduction:${n}`} name={n} /></SortTh>)}
+                  {deductionsOn && <SortTh k="deductions_total" className={`${th} text-right`}><EditableLabel k="deductions_total" name="Deductions" /></SortTh>}
+                  {deductionsOn && <SortTh k="net_pay" className={`${th} pr-5 text-right`}><EditableLabel k="net_pay" name="Net pay" /></SortTh>}
+                </tr>
+                </TableSort>
+              </thead>
+              <tbody className="font-mono text-[13px]">
+                {!recordsLoaded && <SkeletonRows cols={colCount} />}
+                {recordsLoaded && list.length === 0 && <tr><td colSpan={20} className="px-5 py-10 text-center font-body text-muted-foreground">No hours in this period.</td></tr>}
+                {list.length > 0 && shown.length === 0 && <tr><td colSpan={20} className="px-5 py-10 text-center font-body text-muted-foreground">No one paid this period matches {describeEmployeeFilter(q)}.</td></tr>}
+                {shown.map((r) => (
+                  <tr key={r.e.id} className="border-b border-border last:border-0 hover:bg-secondary">
+                    <td className="px-5 py-3 font-body"><EmployeeLink id={r.e.id} name={fullName(r.e)} />{r.e.pay_type === "salary" && <span className="ml-2 rounded bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground ring-1 ring-border">Salary</span>}</td>
+                    {infoCols.map((c) => <td key={c.key} className="px-3 py-3 font-body">{c.get(r.e) || "—"}</td>)}
+                    {showDays && <td className="px-3 py-3 text-right">{r.days}</td>}
+                    {showShift && <td className="px-3 py-3 font-body">{r.shift.name}{r.shift.multiplier !== 1 && <span className="text-muted-foreground"> ×{r.shift.multiplier}</span>}</td>}
+                    {showRate && <td className="px-3 py-3 text-right" title={r.rates.length > 1 ? "The rate changed during this period; each day is paid at the rate in force that day." : undefined}>{r.rates.map(money).join(" → ")}{r.shift.multiplier !== 1 && <div className="text-[11px] text-muted-foreground">{r.rates.map((x) => money(x * r.shift.multiplier)).join(" → ")} on shift</div>}</td>}
+                    <td className="px-3 py-3 text-right">{r.regular.toFixed(2)}</td>
+                    <td className="px-3 py-3 text-right">{r.overtime.toFixed(2)}</td>
+                    <td className="px-3 py-3 text-right">{money(r.regPay)}</td>
+                    <td className="px-3 py-3 text-right">{money(r.otPay)}</td>
+                    {hasManual && <td className="px-3 py-3 text-right" title={`${r.manualDays} day(s) with manual pay`}>{r.manualDays ? money(r.manualPay) : "—"}</td>}
+                    {categories.map((c) => <td key={c} className="px-3 py-3 text-right">{money(r.extras[c] ?? 0)}</td>)}
+                    <td className={`${deductionsOn ? "px-3" : "px-5"} py-3 text-right font-semibold`}>{money(r.gross)}</td>
+                    {deductionsOn && deductionCols.map((n) => <td key={n} className="px-3 py-3 text-right text-muted-foreground">{r.byName[n] ? `−${money(r.byName[n]!)}` : "—"}</td>)}
+                    {deductionsOn && <td className="px-3 py-3 text-right" title={r.deducted?.lines.map((l) => `${l.name}: ${money(l.amount)} (${l.detail})`).join("\n")}>{r.deducted?.total ? `−${money(r.deducted.total)}` : "—"}</td>}
+                    {deductionsOn && <td className={`px-5 py-3 text-right font-semibold ${(r.deducted?.net ?? 0) < 0 ? "text-destructive" : ""}`} title={(r.deducted?.net ?? 0) < 0 ? "The deductions are more than the gross pay" : undefined}>{money(r.deducted?.net ?? r.gross)}</td>}
+                  </tr>
+                ))}
+              </tbody>
+            </DataTable>
           </div>
         </div>
-        <div className="overflow-x-auto">
-          <DataTable id="payroll" className="w-full text-sm">
-            <thead>
-              <TableSort sort={sort} columns={columns} onSort={setSort}>
-              <tr className="border-b border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
-                <SortTh k="employee" className={`${th} pl-5 text-left`}><EditableLabel k="employee" name="Employee" /></SortTh>
-                {infoCols.map((c) => <SortTh k={aliasKey(c)} key={c.key} className={`${th} text-left`}><EditableLabel k={aliasKey(c)} name={c.label} /></SortTh>)}
-                {showDays && <SortTh k="days" className={`${th} text-right`}><EditableLabel k="days" name="Days" /></SortTh>}
-                {showShift && <SortTh k="shift" className={`${th} text-left`}><EditableLabel k="shift" name="Shift" /></SortTh>}
-                {showRate && <SortTh k="hourly_rate" className={`${th} text-right`}><EditableLabel k="hourly_rate" name="Rate" /></SortTh>}
-                <SortTh k="reg_hrs" className={`${th} text-right`}><EditableLabel k="reg_hrs" name="Reg hrs" /></SortTh>
-                <SortTh k="ot_hrs" className={`${th} text-right`}><EditableLabel k="ot_hrs" name="OT hrs" /></SortTh>
-                <SortTh k="reg_pay" className={`${th} text-right`}><EditableLabel k="reg_pay" name="Regular pay" /></SortTh>
-                <SortTh k="ot_pay" className={`${th} text-right`}><EditableLabel k="ot_pay" name="OT pay" /></SortTh>
-                {hasManual && <SortTh k="manual_pay" className={`${th} text-right`}><EditableLabel k="manual_pay" name="Manual pay" /></SortTh>}
-                {categories.map((c) => <SortTh k={`extra:${c}`} key={c} className={`${th} text-right`}><EditableLabel k={`extra:${c}`} name={c} /></SortTh>)}
-                <SortTh k="gross_pay" className={`${th} ${deductionsOn ? "" : "pr-5"} text-right`}><EditableLabel k="gross_pay" name="Gross pay" /></SortTh>
-                {deductionsOn && deductionCols.map((n) => <SortTh k={`deduction:${n}`} key={n} className={`${th} text-right`}><EditableLabel k={`deduction:${n}`} name={n} /></SortTh>)}
-                {deductionsOn && <SortTh k="deductions_total" className={`${th} text-right`}><EditableLabel k="deductions_total" name="Deductions" /></SortTh>}
-                {deductionsOn && <SortTh k="net_pay" className={`${th} pr-5 text-right`}><EditableLabel k="net_pay" name="Net pay" /></SortTh>}
-              </tr>
-              </TableSort>
-            </thead>
-            <tbody className="font-mono text-[13px]">
-              {!recordsLoaded && <SkeletonRows cols={colCount} />}
-              {recordsLoaded && list.length === 0 && <tr><td colSpan={20} className="px-5 py-10 text-center font-body text-muted-foreground">No hours in this period.</td></tr>}
-              {list.length > 0 && shown.length === 0 && <tr><td colSpan={20} className="px-5 py-10 text-center font-body text-muted-foreground">No one paid this period matches {describeEmployeeFilter(q)}.</td></tr>}
-              {shown.map((r) => (
-                <tr key={r.e.id} className="border-b border-border last:border-0 hover:bg-secondary">
-                  <td className="px-5 py-3 font-body"><EmployeeLink id={r.e.id} name={fullName(r.e)} />{r.e.pay_type === "salary" && <span className="ml-2 rounded bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground ring-1 ring-border">Salary</span>}</td>
-                  {infoCols.map((c) => <td key={c.key} className="px-3 py-3 font-body">{c.get(r.e) || "—"}</td>)}
-                  {showDays && <td className="px-3 py-3 text-right">{r.days}</td>}
-                  {showShift && <td className="px-3 py-3 font-body">{r.shift.name}{r.shift.multiplier !== 1 && <span className="text-muted-foreground"> ×{r.shift.multiplier}</span>}</td>}
-                  {showRate && <td className="px-3 py-3 text-right" title={r.rates.length > 1 ? "The rate changed during this period; each day is paid at the rate in force that day." : undefined}>{r.rates.map(money).join(" → ")}{r.shift.multiplier !== 1 && <div className="text-[11px] text-muted-foreground">{r.rates.map((x) => money(x * r.shift.multiplier)).join(" → ")} on shift</div>}</td>}
-                  <td className="px-3 py-3 text-right">{r.regular.toFixed(2)}</td>
-                  <td className="px-3 py-3 text-right">{r.overtime.toFixed(2)}</td>
-                  <td className="px-3 py-3 text-right">{money(r.regPay)}</td>
-                  <td className="px-3 py-3 text-right">{money(r.otPay)}</td>
-                  {hasManual && <td className="px-3 py-3 text-right" title={`${r.manualDays} day(s) with manual pay`}>{r.manualDays ? money(r.manualPay) : "—"}</td>}
-                  {categories.map((c) => <td key={c} className="px-3 py-3 text-right">{money(r.extras[c] ?? 0)}</td>)}
-                  <td className={`${deductionsOn ? "px-3" : "px-5"} py-3 text-right font-semibold`}>{money(r.gross)}</td>
-                  {deductionsOn && deductionCols.map((n) => <td key={n} className="px-3 py-3 text-right text-muted-foreground">{r.byName[n] ? `−${money(r.byName[n]!)}` : "—"}</td>)}
-                  {deductionsOn && <td className="px-3 py-3 text-right" title={r.deducted?.lines.map((l) => `${l.name}: ${money(l.amount)} (${l.detail})`).join("\n")}>{r.deducted?.total ? `−${money(r.deducted.total)}` : "—"}</td>}
-                  {deductionsOn && <td className={`px-5 py-3 text-right font-semibold ${(r.deducted?.net ?? 0) < 0 ? "text-destructive" : ""}`} title={(r.deducted?.net ?? 0) < 0 ? "The deductions are more than the gross pay" : undefined}>{money(r.deducted?.net ?? r.gross)}</td>}
-                </tr>
-              ))}
-            </tbody>
-          </DataTable>
-        </div>
-      </div>
+      </FoldBox>
 
       <ExtrasPanel employees={employees} adjustments={adjustments} defaultDate={to} onChange={() => qc.invalidateQueries({ queryKey: ["adjustments"] })} />
       {payRunsOn && <PayRunsList onShow={(f, t) => { setFrom(f); setTo(t); window.scrollTo({ top: 0, behavior: "smooth" }); }} />}
@@ -369,48 +372,50 @@ function ExtrasPanel({ employees, adjustments, defaultDate, onChange }: {
   const th = "px-3 py-2.5 font-medium";
 
   return (
-    <div className="glass-panel overflow-hidden">
-      <div className="border-b border-border px-5 py-4">
-        <div className="font-display font-extrabold tracking-tight">Extra pay</div>
-        <p className="text-xs text-muted-foreground">Bonuses, reimbursements or any category you type. Each category becomes its own payroll column.</p>
-      </div>
-      <form onSubmit={add} className="grid gap-3 p-5 md:grid-cols-6">
-        <EmployeePicker employees={employees} value={emp} onChange={setEmp} placeholder="Employee…" />
-        <input className={inputCls} list="extra-cats" placeholder="Category" value={category} onChange={(e) => setCategory(e.target.value)} />
-        <datalist id="extra-cats">{known.map((k) => <option key={k} value={k} />)}</datalist>
-        <input className={inputCls} type="number" step="0.01" placeholder="Amount" value={amount} onChange={(e) => setAmount(e.target.value)} />
-        <DateInput className={inputCls} value={date} onChange={(v) => setDate(v)} />
-        <input className={inputCls} placeholder="Note (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
-        <button className={btnPrimary}>Add</button>
-      </form>
-      {adjustments.length > 0 && (
-        <DataTable id="payroll-extra-pay" className="w-full text-sm">
-          <thead>
-            <TableSort sort={sort} columns={columns} onSort={setSort}>
-            <tr className="border-t border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
-              <SortTh k="employee" className={`${th} pl-5 text-left`}><EditableLabel k="employee" name="Employee" /></SortTh>
-              <SortTh k="date" className={`${th} text-left`}><EditableLabel k="pay_date" name="Pay date" /></SortTh>
-              <SortTh k="category" className={`${th} text-left`}><EditableLabel k="category" name="Category" /></SortTh>
-              <SortTh k="note" className={`${th} text-left`}><EditableLabel k="note" name="Note" /></SortTh>
-              <SortTh k="amount" className={`${th} text-right`}><EditableLabel k="amount" name="Amount" /></SortTh>
-              <th className="w-10" />
-            </tr>
-            </TableSort>
-          </thead>
-          <tbody className="font-mono text-[13px]">
-            {rows.map((a) => (
-              <tr key={a.id} className="border-t border-border hover:bg-secondary">
-                <td className="px-5 py-2 font-body">{employees.some((e) => e.id === a.employee_id) ? <EmployeeLink id={a.employee_id} name={name(a.employee_id)} /> : "—"}</td>
-                <td className="px-3 py-2">{a.pay_date}</td>
-                <td className="px-3 py-2 font-body">{a.category}</td>
-                <td className="px-3 py-2 font-body text-muted-foreground">{a.note ?? ""}</td>
-                <td className="px-3 py-2 text-right">{money(Number(a.amount))}</td>
-                <td className="w-10 pr-4"><button onClick={() => remove(a.id)} aria-label="Delete extra pay" className="text-muted-foreground hover:text-destructive"><Trash2 className="h-4 w-4" /></button></td>
+    <FoldBox id="payroll:extra-pay" title="Extra pay">
+      <div className="glass-panel overflow-hidden">
+        <div className="border-b border-border px-5 py-4">
+          <div className="font-display font-extrabold tracking-tight">Extra pay</div>
+          <p className="text-xs text-muted-foreground">Bonuses, reimbursements or any category you type. Each category becomes its own payroll column.</p>
+        </div>
+        <form onSubmit={add} className="grid gap-3 p-5 md:grid-cols-6">
+          <EmployeePicker employees={employees} value={emp} onChange={setEmp} placeholder="Employee…" />
+          <input className={inputCls} list="extra-cats" placeholder="Category" value={category} onChange={(e) => setCategory(e.target.value)} />
+          <datalist id="extra-cats">{known.map((k) => <option key={k} value={k} />)}</datalist>
+          <input className={inputCls} type="number" step="0.01" placeholder="Amount" value={amount} onChange={(e) => setAmount(e.target.value)} />
+          <DateInput className={inputCls} value={date} onChange={(v) => setDate(v)} />
+          <input className={inputCls} placeholder="Note (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
+          <button className={btnPrimary}>Add</button>
+        </form>
+        {adjustments.length > 0 && (
+          <DataTable id="payroll-extra-pay" className="w-full text-sm">
+            <thead>
+              <TableSort sort={sort} columns={columns} onSort={setSort}>
+              <tr className="border-t border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
+                <SortTh k="employee" className={`${th} pl-5 text-left`}><EditableLabel k="employee" name="Employee" /></SortTh>
+                <SortTh k="date" className={`${th} text-left`}><EditableLabel k="pay_date" name="Pay date" /></SortTh>
+                <SortTh k="category" className={`${th} text-left`}><EditableLabel k="category" name="Category" /></SortTh>
+                <SortTh k="note" className={`${th} text-left`}><EditableLabel k="note" name="Note" /></SortTh>
+                <SortTh k="amount" className={`${th} text-right`}><EditableLabel k="amount" name="Amount" /></SortTh>
+                <th className="w-10" />
               </tr>
-            ))}
-          </tbody>
-        </DataTable>
-      )}
-    </div>
+              </TableSort>
+            </thead>
+            <tbody className="font-mono text-[13px]">
+              {rows.map((a) => (
+                <tr key={a.id} className="border-t border-border hover:bg-secondary">
+                  <td className="px-5 py-2 font-body">{employees.some((e) => e.id === a.employee_id) ? <EmployeeLink id={a.employee_id} name={name(a.employee_id)} /> : "—"}</td>
+                  <td className="px-3 py-2">{a.pay_date}</td>
+                  <td className="px-3 py-2 font-body">{a.category}</td>
+                  <td className="px-3 py-2 font-body text-muted-foreground">{a.note ?? ""}</td>
+                  <td className="px-3 py-2 text-right">{money(Number(a.amount))}</td>
+                  <td className="w-10 pr-4"><button onClick={() => remove(a.id)} aria-label="Delete extra pay" className="text-muted-foreground hover:text-destructive"><Trash2 className="h-4 w-4" /></button></td>
+                </tr>
+              ))}
+            </tbody>
+          </DataTable>
+        )}
+      </div>
+    </FoldBox>
   );
 }

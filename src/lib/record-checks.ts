@@ -91,7 +91,9 @@ export function checkRecords({ records, employees, shifts, rates, limits }: Chec
   for (const r of records) {
     const hours = Number(r.hours);
     const times = span(r);
-    if (hours < limits.shortShift) add("short", [r], `${h(hours)} worked${times ? ` (${hhmm(r.clock_in)}–${hhmm(r.clock_out)})` : ""}, under ${h(limits.shortShift)}`);
+    // A day paid by hand with no hours (holiday pay, a paid day off) is meant that way, not a short shift.
+    const paidDayOff = hours === 0 && !times && r.pay_override !== null && r.pay_override !== undefined && Number(r.pay_override) > 0;
+    if (hours < limits.shortShift && !paidDayOff) add("short", [r], `${h(hours)} worked${times ? ` (${hhmm(r.clock_in)}–${hhmm(r.clock_out)})` : ""}, under ${h(limits.shortShift)}`);
     if (times && r.lunch_minutes === 0 && hours > limits.noBreakAfter) add("no-break", [r], `${h(hours)} worked with no break (over ${h(limits.noBreakAfter)})`);
     if (times && r.lunch_minutes > limits.longBreak) add("long-break", [r], `${breakText(r.lunch_minutes)} break (over ${breakText(limits.longBreak)})`);
     if (times && times[1] > 1440) {

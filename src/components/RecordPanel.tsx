@@ -10,8 +10,10 @@ import { DateInput } from "@/components/DateInput";
 import { BreakInput } from "@/components/BreakField";
 import { RecordShiftSelect } from "@/components/RecordPay";
 import { colourCss, MARKS, type RowMark } from "@/lib/row-marks";
-import { breakRangeText, useBreakUnit, validBreak } from "@/lib/breaks";
+import { breakRangeText, DEFAULT_BREAK_MINUTES, useBreakUnit, validBreak } from "@/lib/breaks";
+import { describeTimes, usualTimesFor } from "@/lib/shift-times";
 import { useLabels } from "@/lib/labels";
+import { confirmLongRecords } from "@/lib/typo-prompt";
 import { computeHours, fullName, money, usePayRates, usePayrollSettings, weekday, type Employee, type RecordWithEmp, type Shift } from "@/lib/payroll";
 import { shiftFor, shiftForRecord, type PayLine } from "@/lib/pay";
 import { rateOn } from "@/lib/pay-rates";
@@ -149,10 +151,13 @@ function RecordForm({ record, employees, shifts, locked, onChanged, onDelete, on
   onChanged: () => void; onDelete: (id: string) => void; onDirty: (dirty: boolean) => void;
 }) {
   const { label } = useLabels();
+  // An hours record switched to clock in / out starts from its shift's usual hours (else 9 to 5 with the default break).
+  const usualNow = usualTimesFor(employees.find((e) => e.id === record.employee_id)?.shift_id, record.shift_id, shifts)?.times;
+  const hoursRecord = record.entry_mode !== "clock";
   const start = {
     employee_id: record.employee_id, work_date: record.work_date, entry_mode: record.entry_mode as EntryMode,
-    clock_in: record.clock_in?.slice(0, 5) ?? "09:00", clock_out: record.clock_out?.slice(0, 5) ?? "17:00",
-    lunch_minutes: String(record.lunch_minutes ?? 0), hours: String(record.hours ?? 0), note: record.note ?? "",
+    clock_in: record.clock_in?.slice(0, 5) ?? usualNow?.clock_in ?? "09:00", clock_out: record.clock_out?.slice(0, 5) ?? usualNow?.clock_out ?? "17:00",
+    lunch_minutes: String(hoursRecord ? usualNow?.lunch_minutes ?? DEFAULT_BREAK_MINUTES : record.lunch_minutes ?? 0), hours: String(record.hours ?? 0), note: record.note ?? "",
     pay: record.pay_override === null || record.pay_override === undefined ? "" : String(record.pay_override),
     shift_id: record.shift_id ?? "",
   };
@@ -165,6 +170,18 @@ function RecordForm({ record, employees, shifts, locked, onChanged, onDelete, on
   const [busy, setBusy] = useState(false);
   const [breakUnit] = useBreakUnit();
   const set = (k: keyof typeof f, v: string) => setF({ ...f, [k]: v });
+  // Another person or shift: the times become that shift's usual hours (when it has some), with a way to put the
+  // record's own times back, since an existing record's times are usually what really happened.
+  const [filled, setFilled] = useState<null | { name: string; times: string; before: Pick<typeof f, "clock_in" | "clock_out" | "lunch_minutes"> }>(null);
+  const setWho = (k: "employee_id" | "shift_id", v: string) => {
+    const next = { ...f, [k]: v };
+    const u = usualTimesFor(employees.find((e) => e.id === next.employee_id)?.shift_id, next.shift_id, shifts);
+    const t = u?.times;
+    if (!t || (t.clock_in === f.clock_in && t.clock_out === f.clock_out && String(t.lunch_minutes) === f.lunch_minutes)) { setF(next); return; }
+    setFilled((was) => ({ name: u.shift.name, times: describeTimes(t), before: was?.before ?? { clock_in: f.clock_in, clock_out: f.clock_out, lunch_minutes: f.lunch_minutes } }));
+    setF({ ...next, clock_in: t.clock_in, clock_out: t.clock_out, lunch_minutes: String(t.lunch_minutes) });
+  };
+  const putBack = () => { if (filled) setF({ ...f, ...filled.before }); setFilled(null); };
   const hours = f.entry_mode === "clock" ? computeHours(f.clock_in, f.clock_out, Number(f.lunch_minutes) || 0) : Number(f.hours) || 0;
 
   const save = async () => {
@@ -180,6 +197,8 @@ function RecordForm({ record, employees, shifts, locked, onChanged, onDelete, on
     const patch = f.entry_mode === "clock"
       ? { ...base, entry_mode: "clock", clock_in: f.clock_in, clock_out: f.clock_out, lunch_minutes: lunch }
       : { ...base, entry_mode: "hours", hours: h, clock_in: null, clock_out: null, lunch_minutes: 0 };
+    const who = employees.find((e) => e.id === f.employee_id);
+    if (!(await confirmLongRecords([patch], () => (who ? fullName(who) : "Someone")))) return;
     setBusy(true);
     const { error } = await db().update("time_records", record.id, patch);
     setBusy(false);
@@ -196,7 +215,7 @@ function RecordForm({ record, employees, shifts, locked, onChanged, onDelete, on
       {/* A disabled fieldset disables every control in it: a locked day can't change (the database refuses anyway). */}
       <fieldset disabled={locked || busy} className="space-y-3 disabled:opacity-60">
         <label className={field}>{label("employee", "Employee")}
-          <EmployeePicker employees={employees} hideResigned value={f.employee_id} onChange={(id) => set("employee_id", id)} className="!py-1.5 text-sm" />
+          <EmployeePicker employees={employees} hideResigned value={f.employee_id} onChange={(id) => setWho("employee_id", id)} className="!py-1.5 text-sm" />
         </label>
         <div className="grid grid-cols-2 gap-3">
           <label className={field}>{label("date", "Date")}
@@ -210,7 +229,7 @@ function RecordForm({ record, employees, shifts, locked, onChanged, onDelete, on
           </label>
         </div>
         <label className={field}>{label("shift", "Shift")}
-          <RecordShiftSelect value={f.shift_id === usual.id ? "" : f.shift_id} onChange={(id) => set("shift_id", id)} shifts={shifts} ownLabel={`Usual (${usual.name})`} className={input} />
+          <RecordShiftSelect value={f.shift_id === usual.id ? "" : f.shift_id} onChange={(id) => setWho("shift_id", id)} shifts={shifts} ownLabel={`Usual (${usual.name})`} className={input} />
         </label>
         {f.entry_mode === "clock" ? (
           <div className="grid grid-cols-3 gap-3">
@@ -223,6 +242,12 @@ function RecordForm({ record, employees, shifts, locked, onChanged, onDelete, on
             <label className={field}>{label("break", "Break")} ({breakUnit})
               <BreakInput minutes={f.lunch_minutes} onChange={(m) => set("lunch_minutes", m)} className={`${input} text-right`} />
             </label>
+            {filled && (
+              <p className="col-span-3 text-xs text-muted-foreground">
+                Times set to {filled.name}'s usual hours ({filled.times}).{" "}
+                <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={putBack}>Put back {filled.before.clock_in}–{filled.before.clock_out}</button>
+              </p>
+            )}
             <p className="col-span-3 text-xs text-muted-foreground">{label("hours", "Hours")}: <span className="font-mono text-foreground">{hours.toFixed(2)}</span>
               {record.entry_mode === "hours" && " (switching to clock in / out)"}</p>
           </div>

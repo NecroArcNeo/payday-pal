@@ -5,12 +5,13 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { AppShell, btnGhost, btnPrimary } from "@/components/AppShell";
 import { useBackupCopy } from "@/components/BackupCopyPanel";
+import { BackupCheckLine } from "@/components/BackupCheck";
 import { openSettings } from "@/lib/settings-window";
-import { useFieldDefs, usePrivateFields, useSession } from "@/lib/payroll";
+import { useFieldDefs, useSession } from "@/lib/payroll";
 import { EMPLOYEE_SECTIONS } from "@/lib/employee-fields";
 import { useLabels } from "@/lib/labels";
-import { ALWAYS_SYNCED, confirmPrivateFields, customKey, DEFAULT_SHARED, getPrivateFields, PERSONAL_DETAILS, PRIVATE_COLUMNS, privateFieldsConfirmed } from "@/lib/db/privacy";
-import { cloudConfigured, setDataMode, useDataMode } from "@/lib/db/mode";
+import { confirmPrivateFields, customKey, getPrivateFields, PRIVATE_COLUMNS, privateFieldsConfirmed } from "@/lib/db/privacy";
+import { cloudConfigured } from "@/lib/db/mode";
 import { localDb } from "@/lib/db/local";
 import { desktop } from "@/lib/desktop";
 import { backupFileName, getBackup, listBackups, reasonLabel, saveBackup } from "@/lib/db/backups";
@@ -20,10 +21,11 @@ import { SortControl, useTableSort } from "@/components/SortControl";
 import { sortTable, type SortColumns } from "@/lib/table-sort";
 import { countRows, describeCounts, describeDiff, exportSnapshot, isEmpty, validateSnapshot, type Snapshot } from "@/lib/db/snapshot";
 import {
-  deviceIdentity, exportState, hasUnpushedChanges, localSyncState, markExported, pull, push, restoreSnapshot, setDeviceName, setPrivateFields,
+  deviceIdentity, exportState, hasUnpushedChanges, localSyncState, markExported, pull, push, restoreSnapshot, setDeviceName,
   supabaseCloud, type SyncDeps,
 } from "@/lib/db/sync";
 import { Cloud, Download, FolderOpen, HardDrive, HardDriveDownload, Lock, RotateCcw, Upload } from "lucide-react";
+import { FoldBox } from "@/components/FoldBox";
 
 export const Route = createFileRoute("/_authenticated/sync")({
   head: () => ({ meta: [{ title: "Sync & backup — KoPayroll" }] }),
@@ -35,7 +37,6 @@ const EXPORT_REMINDER_DAYS = 7;
 
 function SyncPage() {
   const qc = useQueryClient();
-  const mode = useDataMode();
   const { data: session } = useSession();
   const user = session?.user ?? null;
   const [busy, setBusy] = useState<string | null>(null);
@@ -207,81 +208,72 @@ function SyncPage() {
     }
   };
 
-  const switchMode = (m: "local" | "cloud") => {
-    setDataMode(m);
-    toast.success(m === "cloud" ? "Now editing your cloud copy directly. This device's data is untouched." : "Now editing the data on this device.");
-  };
-
   return (
     <AppShell eyebrow="Your data" title="Sync & backup">
       {exportDue && (
         <div className="glass-panel flex items-center justify-between gap-4 p-4 text-sm">
-          <span>Your data changed since your last backup file ({when(local.data?.exported.exportedAt)}). {desktop ? "Keep a copy somewhere other than this computer, such as a USB stick, in case it fails or is lost." : "A file is the only copy that survives this browser's storage being cleared."}</span>
+          <span>Your data changed since your last backup file ({when(local.data?.exported.exportedAt)}). Keep a copy somewhere other than this computer, such as a USB stick, in case it fails or is lost.</span>
           <button onClick={exportFile} className={btnPrimary} disabled={!!busy}>Download backup</button>
         </div>
       )}
 
       <section className="grid gap-4 md:grid-cols-2">
-        <div className="glass-panel space-y-3 p-5">
-          <div className="flex items-center gap-2 font-display font-extrabold tracking-tight"><HardDrive className="h-4 w-4" /> This device</div>
-          <p className="text-sm text-muted-foreground">
-            {local.isError ? `Couldn't read this device's data: ${local.error.message}` : local.data ? describeCounts(local.data.counts) : "Loading…"}
-          </p>
-          <p className="text-xs text-muted-foreground">
-            Stored on this computer in <code className="break-all">{folders.data?.dataDir ?? "…"}</code>.{" "}
-            <button className="underline underline-offset-2" onClick={() => openFolder("data")}>Open folder</button>
-          </p>
-          {cloudConfigured && (
-            <label className="flex items-center gap-2 text-xs text-muted-foreground">
-              <span className="shrink-0">Name when syncing</span>
-              <input
-                key={device.data?.name}
-                defaultValue={device.data?.name ?? ""}
-                maxLength={100}
-                className="h-7 w-full max-w-56 rounded-lg bg-secondary px-2 text-sm text-foreground ring-1 ring-border"
-                onBlur={(e) => void rename(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
-              />
-            </label>
-          )}
-          <div>
-            <button onClick={() => switchMode("local")} disabled={mode === "local"} className={mode === "local" ? btnPrimary : btnGhost}>
-              {mode === "local" ? "Editing this device" : "Edit this device's data"}
-            </button>
+        <FoldBox id="sync:device" title="This device">
+          <div className="glass-panel space-y-3 p-5">
+            <div className="flex items-center gap-2 font-display font-extrabold tracking-tight"><HardDrive className="h-4 w-4" /> This device</div>
+            <p className="text-sm text-muted-foreground">
+              {local.isError ? `Couldn't read this device's data: ${local.error.message}` : local.data ? describeCounts(local.data.counts) : "Loading…"}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Stored on this computer in <code className="break-all">{folders.data?.dataDir ?? "…"}</code>.{" "}
+              <button className="underline underline-offset-2" onClick={() => openFolder("data")}>Open folder</button>
+            </p>
+            {cloudConfigured && (
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span className="shrink-0">Name when syncing</span>
+                <input
+                  key={device.data?.name}
+                  defaultValue={device.data?.name ?? ""}
+                  maxLength={100}
+                  className="h-7 w-full max-w-56 rounded-lg bg-secondary px-2 text-sm text-foreground ring-1 ring-border"
+                  onBlur={(e) => void rename(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+                />
+              </label>
+            )}
           </div>
-        </div>
+        </FoldBox>
 
-        <div className="glass-panel space-y-3 p-5">
-          <div className="flex items-center gap-2 font-display font-extrabold tracking-tight"><Cloud className="h-4 w-4" /> Cloud account</div>
-          {!cloudConfigured ? (
-            <p className="text-sm text-muted-foreground">Cloud sync isn't set up: add your Supabase URL and key to <code>.env</code> (see README). Everything else works without it.</p>
-          ) : !user ? (
-            <>
-              <p className="text-sm text-muted-foreground">Optional. Sign in to copy your data to the cloud and open it on other devices.</p>
-              <Link to="/auth" className={`${btnPrimary} inline-block`}>Sign in</Link>
-            </>
-          ) : (
-            <>
-              <p className="text-sm">{user.email}</p>
-              <p className="text-xs text-muted-foreground">
-                {cloud.isError ? `Couldn't reach the cloud: ${cloud.error.message}` : cloud.data ? (cloud.data.has_data ? `Cloud copy last changed ${when(cloud.data.updated_at)}` : "No data in the cloud yet") : "Checking…"}
-                {cloud.data?.pushed_by_name && ` (last pushed from ${cloud.data.pushed_by_device === device.data?.id ? "this computer" : cloud.data.pushed_by_name}, ${when(cloud.data.pushed_at)})`}
-                {" · "}This device last synced {local.data?.state.syncedOwner === user.id ? when(local.data.state.syncedAt) : "never"}
-              </p>
-              {unpushed && <p className="text-xs font-medium text-primary">This device has changes that aren't in the cloud.</p>}
-              <div className="flex flex-wrap gap-2">
-                <button onClick={doPush} disabled={!!busy} className={btnPrimary}><Upload className="mr-1 inline h-4 w-4" />{busy === "push" ? "Pushing…" : "Push to cloud"}</button>
-                <button onClick={doPull} disabled={!!busy} className={btnGhost}><Download className="mr-1 inline h-4 w-4" />{busy === "pull" ? "Pulling…" : "Pull to this device"}</button>
-                <button onClick={() => switchMode("cloud")} disabled={mode === "cloud"} className={mode === "cloud" ? btnPrimary : btnGhost}>
-                  {mode === "cloud" ? "Editing cloud" : "Edit cloud directly"}
-                </button>
-              </div>
-              <p className="text-[11px] text-muted-foreground">
-                Push replaces the cloud copy with this device's data. Pull replaces this device's data with the cloud copy. Whatever gets replaced is saved to Backups first.
-              </p>
-            </>
-          )}
-        </div>
+        <FoldBox id="sync:cloud" title="Cloud account">
+          <div className="glass-panel space-y-3 p-5">
+            <div className="flex items-center gap-2 font-display font-extrabold tracking-tight"><Cloud className="h-4 w-4" /> Cloud account</div>
+            {!cloudConfigured ? (
+              <p className="text-sm text-muted-foreground">Cloud sync isn't set up: add your Supabase URL and key to <code>.env</code> (see README). Everything else works without it.</p>
+            ) : !user ? (
+              <>
+                <p className="text-sm text-muted-foreground">Optional. Sign in to copy your data to the cloud and open it on other devices.</p>
+                <Link to="/auth" className={`${btnPrimary} inline-block`}>Sign in</Link>
+              </>
+            ) : (
+              <>
+                <p className="text-sm">{user.email}</p>
+                <p className="text-xs text-muted-foreground">
+                  {cloud.isError ? `Couldn't reach the cloud: ${cloud.error.message}` : cloud.data ? (cloud.data.has_data ? `Cloud copy last changed ${when(cloud.data.updated_at)}` : "No data in the cloud yet") : "Checking…"}
+                  {cloud.data?.pushed_by_name && ` (last pushed from ${cloud.data.pushed_by_device === device.data?.id ? "this computer" : cloud.data.pushed_by_name}, ${when(cloud.data.pushed_at)})`}
+                  {" · "}This device last synced {local.data?.state.syncedOwner === user.id ? when(local.data.state.syncedAt) : "never"}
+                </p>
+                {unpushed && <p className="text-xs font-medium text-primary">This device has changes that aren't in the cloud.</p>}
+                <div className="flex flex-wrap gap-2">
+                  <button onClick={doPush} disabled={!!busy} className={btnPrimary}><Upload className="mr-1 inline h-4 w-4" />{busy === "push" ? "Pushing…" : "Push to cloud"}</button>
+                  <button onClick={doPull} disabled={!!busy} className={btnGhost}><Download className="mr-1 inline h-4 w-4" />{busy === "pull" ? "Pulling…" : "Pull to this device"}</button>
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Push replaces the cloud copy with this device's data. Pull replaces this device's data with the cloud copy. Whatever gets replaced is saved to Backups first.
+                </p>
+              </>
+            )}
+          </div>
+        </FoldBox>
       </section>
 
       <section className="glass-panel flex flex-wrap items-center justify-between gap-3 p-5">
@@ -292,55 +284,62 @@ function SyncPage() {
         </span>
       </section>
 
-      <section className="glass-panel space-y-3 p-5">
-        <div className="font-display font-extrabold tracking-tight">Backup files</div>
-        <p className="text-sm text-muted-foreground">
-          Last downloaded: {when(local.data?.exported.exportedAt)}. Keep a file somewhere safe (another drive, email, a USB stick). Restoring a file replaces this device's data, after backing up what's there now.
-        </p>
-        <div className="flex flex-wrap gap-2">
-          <button onClick={exportFile} disabled={!!busy} className={btnPrimary}><Download className="mr-1 inline h-4 w-4" />Download backup file</button>
-          <button onClick={() => fileRef.current?.click()} disabled={!!busy} className={btnGhost}><Upload className="mr-1 inline h-4 w-4" />Restore from file…</button>
-          <input ref={fileRef} type="file" accept=".json,application/json" className="hidden" onChange={(e) => onFile(e.target.files?.[0])} />
-        </div>
-      </section>
-
-      <section className="glass-panel overflow-hidden">
-        <div className="border-b border-border px-5 py-4">
-          <div className="flex items-center justify-between gap-3">
-            <div className="font-display font-extrabold tracking-tight">Backups on this device</div>
-            <button onClick={backupNow} disabled={!!busy} className={btnGhost}>{busy === "backup" ? "Saving…" : "Back up now"}</button>
+      <FoldBox id="sync:files" title="Backup files">
+        <section className="glass-panel space-y-3 p-5">
+          <div className="font-display font-extrabold tracking-tight">Backup files</div>
+          <p className="text-sm text-muted-foreground">
+            Last downloaded: {when(local.data?.exported.exportedAt)}. Keep a file somewhere safe (another drive, email, a USB stick). Restoring a file replaces this device's data, after backing up what's there now.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={exportFile} disabled={!!busy} className={btnPrimary}><Download className="mr-1 inline h-4 w-4" />Download backup file</button>
+            <button onClick={() => fileRef.current?.click()} disabled={!!busy} className={btnGhost}><Upload className="mr-1 inline h-4 w-4" />Restore from file…</button>
+            <input ref={fileRef} type="file" accept=".json,application/json" className="hidden" onChange={(e) => onFile(e.target.files?.[0])} />
           </div>
-          <p className="text-xs text-muted-foreground">Saved automatically every 30 minutes while there are changes{desktop ? ", when you close the app" : ""}, and before every pull, push, restore or app update. All from the last 2 days are kept, then one per day for a month, one per week for a year and one per month after that. Backups you save yourself are always kept.</p>
-          {desktop && (
-            <p className="mt-1 text-xs text-muted-foreground">
-              Saved as files in <code className="break-all">{folders.data?.backupDir ?? "…"}</code>.{" "}
-              <button className="inline-flex items-center gap-1 underline underline-offset-2" onClick={() => openFolder("backups")}><FolderOpen className="h-3 w-3" /> Open folder</button>
-            </p>
-          )}
-        </div>
-        <BackupList id="device"
-          rows={(backups.data ?? []).map((b) => ({ key: b.id, at: b.created_at, label: reasonLabel[b.reason] ?? b.reason, detail: describeCounts(b.counts) }))}
-          empty={backups.isError ? `Couldn't read backups: ${backups.error.message}` : "No backups yet."}
-          busy={!!busy}
-          onDownload={async (id) => { const b = await getBackup(id); if (b) await saveBackupFile(b.snapshot, backupFileName(new Date(b.created_at))); }}
-          onRestore={async (id) => { const b = await getBackup(id); if (b) await restore(b.snapshot, `the backup from ${when(b.created_at)}`); }}
-        />
-      </section>
+        </section>
+      </FoldBox>
 
-      {user && (
+      <FoldBox id="sync:backups" title="Backups on this device">
         <section className="glass-panel overflow-hidden">
           <div className="border-b border-border px-5 py-4">
-            <div className="font-display font-extrabold tracking-tight">Backups in the cloud</div>
-            <p className="text-xs text-muted-foreground">The cloud keeps its previous copy every time something is pushed over it.</p>
+            <div className="flex items-center justify-between gap-3">
+              <div className="font-display font-extrabold tracking-tight">Backups on this device</div>
+              <button onClick={backupNow} disabled={!!busy} className={btnGhost}>{busy === "backup" ? "Saving…" : "Back up now"}</button>
+            </div>
+            <p className="text-xs text-muted-foreground">Saved automatically every 30 minutes while there are changes, when you close the app, and before every pull, push, restore or app update. All from the last 2 days are kept, then one per day for a month, one per week for a year and one per month after that. Backups you save yourself are always kept.</p>
+            {desktop && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Saved as files in <code className="break-all">{folders.data?.backupDir ?? "…"}</code>.{" "}
+                <button className="inline-flex items-center gap-1 underline underline-offset-2" onClick={() => openFolder("backups")}><FolderOpen className="h-3 w-3" /> Open folder</button>
+              </p>
+            )}
+            {desktop && <BackupCheckLine />}
           </div>
-          <BackupList id="cloud"
-            rows={(cloudBackups.data ?? []).map((b) => ({ key: b.id, at: b.created_at, label: b.reason === "before-push" ? "Cloud copy, before a push replaced it" : "Cloud data before switching to local-first", detail: `version ${b.version}` }))}
-            empty={cloudBackups.isError ? `Couldn't read cloud backups: ${cloudBackups.error.message}` : "No cloud backups yet."}
+          <BackupList id="device"
+            rows={(backups.data ?? []).map((b) => ({ key: b.id, at: b.created_at, label: reasonLabel[b.reason] ?? b.reason, detail: describeCounts(b.counts) }))}
+            empty={backups.isError ? `Couldn't read backups: ${backups.error.message}` : "No backups yet."}
             busy={!!busy}
-            onDownload={async (id) => { const s = await fetchCloudBackup(id); await saveBackupFile(s, `cloud-${backupFileName()}`); }}
-            onRestore={async (id) => restore(await fetchCloudBackup(id), "a cloud backup", true)}
+            onDownload={async (id) => { const b = await getBackup(id); if (b) await saveBackupFile(b.snapshot, backupFileName(new Date(b.created_at))); }}
+            onRestore={async (id) => { const b = await getBackup(id); if (b) await restore(b.snapshot, `the backup from ${when(b.created_at)}`); }}
           />
         </section>
+      </FoldBox>
+
+      {user && (
+        <FoldBox id="sync:cloud-backups" title="Backups in the cloud">
+          <section className="glass-panel overflow-hidden">
+            <div className="border-b border-border px-5 py-4">
+              <div className="font-display font-extrabold tracking-tight">Backups in the cloud</div>
+              <p className="text-xs text-muted-foreground">The cloud keeps its previous copy every time something is pushed over it.</p>
+            </div>
+            <BackupList id="cloud"
+              rows={(cloudBackups.data ?? []).map((b) => ({ key: b.id, at: b.created_at, label: b.reason === "before-push" ? "Cloud copy, before a push replaced it" : "Cloud data before switching to local-first", detail: `version ${b.version}` }))}
+              empty={cloudBackups.isError ? `Couldn't read cloud backups: ${cloudBackups.error.message}` : "No cloud backups yet."}
+              busy={!!busy}
+              onDownload={async (id) => { const s = await fetchCloudBackup(id); await saveBackupFile(s, `cloud-${backupFileName()}`); }}
+              onRestore={async (id) => restore(await fetchCloudBackup(id), "a cloud backup", true)}
+            />
+          </section>
+        </FoldBox>
       )}
     </AppShell>
   );

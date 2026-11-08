@@ -49,6 +49,11 @@ export interface DesktopBridge {
     /** Closes the database and moves its folder aside (never deleted); the next query starts a new, empty one. Returns the folder it moved to. */
     setAside(): Promise<string | null>;
   };
+  /**
+   * A scratch database in memory, in a worker thread, that a backup is restored into to check it restores
+   * (src/lib/db/backup-check.ts). Same calls as `db`, plus open (empty, replacing any open one) and close (frees it).
+   */
+  scratch: Omit<DesktopBridge["db"], "setAside"> & { open(): Promise<null>; close(): Promise<null> };
   backups: {
     add(record: object): Promise<number>;
     get<T>(id: number): Promise<T | undefined>;

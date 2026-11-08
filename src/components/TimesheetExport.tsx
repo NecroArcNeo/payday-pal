@@ -37,7 +37,7 @@ export function TimesheetExport({ data, fileName, categories }: { data: Timeshee
   return (
     <div className="print:hidden">
       <DropdownMenu modal={false}>
-        <DropdownMenuTrigger className={btnGhost}>
+        <DropdownMenuTrigger data-find="timesheet-export" className={btnGhost}>
           <Download className="mr-1 inline h-4 w-4" />Export<ChevronDown className="ml-1 inline h-3.5 w-3.5" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-72 rounded-xl p-1.5" onCloseAutoFocus={keepDialogFocus}>

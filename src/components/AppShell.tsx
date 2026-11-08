@@ -2,12 +2,11 @@ import { Link } from "@tanstack/react-router";
 import { useRef, useState, type ReactNode } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useSession } from "@/lib/payroll";
-import { setDataMode, useDataMode } from "@/lib/db/mode";
 import { usePref } from "@/lib/prefs";
 import { ThemeToggle } from "./ThemeToggle";
 import { EditableLabel } from "./EditableLabel";
 import { UndoButtons } from "./UndoButtons";
-import { Cloud, GripVertical, HardDrive, LogOut, Settings } from "lucide-react";
+import { GripVertical, HardDrive, LogOut, Settings } from "lucide-react";
 import { SettingsWindow } from "./SettingsWindow";
 import { openSettings } from "@/lib/settings-window";
 import { CommandPalette } from "./CommandPalette";
@@ -46,7 +45,6 @@ function useNavOrder() {
 
 export function AppShell({ eyebrow, title, actions, children }: { eyebrow: string; title: string; actions?: ReactNode; children: ReactNode }) {
   const { data: session } = useSession();
-  const mode = useDataMode();
   const email = session?.user?.email ?? "";
   const nav = useNavOrder();
   const [dragging, setDragging] = useState<NavTo | null>(null);
@@ -58,7 +56,6 @@ export function AppShell({ eyebrow, title, actions, children }: { eyebrow: strin
 
   // Only disconnects the cloud account; this device's data stays as it is.
   const signOut = async () => {
-    setDataMode("local");
     await supabase.auth.signOut();
   };
 
@@ -137,14 +134,6 @@ export function AppShell({ eyebrow, title, actions, children }: { eyebrow: strin
               {actions}
               <CommandPalette pages={nav.items} />
               <UndoButtons />
-              <Link
-                to="/sync"
-                title={mode === "cloud" ? "Changes are saved straight to your cloud account" : "Changes are saved on this device"}
-                className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium ring-1 ${mode === "cloud" ? "bg-primary/10 text-primary ring-primary/30" : "bg-secondary text-muted-foreground ring-border"}`}
-              >
-                {mode === "cloud" ? <Cloud className="h-3.5 w-3.5" /> : <HardDrive className="h-3.5 w-3.5" />}
-                {mode === "cloud" ? "Editing cloud" : "This device"}
-              </Link>
               <ThemeToggle />
               <button onClick={() => openSettings()} aria-label="Settings" title="Settings (Ctrl+,)"
                 className="grid h-9 w-9 place-items-center rounded-xl bg-secondary text-muted-foreground ring-1 ring-border hover:text-foreground">

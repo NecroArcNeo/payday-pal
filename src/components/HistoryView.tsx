@@ -127,6 +127,7 @@ function OpView({ op, names }: { op: UndoOp; names: Names }) {
 const NOUN: Record<string, string> = {
   employees: "employee", time_records: "time record", pay_adjustments: "extra pay", pay_rates: "pay rate", shifts: "shift",
   employee_field_defs: "category", payroll_settings: "payroll settings", deductions: "deduction", pay_runs: "pay run", pay_run_lines: "pay run line",
+  holidays: "holiday", work_patterns: "weekly pattern",
 };
 /** Bookkeeping columns that don't say anything to the user. */
 const HIDDEN = new Set(["id", "created_at", "updated_at", "user_id", "frozen_pay", "sort_order"]);
@@ -156,6 +157,7 @@ const KEY_FIELDS: Record<string, string[]> = {
   deductions: ["kind", "amount", "repeats", "starts_on", "ends_on"],
   pay_runs: ["paid_on", "note"],
   pay_run_lines: ["gross", "deductions_total", "net"],
+  holidays: ["holiday_date", "multiplier", "paid_hours"],
 };
 const keyFields = (tbl: string, row: Row) => (KEY_FIELDS[tbl] ?? []).filter((f) => row[f] !== null && row[f] !== undefined && row[f] !== "");
 
@@ -172,6 +174,8 @@ const FIELD_NAMES: Record<string, Record<string, [string, string]>> = {
     visible_columns: ["", "Payroll columns"], employee_defaults: ["", "New-employee template"], locked_through: ["", "Locked as paid through"],
     deductions_on: ["", "Deductions on"], pay_runs_on: ["", "Pay runs on"], history_keep_days: ["", "Edit history kept (days)"],
   },
+  holidays: { holiday_date: ["", "Date"], name: ["", "Name"], multiplier: ["", "Rate for hours worked"], paid_hours: ["", "Paid hours when off"] },
+  work_patterns: { name: ["", "Name"], days: ["", "Days"], employee_ids: ["", "People"] },
   deductions: { name: ["", "Name"], kind: ["", "Kind"], amount: ["", "Amount"], repeats: ["", "Repeats"], starts_on: ["", "From"], ends_on: ["", "Until"], note: ["", "Note"] },
 };
 

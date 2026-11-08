@@ -2,6 +2,7 @@ import { db } from "@/lib/db/mode";
 import { askChoice } from "@/lib/choice-prompt";
 import { isoDate, money } from "@/lib/payroll";
 import { describeFrom, planRateChange, type RatePlan, type StoredRate } from "@/lib/pay-rates";
+import { confirmRates } from "@/lib/typo-prompt";
 
 /**
  * Asks from which day a new rate applies (or whether it fixes a typo in the current one), for one or more employees
@@ -42,6 +43,8 @@ export async function writeRateHistory(employeeId: string, plan: RatePlan): Prom
 
 /** The profile's rate change: asks when it applies, writes the history, and gives the rate to save on the employee (null when cancelled or failed). */
 export async function changeEmployeeRate(employeeId: string, history: StoredRate[], oldRate: number, newRate: number): Promise<number | null> {
+  // "250" for "25.0": asked first, before which day it applies.
+  if (!(await confirmRates([{ name: "", oldRate, newRate }]))) return null;
   const when = await askRateDate(`Hourly rate ${money(oldRate)} → ${money(newRate)}`, money(oldRate), history);
   if (!when) return null;
   const plan = planRateChange(history, oldRate, newRate, when);

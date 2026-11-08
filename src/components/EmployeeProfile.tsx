@@ -16,6 +16,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { askConfirm } from "@/lib/choice-prompt";
 import { HistoryList } from "@/components/HistoryView";
 import { DeductionsEditor } from "@/components/DeductionsEditor";
+import { FoldBox } from "@/components/FoldBox";
 
 // An employee's profile in tabs (Details, Pay rates, Pay & hours, History): the profile page shows it full width, and the
 // Employees page in its side panel (EmployeePanel), so both edit the same way. The caller owns which tab is open (the
@@ -129,29 +130,31 @@ function RateHistory({ employeeId, history, currentRate }: { employeeId: string;
     qc.invalidateQueries({ queryKey: ["employees"] });
   };
   return (
-    <div className="glass-panel p-5">
-      <div className="font-display font-extrabold tracking-tight">Pay rate history</div>
-      <p className="mt-1 text-xs text-muted-foreground">Each day is paid the rate in force that day. Change the hourly rate on the Details tab to add one; you'll be asked from which day.</p>
-      {rows.length === 0 ? (
-        <p className="mt-3 text-sm text-muted-foreground">No changes yet: every day is paid {money(currentRate)}.</p>
-      ) : (
-        <ul className="mt-3 divide-y divide-border text-sm">
-          {rows.map((r, i) => (
-            <li key={r.id} className="flex items-center justify-between gap-3 py-2">
-              <span>
-                <span className="font-mono">{money(Number(r.hourly_rate))}</span>
-                <span className="ml-2 text-muted-foreground">{r.effective_from === SINCE_START ? "before that" : `from ${weekday(r.effective_from)} ${r.effective_from}`}</span>
-                {i === 0 && <span className="ml-2 rounded-md bg-secondary px-1.5 py-0.5 text-[11px] text-muted-foreground ring-1 ring-border">current</span>}
-              </span>
-              {rows.length > 1 && (
-                <button type="button" onClick={() => remove(r)} aria-label={`Delete the rate from ${r.effective_from}`} title="Delete this entry (if it was a mistake)" className="text-muted-foreground hover:text-destructive">
-                  <X className="h-4 w-4" />
-                </button>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
+    <FoldBox id="profile:rates" title="Pay rate history">
+      <div className="glass-panel p-5">
+        <div className="font-display font-extrabold tracking-tight">Pay rate history</div>
+        <p className="mt-1 text-xs text-muted-foreground">Each day is paid the rate in force that day. Change the hourly rate on the Details tab to add one; you'll be asked from which day.</p>
+        {rows.length === 0 ? (
+          <p className="mt-3 text-sm text-muted-foreground">No changes yet: every day is paid {money(currentRate)}.</p>
+        ) : (
+          <ul className="mt-3 divide-y divide-border text-sm">
+            {rows.map((r, i) => (
+              <li key={r.id} className="flex items-center justify-between gap-3 py-2">
+                <span>
+                  <span className="font-mono">{money(Number(r.hourly_rate))}</span>
+                  <span className="ml-2 text-muted-foreground">{r.effective_from === SINCE_START ? "before that" : `from ${weekday(r.effective_from)} ${r.effective_from}`}</span>
+                  {i === 0 && <span className="ml-2 rounded-md bg-secondary px-1.5 py-0.5 text-[11px] text-muted-foreground ring-1 ring-border">current</span>}
+                </span>
+                {rows.length > 1 && (
+                  <button type="button" onClick={() => remove(r)} aria-label={`Delete the rate from ${r.effective_from}`} title="Delete this entry (if it was a mistake)" className="text-muted-foreground hover:text-destructive">
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </FoldBox>
   );
 }

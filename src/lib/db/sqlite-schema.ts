@@ -328,8 +328,37 @@ ${remakeUndoTriggers("payroll_settings")}
 ${(["deductions", "pay_runs", "pay_run_lines"] as const).map((t) => `${changeSeqTriggers(t)}\n${undoTriggers(t)}`).join("\n")}
 `;
 
+/**
+ * Schema 14: public holidays, with their own pay rules, and saved weekly patterns.
+ * - A holiday's hours worked pay rate × `multiplier` when that's more than the shift or overtime rate would (never
+ *   stacked; pay.ts). `paid_hours` is what "Add holiday pay" gives people who are off (a record with that pay).
+ * - A pattern is a usual week: for each day Monday to Sunday, off (null) or what's worked (clock times and break, or
+ *   hours, and a shift), plus the people who work it. "Fill weeks" makes those records (src/lib/patterns.ts).
+ */
+const V14 = `
+create table holidays (
+  id text primary key default ${UUID},
+  holiday_date text not null unique ${isDate("holiday_date")},
+  name text not null check (length(trim(name)) between 1 and 60),
+  multiplier real not null default 1 check (multiplier between 1 and 10),
+  paid_hours real not null default 0 check (paid_hours between 0 and 24),
+  created_at text not null default ${NOW}
+);
+
+create table work_patterns (
+  id text primary key default ${UUID},
+  name text not null check (length(trim(name)) between 1 and 60),
+  days text not null default '[null,null,null,null,null,null,null]' ${isJson("days")},
+  employee_ids text not null default '[]' ${isJson("employee_ids")},
+  sort_order integer not null default 0,
+  created_at text not null default ${NOW}
+);
+
+${(["holidays", "work_patterns"] as const).map((t) => `${changeSeqTriggers(t)}\n${undoTriggers(t)}`).join("\n")}
+`;
+
 /** The schema version SQLITE_SCHEMA is. */
 export const SQLITE_BASE_VERSION = 12;
 
 /** Changes after the starting schema, each run once in order. Never edit a shipped entry — append a new one. */
-export const SQLITE_MIGRATIONS: string[] = [V13];
+export const SQLITE_MIGRATIONS: string[] = [V13, V14];

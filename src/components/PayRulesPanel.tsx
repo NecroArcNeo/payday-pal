@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { btnPrimary, inputCls } from "@/components/AppShell";
 import { db } from "@/lib/db/mode";
 import { usePayrollSettings } from "@/lib/payroll";
+import { FoldBox } from "@/components/FoldBox";
 
 /** Settings → Pay rules: when hours become overtime and what overtime pays (payroll_settings, so it syncs). */
 export function PayRulesPanel() {
@@ -32,22 +33,24 @@ export function PayRulesPanel() {
   };
 
   return (
-    <div className="glass-panel space-y-4 p-5">
-      <div>
-        <div className="font-display font-extrabold tracking-tight">Overtime</div>
-        <p className="text-xs text-muted-foreground">Days locked as paid keep the pay they were locked with; these rules apply to every other day.</p>
+    <FoldBox id="settings:pay-rules" title="Overtime">
+      <div className="glass-panel space-y-4 p-5">
+        <div>
+          <div className="font-display font-extrabold tracking-tight">Overtime</div>
+          <p className="text-xs text-muted-foreground">Days locked as paid keep the pay they were locked with; these rules apply to every other day.</p>
+        </div>
+        <div className="flex flex-wrap gap-4">
+          <label><span className="label-mono">Weekday overtime after (hrs / week)</span>
+            <input type="number" step="0.5" className={`${inputCls} mt-1 max-w-[10rem]`} value={threshold} onChange={(e) => setThreshold(e.target.value)} /></label>
+          <label><span className="label-mono">Overtime rate (× hourly)</span>
+            <input type="number" step="0.1" className={`${inputCls} mt-1 max-w-[10rem]`} value={mult} onChange={(e) => setMult(e.target.value)} /></label>
+          <label className="flex items-end gap-2 pb-2 text-sm">
+            <input type="checkbox" checked={weekend} onChange={(e) => setWeekend(e.target.checked)} />
+            Saturday and Sunday hours are always overtime
+          </label>
+        </div>
+        <button onClick={save} disabled={!dirty} className={btnPrimary}>Save pay rules</button>
       </div>
-      <div className="flex flex-wrap gap-4">
-        <label><span className="label-mono">Weekday overtime after (hrs / week)</span>
-          <input type="number" step="0.5" className={`${inputCls} mt-1 max-w-[10rem]`} value={threshold} onChange={(e) => setThreshold(e.target.value)} /></label>
-        <label><span className="label-mono">Overtime rate (× hourly)</span>
-          <input type="number" step="0.1" className={`${inputCls} mt-1 max-w-[10rem]`} value={mult} onChange={(e) => setMult(e.target.value)} /></label>
-        <label className="flex items-end gap-2 pb-2 text-sm">
-          <input type="checkbox" checked={weekend} onChange={(e) => setWeekend(e.target.checked)} />
-          Saturday and Sunday hours are always overtime
-        </label>
-      </div>
-      <button onClick={save} disabled={!dirty} className={btnPrimary}>Save pay rules</button>
-    </div>
+    </FoldBox>
   );
 }

@@ -17,6 +17,14 @@ contextBridge.exposeInMainWorld("meridianDesktop", {
     end: (txId, commit) => call("db:end", txId, commit),
     setAside: () => call("db:set-aside"),
   },
+  scratch: {
+    open: () => call("scratch:open"),
+    query: (sql, params, txId) => call("scratch:query", sql, params ?? [], txId ?? null),
+    exec: (sql, txId) => call("scratch:exec", sql, txId ?? null),
+    begin: () => call("scratch:begin"),
+    end: (txId, commit) => call("scratch:end", txId, commit),
+    close: () => call("scratch:close"),
+  },
   backups: {
     add: (record) => call("backups:add", record),
     get: (id) => call("backups:get", id),

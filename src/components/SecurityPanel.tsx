@@ -13,6 +13,7 @@ import { deleteEscrow, uploadEscrow } from "@/lib/key-escrow";
 import { askPassword } from "@/lib/password-prompt";
 import { askConfirm } from "@/lib/choice-prompt";
 import { useSession } from "@/lib/payroll";
+import { FoldBox } from "@/components/FoldBox";
 
 /**
  * Sync & backup's "Security" section: the data's encryption on this computer, the optional app password, the
@@ -30,7 +31,7 @@ export function SecurityPanel() {
     return (
       <section className="glass-panel space-y-2 p-5">
         <div className="flex items-center gap-2 font-display font-extrabold tracking-tight"><ShieldCheck className="h-4 w-4" /> Security</div>
-        <p className="text-sm text-muted-foreground">Encryption on the device and the app password are part of the desktop app. In a browser, the data is kept in this browser's own storage for this site.</p>
+        <p className="text-sm text-muted-foreground">Encryption on the device and the app password are part of the desktop app.</p>
       </section>
     );
   }
@@ -122,30 +123,32 @@ export function SecurityPanel() {
   ].filter(Boolean).join(" · ");
 
   return (
-    <section className="glass-panel space-y-3 p-5">
-      <div className="flex items-center gap-2 font-display font-extrabold tracking-tight"><ShieldCheck className="h-4 w-4" /> Security</div>
-      <p className="text-sm">{line}</p>
-      {s.encryptError && <p className="text-sm text-destructive">Couldn't encrypt the data yet: {s.encryptError}. The app tries again each time it starts.</p>}
-      <p className="text-xs text-muted-foreground">
-        The payroll database and the automatic backups in the app's folder are encrypted. {s.password
-          ? "The app password is asked when the app starts; without it or the recovery key, nobody can read them."
-          : "Without an app password, Windows unlocks them for your account, so someone who signs in as you can open the app. Add a password to require it at start."}
-      </p>
-      <div className="flex flex-wrap gap-2">
-        <button className={btnPrimary} disabled={busy} onClick={setPassword}>{s.password ? "Change password" : "Set an app password"}</button>
-        {s.password && <button className={btnGhost} disabled={busy} onClick={removePassword}>Remove password</button>}
-        <button className={btnGhost} disabled={busy} onClick={newRecoveryKey}>{s.recovery ? "Make a new recovery key" : "Make a recovery key"}</button>
-        {cloudConfigured && session?.user && (
-          <button className={btnGhost} disabled={busy} onClick={toggleCloud}>{s.cloud ? "Turn off email reset" : "Turn on email reset"}</button>
-        )}
-      </div>
-      <p className="text-xs text-muted-foreground">
-        Not covered: files you download or export (backup files have their own password), and the app's display settings, saved timesheet templates and cloud sign-in on this computer.
-        Encryption protects the data when the app is closed; while it's open, anything running as you can see what the app shows. For the whole disk, turn on BitLocker or Device encryption in Windows.
-        {s.justEncrypted && " Copies of the data from before encryption may remain on the disk until it's reused; folders named database-damaged-… from before also stay unencrypted."}
-      </p>
-      {shownKey && <RecoveryKeyDialog recoveryKey={shownKey} onDone={() => setShownKey(null)} />}
-    </section>
+    <FoldBox id="settings:security" title="Security">
+      <section className="glass-panel space-y-3 p-5">
+        <div className="flex items-center gap-2 font-display font-extrabold tracking-tight"><ShieldCheck className="h-4 w-4" /> Security</div>
+        <p className="text-sm">{line}</p>
+        {s.encryptError && <p className="text-sm text-destructive">Couldn't encrypt the data yet: {s.encryptError}. The app tries again each time it starts.</p>}
+        <p className="text-xs text-muted-foreground">
+          The payroll database and the automatic backups in the app's folder are encrypted. {s.password
+            ? "The app password is asked when the app starts; without it or the recovery key, nobody can read them."
+            : "Without an app password, Windows unlocks them for your account, so someone who signs in as you can open the app. Add a password to require it at start."}
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <button className={btnPrimary} disabled={busy} onClick={setPassword}>{s.password ? "Change password" : "Set an app password"}</button>
+          {s.password && <button className={btnGhost} disabled={busy} onClick={removePassword}>Remove password</button>}
+          <button className={btnGhost} disabled={busy} onClick={newRecoveryKey}>{s.recovery ? "Make a new recovery key" : "Make a recovery key"}</button>
+          {cloudConfigured && session?.user && (
+            <button className={btnGhost} disabled={busy} onClick={toggleCloud}>{s.cloud ? "Turn off email reset" : "Turn on email reset"}</button>
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Not covered: files you download or export (backup files have their own password), and the app's display settings, saved timesheet templates and cloud sign-in on this computer.
+          Encryption protects the data when the app is closed; while it's open, anything running as you can see what the app shows. For the whole disk, turn on BitLocker or Device encryption in Windows.
+          {s.justEncrypted && " Copies of the data from before encryption may remain on the disk until it's reused; folders named database-damaged-… from before also stay unencrypted."}
+        </p>
+        {shownKey && <RecoveryKeyDialog recoveryKey={shownKey} onDone={() => setShownKey(null)} />}
+      </section>
+    </FoldBox>
   );
 }
 

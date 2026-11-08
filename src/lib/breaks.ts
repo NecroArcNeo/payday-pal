@@ -5,6 +5,8 @@ import { usePref } from "@/lib/prefs";
 
 export type BreakUnit = "min" | "h";
 export const MAX_BREAK_MINUTES = 600;
+/** The break a new record, pattern day or shift starts with until the user changes it. */
+export const DEFAULT_BREAK_MINUTES = 60;
 
 export function useBreakUnit() {
   return usePref<BreakUnit>("meridian-break-unit", "min");

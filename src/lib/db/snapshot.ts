@@ -78,7 +78,8 @@ export function diffCounts(a: Snapshot, b: Snapshot): SnapshotCounts {
 const DIFF_NAMES: Record<TableName, [string, string]> = {
   employee_field_defs: ["category", "categories"], shifts: ["shift", "shifts"], employees: ["employee", "employees"],
   pay_rates: ["pay rate change", "pay rate changes"], time_records: ["time record", "time records"], pay_adjustments: ["extra-pay entry", "extra-pay entries"],
-  deductions: ["deduction", "deductions"], pay_runs: ["pay run", "pay runs"], pay_run_lines: ["pay run line", "pay run lines"], payroll_settings: ["", ""],
+  deductions: ["deduction", "deductions"], pay_runs: ["pay run", "pay runs"], pay_run_lines: ["pay run line", "pay run lines"],
+  holidays: ["holiday", "holidays"], work_patterns: ["weekly pattern", "weekly patterns"], payroll_settings: ["", ""],
 };
 /** "2 employees, 40 time records and the payroll settings", or null when nothing differs. */
 export function describeDiff(c: SnapshotCounts): string | null {
@@ -99,7 +100,8 @@ export async function exportSnapshot(sql: Sql, schemaVersion = SCHEMA_VERSION): 
       const { rows } = await sql.query("select 1 from sqlite_master where type = 'table' and name = $1", [t]);
       if (!rows.length) continue;
     }
-    const order = t === "payroll_settings" ? "id" : t === "shifts" ? "sort_order, created_at, id" : t === "pay_run_lines" ? "pay_run_id, employee_name, id" : "created_at, id";
+    const order = t === "payroll_settings" ? "id" : t === "shifts" ? "sort_order, created_at, id" : t === "pay_run_lines" ? "pay_run_id, employee_name, id"
+      : t === "holidays" ? "holiday_date, id" : t === "work_patterns" ? "sort_order, created_at, id" : "created_at, id";
     const { rows } = await sql.query<Row>(`select * from ${t} order by ${order}`);
     data[t] = rows.map((r) => decodeRow(t, r));
   }
@@ -178,6 +180,10 @@ function upgrade(s: Partial<Snapshot>): Partial<Snapshot> {
   // 13 added deductions and pay runs (none yet), and the settings that turn them on (off), restored as their defaults.
   if (s.schema_version === 12 && s.data && typeof s.data === "object") {
     s = { ...s, schema_version: 13, data: { ...(s.data as Record<string, unknown>), deductions: [], pay_runs: [], pay_run_lines: [] } as unknown as Snapshot["data"] };
+  }
+  // 14 added public holidays and weekly patterns (none yet).
+  if (s.schema_version === 13 && s.data && typeof s.data === "object") {
+    s = { ...s, schema_version: 14, data: { ...(s.data as Record<string, unknown>), holidays: [], work_patterns: [] } as unknown as Snapshot["data"] };
   }
   return s;
 }

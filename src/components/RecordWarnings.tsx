@@ -7,6 +7,7 @@ import { fullName, weekday, type Employee, type Shift, type TimeRecord } from "@
 import { usePref } from "@/lib/prefs";
 import type { RateEntry } from "@/lib/pay-rates";
 import { CHECK_NAMES, checkRecords, DEFAULT_LIMITS, validLimits, type CheckLimits, type RecordWarning } from "@/lib/record-checks";
+import { FoldBox } from "@/components/FoldBox";
 
 // The Payroll page's "things to check" panel: records that look like mistakes (src/lib/record-checks.ts), each with a
 // link to it on Time records and "It's fine". Limits and what's been marked fine are remembered on this device.
@@ -65,35 +66,37 @@ export function RecordWarnings({ checked, employees }: { checked: Checked; emplo
 
   const shown = showAll ? open : open.slice(0, SHOWN);
   return (
-    <div className={`glass-panel overflow-hidden ${open.length ? "ring-1 ring-amber-500/40" : ""}`}>
-      <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3">
-        <span className="flex items-center gap-2 text-sm">
-          {open.length
-            ? <><AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" /><span><span className="font-semibold">{open.length} thing{open.length === 1 ? "" : "s"} to check</span> before paying this period. Fix them on Time records, or mark them as fine.</span></>
-            : <><CheckCircle2 className="h-4 w-4 text-primary" /><span className="text-muted-foreground">Nothing looks unusual in this period's records.</span></>}
-        </span>
-        <span className="flex gap-2">
-          {fine.length > 0 && <button type="button" onClick={() => setShowFine((s) => !s)} className={btnGhost}>{showFine ? "Hide" : "Show"} {fine.length} marked fine</button>}
-          <button type="button" onClick={() => setEditing((s) => !s)} className={btnGhost}><Settings2 className="mr-1 inline h-4 w-4" />Limits</button>
-        </span>
+    <FoldBox id="payroll:checks" title="Things to check" summary={open.length ? `${open.length} to look at` : "nothing to look at"}>
+      <div className={`glass-panel overflow-hidden ${open.length ? "ring-1 ring-amber-500/40" : ""}`}>
+        <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3">
+          <span className="flex items-center gap-2 text-sm">
+            {open.length
+              ? <><AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" /><span><span className="font-semibold">{open.length} thing{open.length === 1 ? "" : "s"} to check</span> before paying this period. Fix them on Time records, or mark them as fine.</span></>
+              : <><CheckCircle2 className="h-4 w-4 text-primary" /><span className="text-muted-foreground">Nothing looks unusual in this period's records.</span></>}
+          </span>
+          <span className="flex gap-2">
+            {fine.length > 0 && <button type="button" onClick={() => setShowFine((s) => !s)} className={btnGhost}>{showFine ? "Hide" : "Show"} {fine.length} marked fine</button>}
+            <button type="button" onClick={() => setEditing((s) => !s)} className={btnGhost}><Settings2 className="mr-1 inline h-4 w-4" />Limits</button>
+          </span>
+        </div>
+        {editing && <LimitsEditor onClose={() => setEditing(false)} />}
+        {open.length > 0 && (
+          <ul className="divide-y divide-border border-t border-border">
+            {shown.map((w) => row(w, false))}
+            {open.length > SHOWN && (
+              <li className="px-5 py-2 text-sm">
+                <button type="button" onClick={() => setShowAll((s) => !s)} className="text-muted-foreground underline hover:text-foreground">{showAll ? "Show fewer" : `Show all ${open.length}`}</button>
+              </li>
+            )}
+          </ul>
+        )}
+        {showFine && fine.length > 0 && (
+          <ul className="divide-y divide-border border-t border-border bg-secondary/40">
+            {fine.map((w) => row(w, true))}
+          </ul>
+        )}
       </div>
-      {editing && <LimitsEditor onClose={() => setEditing(false)} />}
-      {open.length > 0 && (
-        <ul className="divide-y divide-border border-t border-border">
-          {shown.map((w) => row(w, false))}
-          {open.length > SHOWN && (
-            <li className="px-5 py-2 text-sm">
-              <button type="button" onClick={() => setShowAll((s) => !s)} className="text-muted-foreground underline hover:text-foreground">{showAll ? "Show fewer" : `Show all ${open.length}`}</button>
-            </li>
-          )}
-        </ul>
-      )}
-      {showFine && fine.length > 0 && (
-        <ul className="divide-y divide-border border-t border-border bg-secondary/40">
-          {fine.map((w) => row(w, true))}
-        </ul>
-      )}
-    </div>
+    </FoldBox>
   );
 }
 

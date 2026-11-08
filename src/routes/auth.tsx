@@ -3,7 +3,6 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { cloudConfigured } from "@/lib/db/mode";
-import { desktop } from "@/lib/desktop";
 import { btnPrimary, inputCls } from "@/components/AppShell";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
@@ -43,17 +42,11 @@ function AuthPage() {
     const { error } =
       mode === "in"
         ? await supabase.auth.signInWithPassword({ email, password })
-        // The desktop app's address can't be opened from an email, so its confirmation link goes to the project's Site URL.
-        : await supabase.auth.signUp({ email, password, options: desktop ? {} : { emailRedirectTo: window.location.origin + "/sync" } });
+        // The app's address can't be opened from an email, so the confirmation link goes to the project's Site URL.
+        : await supabase.auth.signUp({ email, password });
     setBusy(false);
     if (error) { toast.error(error.message); return; }
-    if (mode === "up") toast.success(desktop ? "Check your email and confirm your account, then sign in here." : "Check your email to confirm your account.");
-  };
-
-  // Needs the Google provider enabled in the Supabase dashboard (Authentication → Providers).
-  const google = async () => {
-    const { error } = await supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: window.location.origin + "/sync" } });
-    if (error) toast.error(error.message);
+    if (mode === "up") toast.success("Check your email and confirm your account, then sign in here.");
   };
 
   return (
@@ -71,12 +64,6 @@ function AuthPage() {
           <input className={inputCls} type="password" required minLength={6} placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} />
           <button disabled={busy || !cloudConfigured} className={`${btnPrimary} w-full`}>{mode === "in" ? "Sign in" : "Sign up"}</button>
         </form>
-        {/* Google sends the user back to a web address, which can't reach the desktop app. */}
-        {!desktop && (
-          <button onClick={google} disabled={!cloudConfigured} className="mt-3 w-full rounded-xl bg-secondary px-4 py-2 text-sm font-medium ring-1 ring-border hover:bg-accent disabled:opacity-50">
-            Continue with Google
-          </button>
-        )}
         <button onClick={() => setMode(mode === "in" ? "up" : "in")} className="mt-4 w-full text-center text-xs text-muted-foreground hover:text-foreground">
           {mode === "in" ? "No account? Sign up" : "Have an account? Sign in"}
         </button>

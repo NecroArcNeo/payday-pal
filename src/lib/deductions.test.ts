@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deductionsFor, weeksTouching, type DeductionRule } from "./deductions";
+import { deductionsFor, planBulkDeduction, weeksTouching, type DeductionRule } from "./deductions";
 
 const d = (over: Partial<DeductionRule>): DeductionRule => ({ id: over.name ?? "x", name: "x", kind: "fixed", amount: 0, repeats: "period", starts_on: null, ends_on: null, ...over });
 // Mon 2 Nov – Sun 15 Nov 2026: two whole weeks.
@@ -40,5 +40,24 @@ describe("deductions", () => {
 
   it("can leave net pay below zero, never hiding it", () => {
     expect(deductionsFor([d({ name: "Advance", amount: 300 })], 120, FROM, TO).net).toBe(-180);
+  });
+});
+
+describe("adding a deduction to several people", () => {
+  const existing = new Map([["ann", [{ name: "Health" }, { name: "tax " }]], ["bob", []]]);
+  const row = { name: "Tax", kind: "percent", amount: 10 };
+
+  it("gives each person a row after their own deductions, and says who already has one of that name", () => {
+    const plan = planBulkDeduction(["ann", "bob", "cy"], existing, row, false);
+    expect(plan.already).toEqual(["ann"]);
+    expect(plan.rows).toEqual([
+      { ...row, employee_id: "ann", sort_order: 2 },
+      { ...row, employee_id: "bob", sort_order: 0 },
+      { ...row, employee_id: "cy", sort_order: 0 },
+    ]);
+  });
+
+  it("can leave out the people who already have it", () => {
+    expect(planBulkDeduction(["ann", "bob"], existing, row, true).rows.map((r) => r.employee_id)).toEqual(["bob"]);
   });
 });

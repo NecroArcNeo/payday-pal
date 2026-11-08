@@ -1,4 +1,4 @@
-import { createFileRoute, Outlet } from "@tanstack/react-router";
+import { createFileRoute, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { toast } from "sonner";
@@ -8,10 +8,12 @@ import { RecoveryScreen } from "@/components/RecoveryScreen";
 import { LockScreen } from "@/components/LockScreen";
 import { maybeAutoBackup } from "@/lib/db/sync";
 import { pruneHistory } from "@/lib/db/history";
+import { checkNewestBackup } from "@/lib/db/backup-check";
+import { warnBackupCheck } from "@/components/BackupCheck";
 import { localStore } from "@/lib/db/store";
-import { setDataMode, useDataMode } from "@/lib/db/mode";
-import { useSession } from "@/lib/payroll";
 import { desktop, SECURITY_STATUS_KEY, type SecurityStatus } from "@/lib/desktop";
+import { getPref, setPref } from "@/lib/prefs";
+import { LAST_PLACE, placeToReopen, placeWorthKeeping } from "@/lib/last-place";
 
 // No sign-in needed: the app runs on this device's database. (The folder name
 // predates that; renaming it would only churn the route tree.)
@@ -37,6 +39,16 @@ function autoBackup(everyMs?: number) {
     })
     .finally(() => { backingUp = null; });
   return backingUp;
+}
+
+/** How long after opening the first restore check may run: not while the app is starting. */
+const FIRST_CHECK_MS = 2 * 60 * 1000;
+
+/** The daily restore check of the newest backup (once a day at most); a failure is said at once. */
+function checkBackups() {
+  checkNewestBackup()
+    .then((r) => { if (r && !r.ok) warnBackupCheck(r); })
+    .catch((e: Error) => console.error("Backup check couldn't run:", e));
 }
 
 /** Removes edit history older than Settings → Edit history keeps (nothing, by default). */
@@ -107,19 +119,10 @@ function DataGate() {
 
   useEffect(() => {
     if (!ready.isSuccess) return;
-    const timer = setInterval(() => void autoBackup(), AUTO_BACKUP_CHECK_MS);
-    return () => clearInterval(timer);
+    const timer = setInterval(() => { void autoBackup().then(checkBackups); }, AUTO_BACKUP_CHECK_MS);
+    const first = setTimeout(checkBackups, FIRST_CHECK_MS);
+    return () => { clearInterval(timer); clearTimeout(first); };
   }, [ready.isSuccess]);
-
-  // Cloud mode needs a signed-in account; without one, fall back to this device's data.
-  const mode = useDataMode();
-  const { data: session, isSuccess } = useSession();
-  useEffect(() => {
-    if (mode === "cloud" && isSuccess && !session?.user) {
-      setDataMode("local");
-      toast.info("Signed out — now showing the data on this device.");
-    }
-  }, [mode, isSuccess, session]);
 
   if (!desktop) return <NotDesktop />;
   if (security.data && security.data.state !== "unlocked") {
@@ -130,7 +133,25 @@ function DataGate() {
     return <div className="flex min-h-screen items-center justify-center bg-background text-sm text-muted-foreground">Opening your payroll data…</div>;
   }
   if (ready.isError) return <RecoveryScreen error={ready.error} />;
-  return <Outlet />;
+  return <><KeepPlace /><Outlet /></>;
+}
+
+/** Whether this window already went back to where it was left (once per start; a reload keeps its own address). */
+let reopened = false;
+
+/** Remembers the page shown (with its address's settings), and opens on it again when the app starts on the Dashboard. */
+function KeepPlace() {
+  const href = useRouterState({ select: (s) => s.location.href });
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (!reopened) {
+      reopened = true;
+      const back = placeToReopen(href, getPref<unknown>(LAST_PLACE, null));
+      if (back) { void navigate({ href: back, replace: true }); return; }
+    }
+    if (placeWorthKeeping(href)) setPref(LAST_PLACE, href);
+  }, [href, navigate]);
+  return null;
 }
 
 /** Opened in a plain browser tab: the data lives in the desktop app, so say where to find it. */

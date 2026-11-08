@@ -6,7 +6,7 @@ import { ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSepar
 import { askChoice } from "@/lib/choice-prompt";
 import { planNextWeek } from "@/lib/copy-week";
 import { backupBefore } from "@/lib/db/safety";
-import { db, storeFor, useDataMode } from "@/lib/db/mode";
+import { db } from "@/lib/db/mode";
 import { addDays, fullName, weekday, type Employee, type RecordWithEmp } from "@/lib/payroll";
 import { describeRecord, sameDayClashes } from "@/lib/record-clash";
 
@@ -63,7 +63,6 @@ export function RecordMenu({ record, employees, selection, lockedThrough, onOpen
  * backed up first, like Copy a week, and go in one insert, so one Ctrl+Z takes them all back.
  */
 export function useCopyToNextWeek() {
-  const mode = useDataMode();
   const qc = useQueryClient();
   return async (records: RecordWithEmp[], employees: ReadonlyMap<string, Employee>, lockedThrough: string | null) => {
     const nameOf = (id: string) => { const e = employees.get(id); return e ? fullName(e) : "This person"; };
@@ -72,7 +71,7 @@ export function useCopyToNextWeek() {
     const resigned = records.length - working.length;
     if (!working.length) { toast.error(resigned === 1 ? `${nameOf(records[0]!.employee_id)} has resigned, so nothing was copied.` : "Everyone chosen has resigned, so nothing was copied."); return; }
     const days = working.map((r) => addDays(r.work_date, 7)).sort();
-    const existing = await storeFor(mode).listRecordKeys(days[0]!, days[days.length - 1]!);
+    const existing = await db().listRecordKeys(days[0]!, days[days.length - 1]!);
     const plan = planNextWeek(working, lockedThrough, existing);
     const one = records.length === 1 ? records[0]! : null;
     if (!plan.add.length) {

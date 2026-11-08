@@ -102,7 +102,7 @@ export function readWorkbook(data: ArrayBuffer, fileName: string): Sheet[] {
   return wb.SheetNames.map((name) => readSheet(name, wb.Sheets[name]!));
 }
 
-function readSheet(name: string, ws: XLSX.WorkSheet): Sheet {
+export function readSheet(name: string, ws: XLSX.WorkSheet): Sheet {
   const ref = ws["!ref"];
   if (!ref) return { name, rowOffset: 0, colOffset: 0, grid: [], width: 0 };
   const range = XLSX.utils.decode_range(ref);

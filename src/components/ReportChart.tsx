@@ -7,11 +7,11 @@ import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, type Cha
 import { StatCard, btnGhost, inputCls } from "@/components/AppShell";
 import { DataTable } from "@/components/DataTable";
 import { DateInput } from "@/components/DateInput";
-import { storeFor, useDataMode } from "@/lib/db/mode";
+import { db } from "@/lib/db/mode";
 import { centsAddingUp } from "@/lib/amount";
 import { downloadBlob } from "@/lib/db/backups";
-import { isoDate, money, useAdjustments, useEmployees, usePayRates, usePayrollSettings, useShifts } from "@/lib/payroll";
-import { payByRecord, weekEnd, weekStart } from "@/lib/pay";
+import { isoDate, money, useAdjustments, useEmployees, usePayRates, usePayrollSettings, useShifts, useHolidays } from "@/lib/payroll";
+import { payByRecord, weekEnd, weekStart, payRules } from "@/lib/pay";
 import { usePref } from "@/lib/prefs";
 import { SkeletonBlock } from "@/components/Loading";
 import { TallBox } from "@/components/ResizeHandle";
@@ -22,6 +22,7 @@ import {
 import { SortTh, TableSort, useTableSort } from "@/components/SortControl";
 import { sortTable, type SortColumns } from "@/lib/table-sort";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { FoldBox } from "@/components/FoldBox";
 
 // A chart of one metric over any range, with the choices to change it, summary cards and the numbers as a table.
 // The Reports page, the employee profile and the Dashboard all use it; the maths is buildReport (src/lib/report.ts).
@@ -80,11 +81,10 @@ function validSettings(s: Partial<ReportSettings> | null | undefined, base: Repo
 
 /** Records for whole Mon–Sun weeks around [from, to] (weekly overtime and salary need the whole week), and extra pay. */
 function useReportData(from: string, to: string) {
-  const mode = useDataMode();
   const loadFrom = weekStart(from), loadTo = weekEnd(to);
   const records = useQuery({
-    queryKey: ["records", "report", loadFrom, loadTo, mode],
-    queryFn: () => storeFor(mode).listRecordsMatching({ from: loadFrom, to: loadTo }),
+    queryKey: ["records", "report", loadFrom, loadTo],
+    queryFn: () => db().listRecordsMatching({ from: loadFrom, to: loadTo }),
     placeholderData: keepPreviousData,
   });
   const adjustments = useAdjustments(from, to);
@@ -137,12 +137,13 @@ export function ReportChart({ prefKey, employeeIds, single = false, compact = fa
   const { data: shifts } = useShifts();
   const { data: rates } = usePayRates();
   const { data: settings } = usePayrollSettings();
+  const { data: holidays } = useHolidays();
   const idsKey = employeeIds?.join(",") ?? "";
 
   const result = useMemo(() => {
     if (!now.records || !now.adjustments || !then.records || !then.adjustments || !stNow.records || !stNow.adjustments || !stThen.records || !stThen.adjustments) return null;
-    if (!employees || !shifts || !settings) return null;
-    const rules = { threshold: settings.ot_threshold, otMultiplier: settings.ot_multiplier, weekendOvertime: settings.weekend_overtime };
+    if (!employees || !shifts || !settings || !holidays) return null;
+    const rules = payRules(settings, holidays);
     const ids = idsKey ? idsKey.split(",") : undefined;
     const common = { employees, shifts, rates, rules, groupBy, metric: s.metric, splitBy: split, employeeIds: ids };
     // Pay per record is the slow part; loads that are the same (statistics following the chart) share it.
@@ -158,7 +159,7 @@ export function ReportChart({ prefKey, employeeIds, single = false, compact = fa
     const flat = { groupBy: statsPer, splitBy: "none" as const };
     const stats = compact ? null : { now: report(stNow.records, stNow.adjustments, st, flat), before: report(stThen.records, stThen.adjustments, stBefore, flat) };
     return { now: a, before: b, rows: comparing && b ? compareReports(a, b) : null, stats };
-  }, [now.records, now.adjustments, then.records, then.adjustments, stNow.records, stNow.adjustments, stThen.records, stThen.adjustments, employees, shifts, rates, settings, idsKey, groupBy, s.metric, split, from, to, against.from, against.to, st.from, st.to, stBefore.from, stBefore.to, statsPer, compact, comparing]);
+  }, [now.records, now.adjustments, then.records, then.adjustments, stNow.records, stNow.adjustments, stThen.records, stThen.adjustments, employees, shifts, rates, settings, holidays, idsKey, groupBy, s.metric, split, from, to, against.from, against.to, st.from, st.to, stBefore.from, stBefore.to, statsPer, compact, comparing]);
 
   const chartBox = useRef<HTMLDivElement>(null);
   const [saving, setSaving] = useState(false);
@@ -318,13 +319,15 @@ export function ReportChart({ prefKey, employeeIds, single = false, compact = fa
           beforeLabel={statsOwn ? "Same length before" : s.compare === "off" || s.compare === "previous" ? "Previous period" : s.compare === "last_year" ? "Same time last year" : "Compared period"}
           beforeRange={stBefore} selectable={selectable} />
       )}
-      <div className="glass-panel p-4">
-        <div className="mb-2 flex justify-end gap-2">
-          <button type="button" onClick={() => save("png")} disabled={saving} className={btnGhost} title="Save the chart as a PNG picture">Save picture</button>
-          <button type="button" onClick={() => save("pdf")} disabled={saving} className={btnGhost} title="Save the chart and its numbers as a PDF">Save PDF</button>
+      <FoldBox id={`report:${prefKey}:chart`} title="Chart" off={compact}>
+        <div className="glass-panel p-4">
+          <div className="mb-2 flex justify-end gap-2">
+            <button type="button" onClick={() => save("png")} disabled={saving} className={btnGhost} title="Save the chart as a PNG picture">Save picture</button>
+            <button type="button" onClick={() => save("pdf")} disabled={saving} className={btnGhost} title="Save the chart and its numbers as a PDF">Save PDF</button>
+          </div>
+          {body}
         </div>
-        {body}
-      </div>
+      </FoldBox>
       <NumbersTable grid={grid} unit={unit} prefKey={prefKey} fileName={fileName} />
     </div>
   );
@@ -487,32 +490,34 @@ function NumbersTable({ grid, unit, prefKey, fileName }: { grid: Grid; unit: Uni
   };
   const align = (i: number) => (grid.right.includes(i) ? "text-right" : "text-left font-body");
   return (
-    <div className="glass-panel overflow-hidden">
-      <div className="flex items-center justify-between border-b border-border px-5 py-3">
-        <span className="font-display font-extrabold tracking-tight">The numbers</span>
-        <button type="button" onClick={exportCsv} className={btnGhost}>Export CSV</button>
-      </div>
-      <div className="max-h-[28rem] overflow-auto">
-        <DataTable id={`report-${prefKey}`} className="w-full text-sm">
-          <thead>
-            <TableSort sort={sort} columns={columns} onSort={setSort}>
-            <tr className="border-b border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
-              {grid.head.map((h, i) => <SortTh k={`${i}|${h}`} key={i} className={`px-4 py-3 font-medium ${grid.right.includes(i) ? "text-right" : "text-left"}`}>{h}</SortTh>)}
-            </tr>
-            </TableSort>
-          </thead>
-          <tbody className="font-mono text-[13px]">
-            {order.map((ri) => grid.rows[ri]!).map((r, k) => (
-              <tr key={order[k]} className="border-b border-border last:border-0 hover:bg-secondary" title={grid.titles[order[k]!]}>
-                {r.map((c, i) => <td key={i} className={`px-4 py-2 ${align(i)}`}>{shown(c, unit)}</td>)}
+    <FoldBox id={`report:${prefKey}:numbers`} title="The numbers">
+      <div className="glass-panel overflow-hidden">
+        <div className="flex items-center justify-between border-b border-border px-5 py-3">
+          <span className="font-display font-extrabold tracking-tight">The numbers</span>
+          <button type="button" onClick={exportCsv} className={btnGhost}>Export CSV</button>
+        </div>
+        <div className="max-h-[28rem] overflow-auto">
+          <DataTable id={`report-${prefKey}`} className="w-full text-sm">
+            <thead>
+              <TableSort sort={sort} columns={columns} onSort={setSort}>
+              <tr className="border-b border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
+                {grid.head.map((h, i) => <SortTh k={`${i}|${h}`} key={i} className={`px-4 py-3 font-medium ${grid.right.includes(i) ? "text-right" : "text-left"}`}>{h}</SortTh>)}
               </tr>
-            ))}
-            <tr className="border-t-2 border-border font-semibold">
-              {grid.foot.map((c, i) => <td key={i} className={`px-4 py-2 ${align(i)}`}>{shown(c, unit)}</td>)}
-            </tr>
-          </tbody>
-        </DataTable>
+              </TableSort>
+            </thead>
+            <tbody className="font-mono text-[13px]">
+              {order.map((ri) => grid.rows[ri]!).map((r, k) => (
+                <tr key={order[k]} className="border-b border-border last:border-0 hover:bg-secondary" title={grid.titles[order[k]!]}>
+                  {r.map((c, i) => <td key={i} className={`px-4 py-2 ${align(i)}`}>{shown(c, unit)}</td>)}
+                </tr>
+              ))}
+              <tr className="border-t-2 border-border font-semibold">
+                {grid.foot.map((c, i) => <td key={i} className={`px-4 py-2 ${align(i)}`}>{shown(c, unit)}</td>)}
+              </tr>
+            </tbody>
+          </DataTable>
+        </div>
       </div>
-    </div>
+    </FoldBox>
   );
 }

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Redo2, Undo2 } from "lucide-react";
-import { useDataMode } from "@/lib/db/mode";
 import { localUndo } from "@/lib/db/undo";
 import { modalOpen } from "@/lib/choice-prompt";
 
@@ -20,12 +19,10 @@ function typingIn(target: EventTarget | null) {
  */
 export function UndoButtons() {
   const qc = useQueryClient();
-  const mode = useDataMode();
   useSyncExternalStore(localUndo.subscribe, localUndo.getVersion, () => 0);
   const busy = useRef(false);
 
   const run = useCallback(async (what: "undo" | "redo") => {
-    if (mode !== "local") { toast.info("Undo works on this device's data. Changes made straight to the cloud can't be undone here."); return; }
     if (busy.current) return;
     busy.current = true;
     try {
@@ -39,7 +36,7 @@ export function UndoButtons() {
       busy.current = false;
       void qc.invalidateQueries();
     }
-  }, [mode, qc]);
+  }, [qc]);
 
   useEffect(() => {
     // Not while a dialog, a question (askConfirm waits partway through a change) or a menu is open, except a non-modal
@@ -56,7 +53,6 @@ export function UndoButtons() {
     return () => window.removeEventListener("keydown", onKey);
   }, [run]);
 
-  if (mode !== "local") return null;
   const undo = localUndo.nextUndo, redo = localUndo.nextRedo;
   const btn = "rounded-lg p-1.5 text-muted-foreground ring-1 ring-border hover:text-foreground disabled:opacity-40 disabled:hover:text-muted-foreground";
   return (

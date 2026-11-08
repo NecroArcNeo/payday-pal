@@ -19,6 +19,7 @@ import { storedRun } from "@/lib/payslip";
 import { isoDate, money, usePayRuns, usePayrollSettings, weekday, type PayRun } from "@/lib/payroll";
 import { sortTable, type SortColumns } from "@/lib/table-sort";
 import type { Json } from "@/integrations/supabase/types";
+import { FoldBox } from "@/components/FoldBox";
 
 // Pay runs on the Payroll page (when Settings → Features has them on): "Record pay run" saves the period as paid
 // (src/lib/pay-runs.ts) and locks its days; the list below shows every run, and a run opens in a side panel with
@@ -45,7 +46,7 @@ export function RecordPayRun({ from, to, lines, warnings }: { from: string; to: 
   }
   return (
     <>
-      <button type="button" className={btnPrimary} onClick={() => setOpen(true)} disabled={!lines.length} title={lines.length ? "Save this period as paid and lock its days" : "No one is paid in this period"}>
+      <button type="button" data-find="record-pay-run" className={btnPrimary} onClick={() => setOpen(true)} disabled={!lines.length} title={lines.length ? "Save this period as paid and lock its days" : "No one is paid in this period"}>
         <Receipt className="mr-1 inline h-4 w-4" />Record pay run…
       </button>
       {open && <RecordDialog from={from} to={to} lines={lines} warnings={warnings} runs={runs} onClose={() => setOpen(false)} />}
@@ -148,45 +149,47 @@ export function PayRunsList({ onShow }: { onShow: (from: string, to: string) => 
   }, [openId]);
   const th = "px-3 py-2.5 font-medium";
   return (
-    <div className="glass-panel overflow-hidden">
-      <div className="border-b border-border px-5 py-4">
-        <div className="font-display font-extrabold tracking-tight">Pay runs</div>
-        <p className="text-xs text-muted-foreground">Each period you've recorded as paid, with what each person was paid then. Click one to see its people and export their payslips.</p>
+    <FoldBox id="payroll:runs" title="Pay runs">
+      <div className="glass-panel overflow-hidden">
+        <div className="border-b border-border px-5 py-4">
+          <div className="font-display font-extrabold tracking-tight">Pay runs</div>
+          <p className="text-xs text-muted-foreground">Each period you've recorded as paid, with what each person was paid then. Click one to see its people and export their payslips.</p>
+        </div>
+        {isSuccess && rows.length === 0 ? (
+          <p className="px-5 py-4 text-sm text-muted-foreground">No pay runs yet. Pick a period above and use Record pay run once it's paid.</p>
+        ) : (
+          <DataTable id="pay-runs" className="w-full text-sm">
+            <thead>
+              <TableSort sort={sort} columns={RUN_COLUMNS} onSort={setSort}>
+                <tr className="font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
+                  <SortTh k="period" className={`${th} pl-5 text-left`}>Period</SortTh>
+                  <SortTh k="paid_on" className={`${th} text-left`}>Paid on</SortTh>
+                  <SortTh k="people" className={`${th} text-right`}>People</SortTh>
+                  <SortTh k="gross" className={`${th} text-right`}>Gross</SortTh>
+                  <SortTh k="deductions" className={`${th} text-right`}>Deductions</SortTh>
+                  <SortTh k="net" className={`${th} text-right`}>Net</SortTh>
+                  <SortTh k="note" className={`${th} pr-5 text-left`}>Note</SortTh>
+                </tr>
+              </TableSort>
+            </thead>
+            <tbody className="font-mono text-[13px]">
+              {rows.map((r) => (
+                <tr key={r.id} onClick={() => setOpenId(r.id)} className={`cursor-pointer border-t border-border hover:bg-secondary ${r.id === openId ? "bg-secondary" : ""}`}>
+                  <td className="px-5 py-2">{r.period_from} – {r.period_to}</td>
+                  <td className="px-3 py-2">{r.paid_on}</td>
+                  <td className="px-3 py-2 text-right">{r.totals.people}</td>
+                  <td className="px-3 py-2 text-right">{money(r.totals.gross)}</td>
+                  <td className="px-3 py-2 text-right">{money(r.totals.deductions)}</td>
+                  <td className="px-3 py-2 text-right font-semibold">{money(r.totals.net)}</td>
+                  <td className="px-3 py-2 pr-5 font-body text-muted-foreground">{r.note ?? ""}</td>
+                </tr>
+              ))}
+            </tbody>
+          </DataTable>
+        )}
+        {opened && <PayRunPanel run={opened} onClose={() => setOpenId(null)} onShow={onShow} />}
       </div>
-      {isSuccess && rows.length === 0 ? (
-        <p className="px-5 py-4 text-sm text-muted-foreground">No pay runs yet. Pick a period above and use Record pay run once it's paid.</p>
-      ) : (
-        <DataTable id="pay-runs" className="w-full text-sm">
-          <thead>
-            <TableSort sort={sort} columns={RUN_COLUMNS} onSort={setSort}>
-              <tr className="font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
-                <SortTh k="period" className={`${th} pl-5 text-left`}>Period</SortTh>
-                <SortTh k="paid_on" className={`${th} text-left`}>Paid on</SortTh>
-                <SortTh k="people" className={`${th} text-right`}>People</SortTh>
-                <SortTh k="gross" className={`${th} text-right`}>Gross</SortTh>
-                <SortTh k="deductions" className={`${th} text-right`}>Deductions</SortTh>
-                <SortTh k="net" className={`${th} text-right`}>Net</SortTh>
-                <SortTh k="note" className={`${th} pr-5 text-left`}>Note</SortTh>
-              </tr>
-            </TableSort>
-          </thead>
-          <tbody className="font-mono text-[13px]">
-            {rows.map((r) => (
-              <tr key={r.id} onClick={() => setOpenId(r.id)} className={`cursor-pointer border-t border-border hover:bg-secondary ${r.id === openId ? "bg-secondary" : ""}`}>
-                <td className="px-5 py-2">{r.period_from} – {r.period_to}</td>
-                <td className="px-3 py-2">{r.paid_on}</td>
-                <td className="px-3 py-2 text-right">{r.totals.people}</td>
-                <td className="px-3 py-2 text-right">{money(r.totals.gross)}</td>
-                <td className="px-3 py-2 text-right">{money(r.totals.deductions)}</td>
-                <td className="px-3 py-2 text-right font-semibold">{money(r.totals.net)}</td>
-                <td className="px-3 py-2 pr-5 font-body text-muted-foreground">{r.note ?? ""}</td>
-              </tr>
-            ))}
-          </tbody>
-        </DataTable>
-      )}
-      {opened && <PayRunPanel run={opened} onClose={() => setOpenId(null)} onShow={onShow} />}
-    </div>
+    </FoldBox>
   );
 }
 

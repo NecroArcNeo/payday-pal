@@ -22,17 +22,21 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { openDatabase, runQuery, transactionGate } from "./database.mjs";
 import * as keyring from "./keyring.mjs";
 import * as copies from "./backup-copy.mjs";
+import { scratch } from "./scratch-db.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const CLIENT_DIR = path.join(here, "..", "dist", "client");
 const ORIGIN = "app://meridian";
 // `npm run dev`: the pages come from the Vite dev server (hot reload) instead of dist/client.
-const DEV_URL = process.env.MERIDIAN_DEV_URL;
+const DEV_URL = process.env.MERIDIAN_DEV_URL || undefined; // an empty variable means "not set"
 const PAGE_ORIGIN = DEV_URL ? new URL(DEV_URL).origin : ORIGIN;
 
 app.setName("KoPayroll");
 // MERIDIAN_HOME puts everything in one other folder (for testing, or running from a USB stick).
 const HOME = process.env.MERIDIAN_HOME;
+// MERIDIAN_HIDDEN=1 never shows the window (automated tests running in the background). Only with MERIDIAN_HOME, so
+// the real data's app can't start invisible.
+const HIDDEN = Boolean(HOME && process.env.MERIDIAN_HIDDEN);
 // The same folder in development and when installed (the package name would otherwise pick it in development).
 app.setPath("userData", HOME ? path.join(HOME, "app") : appFolder());
 
@@ -599,6 +603,14 @@ handle("backup-copy:now", async () => {
 handle("desktop:info", () => ({ dataDir: DATA_DIR, backupDir: BACKUP_DIR, computerName: os.hostname() }));
 handle("desktop:session", () => ({ uncleanSince: lastSession?.open ? lastSession.startedAt ?? null : null, movedOldDatabase }));
 handle("db:set-aside", () => setAsideDatabase());
+// A scratch database in memory (in a worker thread) that the page restores a backup into to check it restores.
+// Only while unlocked: what goes in is the payroll data.
+for (const call of ["open", "query", "exec", "begin", "end", "close"]) {
+  handle(`scratch:${call}`, async (_e, ...args) => {
+    if (call !== "close") await requireUnlocked();
+    return scratch(call, ...args);
+  });
+}
 handle("desktop:open-folder", async (_e, which) => {
   if (which === "copy" && !copySettings) throw new Error("Copies aren't turned on");
   const dir = which === "backups" ? BACKUP_DIR : which === "copy" ? copySettings.folder : DATA_DIR;
@@ -647,9 +659,10 @@ function createWindow() {
     title: "KoPayroll",
     icon: path.join(here, "..", "build", "icon.ico"),
     show: false,
-    webPreferences: { preload: path.join(here, "preload.cjs"), contextIsolation: true, sandbox: true, nodeIntegration: false },
+    // A hidden window would otherwise have its timers slowed down, as a background tab's are.
+    webPreferences: { preload: path.join(here, "preload.cjs"), contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: !HIDDEN },
   });
-  win.once("ready-to-show", () => win.show());
+  if (!HIDDEN) win.once("ready-to-show", () => win.show());
   // Give the page a chance to back up its last changes. It only gets asked if it said it's listening,
   // and the window closes anyway if it takes longer than CLOSE_WAIT_MS.
   win.on("close", (e) => {
@@ -676,7 +689,7 @@ function createWindow() {
 }
 
 app.on("second-instance", () => {
-  if (!win) return;
+  if (!win || HIDDEN) return;
   if (win.isMinimized()) win.restore();
   win.focus();
 });

@@ -5,10 +5,12 @@ import { Plus, Trash2 } from "lucide-react";
 import { btnGhost, btnPrimary, inputCls } from "@/components/AppShell";
 import { DateInput } from "@/components/DateInput";
 import { db } from "@/lib/db/mode";
-import { askConfirm } from "@/lib/choice-prompt";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { askChoice, askConfirm } from "@/lib/choice-prompt";
 import { readAmount } from "@/lib/amount";
-import { DEDUCTION_KINDS, DEDUCTION_REPEATS, deductionsFor } from "@/lib/deductions";
-import { currentWeek, money, useDeductions, type Deduction } from "@/lib/payroll";
+import { DEDUCTION_KINDS, DEDUCTION_REPEATS, deductionsFor, planBulkDeduction } from "@/lib/deductions";
+import { currentWeek, fullName, money, useDeductions, type Deduction, type Employee } from "@/lib/payroll";
+import { FoldBox } from "@/components/FoldBox";
 
 type Draft = { name: string; kind: string; amount: string; repeats: string; starts_on: string; ends_on: string; note: string };
 const blank: Draft = { name: "", kind: "fixed", amount: "", repeats: "period", starts_on: "", ends_on: "", note: "" };
@@ -63,23 +65,90 @@ export function DeductionsEditor({ employeeId }: { employeeId: string }) {
   };
 
   return (
-    <div className="glass-panel overflow-hidden">
-      <div className="border-b border-border px-5 py-4">
-        <div className="font-display font-extrabold tracking-tight">Deductions</div>
-        <p className="text-xs text-muted-foreground">
-          Taken from gross pay, in this order, to give net pay. A fixed amount is taken once per pay period you pay (the period on the Payroll page or a pay run), once for each Mon–Sun week in it, or once on a date; a percent is of the period's gross pay. Leave the dates empty for "always".
-        </p>
+    <FoldBox id="profile:deductions" title="Deductions">
+      <div className="glass-panel overflow-hidden">
+        <div className="border-b border-border px-5 py-4">
+          <div className="font-display font-extrabold tracking-tight">Deductions</div>
+          <p className="text-xs text-muted-foreground">
+            Taken from gross pay, in this order, to give net pay. A fixed amount is taken once per pay period you pay (the period on the Payroll page or a pay run), once for each Mon–Sun week in it, or once on a date; a percent is of the period's gross pay. Leave the dates empty for "always".
+          </p>
+        </div>
+        <div className="divide-y divide-border">
+          {list.map((d) => <DeductionRow key={d.id} deduction={d} onSave={save} onRemove={remove} />)}
+          {list.length === 0 && <div className="px-5 py-4 text-sm text-muted-foreground">No deductions: net pay is the same as gross pay.</div>}
+        </div>
+        <form onSubmit={add} className="border-t border-border p-5">
+          <div className="label-mono mb-2">Add a deduction</div>
+          <Fields v={adding} set={(k, val) => setAdding((x) => ({ ...x, [k]: val }))} />
+          <button className={`${btnPrimary} mt-3`}><Plus className="mr-1 inline h-4 w-4" />Add deduction</button>
+        </form>
       </div>
-      <div className="divide-y divide-border">
-        {list.map((d) => <DeductionRow key={d.id} deduction={d} onSave={save} onRemove={remove} />)}
-        {list.length === 0 && <div className="px-5 py-4 text-sm text-muted-foreground">No deductions: net pay is the same as gross pay.</div>}
-      </div>
-      <form onSubmit={add} className="border-t border-border p-5">
-        <div className="label-mono mb-2">Add a deduction</div>
-        <Fields v={adding} set={(k, val) => setAdding((x) => ({ ...x, [k]: val }))} />
-        <button className={`${btnPrimary} mt-3`}><Plus className="mr-1 inline h-4 w-4" />Add deduction</button>
-      </form>
-    </div>
+    </FoldBox>
+  );
+}
+
+/**
+ * "Add a deduction" for the people selected on the Employees page: the profile tab's fields, then one insert of a row
+ * per person (one transaction, so one Ctrl+Z takes them all back). Asks first when some already have one by that name.
+ */
+export function BulkDeductionDialog({ people, onClose }: { people: Employee[]; onClose: () => void }) {
+  const qc = useQueryClient();
+  const { data: all } = useDeductions();
+  const [v, setV] = useState<Draft>(blank);
+  const [busy, setBusy] = useState(false);
+
+  const add = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const c = checked(v);
+    if ("error" in c) { toast.error(c.error); return; }
+    const ids = people.map((p) => p.id);
+    const plan = planBulkDeduction(ids, all ?? new Map(), c.row, false);
+    const already = plan.already;
+    let rows = plan.rows;
+    if (already.length) {
+      const names = people.filter((p) => already.includes(p.id)).map(fullName);
+      const answer = await askChoice({
+        title: `${already.length === 1 ? "1 person already has" : `${already.length} people already have`} a deduction called ${c.row.name}`,
+        detail: "Adding it again takes it twice from their pay.",
+        items: names.length > 8 ? [...names.slice(0, 8), `and ${names.length - 8} more`] : names,
+        choices: [
+          { id: "cancel", label: "Cancel" },
+          { id: "both", label: "Add it to them too" },
+          ...(already.length < ids.length ? [{ id: "skip" as const, label: "Skip them, add the rest", primary: true }] : []),
+        ],
+        // Enter never doubles a deduction: it skips them, or cancels when everyone has it.
+        focus: already.length < ids.length ? "skip" : "cancel",
+      });
+      if (!answer || answer.id === "cancel") return;
+      if (answer.id === "skip") rows = planBulkDeduction(ids, all ?? new Map(), c.row, true).rows;
+    }
+    setBusy(true);
+    const { error } = await db().insert("deductions", rows);
+    setBusy(false);
+    if (error) { toast.error(error.message); return; }
+    toast.success(`Added ${c.row.name} to ${rows.length === 1 ? "1 person" : `${rows.length} people`}`, { description: "Ctrl+Z takes it back from all of them." });
+    void qc.invalidateQueries({ queryKey: ["deductions"] });
+    onClose();
+  };
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>Add a deduction to {people.length === 1 ? fullName(people[0]!) : `${people.length} people`}</DialogTitle>
+          <DialogDescription>
+            Each person gets their own copy, taken after their other deductions; change or delete it later on their profile's Deductions tab.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={add} className="space-y-4">
+          <Fields v={v} set={(k, val) => setV((x) => ({ ...x, [k]: val }))} />
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={onClose} className={btnGhost}>Cancel</button>
+            <button disabled={busy} className={btnPrimary}><Plus className="mr-1 inline h-4 w-4" />Add to {people.length === 1 ? "1 person" : `${people.length} people`}</button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 

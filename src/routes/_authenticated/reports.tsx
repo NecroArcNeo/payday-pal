@@ -1,3 +1,5 @@
+import { useKeptState } from "@/lib/prefs";
+import { validFilter } from "@/lib/last-place";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
@@ -19,11 +21,13 @@ export const Route = createFileRoute("/_authenticated/reports")({
 function ReportsPage() {
   const search = Route.useSearch();
   const { data: employees = [] } = useEmployees();
-  const [scope, setScope] = useState<"all" | "one">(search.emp ? "one" : "all");
-  const [person, setPerson] = useState(search.emp ?? "");
-  const [q, setQ] = useState<EmployeeFilter>(NO_FILTER);
+  // Who's shown is kept for next time (open where I left off), unless a link opened someone's report.
+  const kept = (check: (v: unknown) => boolean) => (v: unknown) => !search.emp && check(v);
+  const [scope, setScope] = useKeptState<"all" | "one">("meridian-place:reports-scope", search.emp ? "one" : "all", kept((v) => v === "all" || v === "one"));
+  const [person, setPerson] = useKeptState("meridian-place:reports-person", search.emp ?? "", kept((v) => typeof v === "string"));
+  const [q, setQ] = useKeptState<EmployeeFilter>("meridian-place:reports-filter", NO_FILTER, kept(validFilter));
   // A link to someone's report while this page is already open switches to them.
-  useEffect(() => { if (search.emp) { setScope("one"); setPerson(search.emp); } }, [search.emp]);
+  useEffect(() => { if (search.emp) { setScope("one"); setPerson(search.emp); } }, [search.emp, setScope, setPerson]);
   const picked = employees.find((e) => e.id === person);
   // Everyone, everyone the filter matches, or one person.
   const ids = scope === "one" ? (person ? [person] : []) : isFiltering(q) ? employees.filter((e) => matchesEmployee(e, q)).map((e) => e.id) : undefined;

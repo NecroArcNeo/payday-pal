@@ -19,21 +19,27 @@ import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { SkeletonRows } from "@/components/Loading";
 import { askConfirm, LEAVE_UNSAVED, modalOpen } from "@/lib/choice-prompt";
 import { SortTh, TableSort } from "@/components/SortControl";
+import { useDragSelect } from "@/components/DragSelect";
+import { GridModeToggle, useGridMode, useRecordGrid } from "@/components/RecordGrid";
+import type { GridKey } from "@/lib/record-grid";
 import type { Sort, SortColumns } from "@/lib/table-sort";
+import { FoldBox } from "@/components/FoldBox";
 
 export type EntryMode = "clock" | "hours";
 
 /** The Time records table: one entry type at a time, selectable rows, a side panel to see and edit a record, and a "load more" footer. */
-export function RecordsLedger({ rows, total, mode, onModeChange, employees, selected, onToggle, onToggleAll, onChanged, onDelete, footer, title, loading = false, sort, sortColumns, onSort }: {
+export function RecordsLedger({ rows, total, mode, onModeChange, employees, selected, onToggle, onToggleAll, onSelect, onChanged, onDelete, footer, title, loading = false, sort, sortColumns, onSort }: {
   rows: RecordWithEmp[]; total: number;
   /** How the list is sorted (the page sorts it, in the database or here), for the headers' sort buttons. */
   sort: Sort; sortColumns: SortColumns<RecordWithEmp>; onSort: (s: Sort) => void; /** Nothing read yet (the first load): placeholders instead of "no records". */ loading?: boolean; mode: EntryMode; onModeChange: (m: EntryMode) => void; employees: Employee[];
-  selected: Set<string>; onToggle: (id: string) => void; onToggleAll: () => void;
+  selected: Set<string>; onToggle: (id: string) => void; onToggleAll: () => void; /** A whole new selection (dragging across rows, Shift+click). */ onSelect: (s: Set<string>) => void;
   onChanged: () => void; onDelete: (id: string) => void; footer?: React.ReactNode; title: React.ReactNode;
 }) {
   const allPicked = rows.length > 0 && rows.every((r) => selected.has(r.id));
   const cols = (mode === "clock" ? 11 : 8) + RECORD_PAY_COLUMNS;
   const pay = useRecordPay(rows);
+  const [gridOn] = useGridMode();
+  const dragSelect = useDragSelect({ attr: "record", order: rows.map((r) => r.id), selected, setSelected: onSelect, boxesOnly: gridOn });
   const { data: rateHistory } = usePayRates();
   // Days locked as paid can't change (the database refuses), so their rows offer no edit or delete, only unlocking that one.
   const lockedThrough = usePayrollSettings().data?.locked_through ?? null;
@@ -49,6 +55,9 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
   const [breakUnit] = useBreakUnit();
   const empById = new Map(employees.map((e) => [e.id, e]));
   const markOf = useRowMarks(rows, employees, pay, lockedThrough);
+  // "Edit in cells": the table works like a spreadsheet (RecordGrid.tsx); a cell's own props, with its usual classes.
+  const grid = useRecordGrid({ on: gridOn, rows, mode, employees, shifts, lockedThrough, onChanged });
+  const cellOf = (r: RecordWithEmp, key: GridKey, cls: string) => { const p = grid.cell(r, key); return { ...p, className: `${cls} ${p.className ?? ""}` }; };
   const [marksOpen, setMarksOpen] = useState(false);
 
   // The side panel: which record is open. It stays open while the list changes, and closes by itself when its record
@@ -92,123 +101,129 @@ export function RecordsLedger({ rows, total, mode, onModeChange, employees, sele
   }, [openId, open]);
 
   return (
-    <div className="glass-panel overflow-hidden">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
-        <div className="font-display font-extrabold tracking-tight">{title}</div>
-        <div className="flex flex-wrap items-center gap-3">
-        <RowMarksButton open={marksOpen} onToggle={() => setMarksOpen((o) => !o)} />
-        {mode === "clock" && <span className="flex items-center gap-2 text-xs text-muted-foreground">Breaks in <BreakUnitToggle /></span>}
-        <div className="flex rounded-xl bg-secondary p-1 text-xs font-medium ring-1 ring-border">
-          {(["clock", "hours"] as const).map((m) => (
-            <button key={m} onClick={() => void open(null).then((ok) => { if (ok) onModeChange(m); })}
-              className={`rounded-lg px-3 py-1.5 ${mode === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>
-              {m === "clock" ? "Clock in / out" : "Daily hours"}
-            </button>
-          ))}
+    <FoldBox id="records:list" title="Time records" summary={`${total} records`}>
+      <div className="glass-panel overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
+          <div className="font-display font-extrabold tracking-tight">{title}</div>
+          <div className="flex flex-wrap items-center gap-3">
+          <RowMarksButton open={marksOpen} onToggle={() => setMarksOpen((o) => !o)} />
+          <GridModeToggle />
+          {mode === "clock" && <span className="flex items-center gap-2 text-xs text-muted-foreground">Breaks in <BreakUnitToggle /></span>}
+          <div className="flex rounded-xl bg-secondary p-1 text-xs font-medium ring-1 ring-border">
+            {(["clock", "hours"] as const).map((m) => (
+              <button key={m} onClick={() => void open(null).then((ok) => { if (ok) onModeChange(m); })}
+                className={`rounded-lg px-3 py-1.5 ${mode === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>
+                {m === "clock" ? "Clock in / out" : "Daily hours"}
+              </button>
+            ))}
+          </div>
+          </div>
         </div>
-        </div>
-      </div>
-      {marksOpen && <MarksPanel onClose={() => setMarksOpen(false)} />}
-      <div className="overflow-x-auto">
-        <DataTable id="records" className="w-full text-sm" stickyHeader>
-          <thead className="grid-head">
-            <TableSort sort={sort} columns={sortColumns} onSort={onSort}>
-            <tr className="font-mono text-[11px] uppercase tracking-[0.12em]">
-              <th className="w-10 pl-5"><input type="checkbox" aria-label="Select all loaded" checked={allPicked} onChange={onToggleAll} disabled={!rows.length} /></th>
-              <SortTh k="employee" className="px-3 py-3 text-left font-medium"><EditableLabel k="employee" name="Employee" /></SortTh>
-              <SortTh k="date" className="px-3 py-3 text-left font-medium"><EditableLabel k="date" name="Date" /></SortTh>
-              <SortTh k="shift" className="px-3 py-3 text-left font-medium"><EditableLabel k="shift" name="Shift" /></SortTh>
-              {mode === "clock" && (
-                <>
-                  <SortTh k="clock_in" className="px-3 py-3 text-left font-medium"><EditableLabel k="clock_in" name="Clock in" /></SortTh>
-                  <SortTh k="clock_out" className="px-3 py-3 text-left font-medium"><EditableLabel k="clock_out" name="Clock out" /></SortTh>
-                  <SortTh k="break" className="px-3 py-3 text-right font-medium"><BreakHeader unit={breakUnit} /></SortTh>
-                </>
-              )}
-              <SortTh k="hours" className="px-3 py-3 text-right font-medium"><EditableLabel k="hours" name="Hours" /></SortTh>
-              <SortTh k="hourly_rate" className="px-3 py-3 text-right font-medium"><EditableLabel k="hourly_rate" name="Rate" /></SortTh>
-              <RecordPayHeaders />
-              <SortTh k="note" className="px-3 py-3 text-left font-medium"><EditableLabel k="note" name="Note" /></SortTh>
-              <th className="w-20" />
-            </tr>
-            </TableSort>
-          </thead>
-          <ContextMenu modal={false} onOpenChange={(o) => { if (!o) setMenuId(null); }}>
-          <ContextMenuTrigger asChild>
-          <tbody className="font-mono text-[13px]"
-            // Which row the menu is for. Outside a record row (the "no records" line) there's no menu, and the
-            // browser's own isn't wanted either, so the event stops here (Radix skips a prevented event).
-            onContextMenu={(e) => {
-              const id = (e.target as HTMLElement).closest<HTMLElement>("tr[data-record]")?.dataset["record"];
-              if (id) setMenuId(id); else e.preventDefault();
-            }}>
-            {loading && rows.length === 0 && <SkeletonRows cols={cols} skip={1} />}
-            {!loading && rows.length === 0 && (
-              <tr><td colSpan={cols} className="px-5 py-10 text-center font-body text-muted-foreground">
-                No {mode === "clock" ? "clock in/out" : "daily hours"} records match.
-              </td></tr>
-            )}
-            {rows.map((r) => {
-              const mark = markOf(r);
-              const look = markedRow(mark);
-              return (
-              <tr key={r.id} data-record={r.id} style={look.style} title={look.title}
-                // A click anywhere on the row opens it in the panel, except on its own controls (tick box, name, buttons)
-                // or when the click ended a text selection (copying a value shouldn't open anything).
-                onClick={(e) => { if (!(e.target as HTMLElement).closest("a, button, input, label") && !getSelection()?.toString()) open(r.id); }}
-                className={`cursor-pointer border-b border-border last:border-0 hover:bg-secondary ${look.className} ${selected.has(r.id) ? "bg-accent/40" : ""} ${r.id === openId ? "outline outline-2 -outline-offset-2 outline-primary" : ""}`}>
-                <td className="pl-5"><input type="checkbox" aria-label="Select record" checked={selected.has(r.id)} onChange={() => onToggle(r.id)} /></td>
-                <td className="px-3 py-3 font-body">{r.employees ? <EmployeeLink id={r.employee_id} name={fullName(r.employees)} /> : "—"}</td>
-                <td className="whitespace-nowrap px-3 py-3"><span className="inline-block w-9 font-body text-muted-foreground">{weekday(r.work_date)}</span>{r.work_date}<MarkTags tags={mark.tags} /></td>
-                <RecordShiftCell shiftId={r.shift_id} employeeShiftId={empById.get(r.employee_id)?.shift_id} shifts={shifts} />
+        {marksOpen && <MarksPanel onClose={() => setMarksOpen(false)} />}
+        {grid.on && <div className="border-b border-border bg-accent/40 px-5 py-2 text-xs text-muted-foreground">Click a cell and type. Enter saves and moves down, Tab moves right, Esc cancels; Ctrl+V pastes a block from Excel over the cells. The side panel opens from a row's <PanelRightOpen className="inline h-3.5 w-3.5" /> button.</div>}
+        <div className="overflow-x-auto outline-none" {...grid.boxProps}>
+          <DataTable id="records" className="w-full text-sm" stickyHeader>
+            <thead className="grid-head">
+              <TableSort sort={sort} columns={sortColumns} onSort={onSort}>
+              <tr className="font-mono text-[11px] uppercase tracking-[0.12em]">
+                <th className="w-10 pl-5"><input type="checkbox" aria-label="Select all loaded" checked={allPicked} onChange={onToggleAll} disabled={!rows.length} /></th>
+                <SortTh k="employee" className="px-3 py-3 text-left font-medium"><EditableLabel k="employee" name="Employee" /></SortTh>
+                <SortTh k="date" className="px-3 py-3 text-left font-medium"><EditableLabel k="date" name="Date" /></SortTh>
+                <SortTh k="shift" className="px-3 py-3 text-left font-medium"><EditableLabel k="shift" name="Shift" /></SortTh>
                 {mode === "clock" && (
                   <>
-                    <td className="px-3 py-3">{r.clock_in?.slice(0, 5)}</td>
-                    <td className="px-3 py-3">{r.clock_out?.slice(0, 5)}</td>
-                    <td className="px-3 py-3 text-right">{formatBreak(r.lunch_minutes, breakUnit)}</td>
+                    <SortTh k="clock_in" className="px-3 py-3 text-left font-medium"><EditableLabel k="clock_in" name="Clock in" /></SortTh>
+                    <SortTh k="clock_out" className="px-3 py-3 text-left font-medium"><EditableLabel k="clock_out" name="Clock out" /></SortTh>
+                    <SortTh k="break" className="px-3 py-3 text-right font-medium"><BreakHeader unit={breakUnit} /></SortTh>
                   </>
                 )}
-                <td className="px-3 py-3 text-right">{Number(r.hours).toFixed(2)}</td>
-                <td className="px-3 py-3 text-right">{money(rateOn(rateHistory?.get(r.employee_id), r.employees?.hourly_rate ?? 0, r.work_date))}</td>
-                <RecordPayCells line={pay?.get(r.id)} />
-                <td className="px-3 py-3 font-body text-xs text-muted-foreground">{r.note}</td>
-                <td className="pl-3 pr-6">
-                  <div className="flex justify-end gap-3.5 text-muted-foreground">
-                    {lockedThrough && r.work_date <= lockedThrough && !r.unlocked ? (
-                      <button onClick={() => setUnlocked(r.id, true)} title={`Locked as paid (days up to ${lockedThrough}). Click to unlock just this record.`} aria-label="Locked as paid: unlock this record"><Lock className="h-4 w-4 text-primary hover:text-foreground" /></button>
-                    ) : (
-                      <>
-                        {lockedThrough && r.work_date <= lockedThrough && (
-                          <button onClick={() => setUnlocked(r.id, false)} title="Unlocked on a locked day. Click to lock it again." aria-label="Lock this record again"><LockOpen className="h-4 w-4 text-amber-600 hover:text-foreground" /></button>
-                        )}
-                        <button onClick={() => open(r.id)} aria-label="Open record" title="See and edit this record"><PanelRightOpen className="h-4 w-4 hover:text-foreground" /></button>
-                        <button onClick={() => onDelete(r.id)} aria-label="Delete record"><Trash2 className="h-4 w-4 hover:text-destructive" /></button>
-                      </>
-                    )}
-                  </div>
-                </td>
+                <SortTh k="hours" className="px-3 py-3 text-right font-medium"><EditableLabel k="hours" name="Hours" /></SortTh>
+                <SortTh k="hourly_rate" className="px-3 py-3 text-right font-medium"><EditableLabel k="hourly_rate" name="Rate" /></SortTh>
+                <RecordPayHeaders />
+                <SortTh k="note" className="px-3 py-3 text-left font-medium"><EditableLabel k="note" name="Note" /></SortTh>
+                <th className="w-20" />
               </tr>
-              );
-            })}
-          </tbody>
-          </ContextMenuTrigger>
-          {menuRecord && (
-            <RecordMenu record={menuRecord} employees={empById} selection={rows.filter((r) => selected.has(r.id))} lockedThrough={lockedThrough}
-              onOpen={() => open(menuRecord.id)} onToggle={() => onToggle(menuRecord.id)} onDelete={() => onDelete(menuRecord.id)}
-              onSetUnlocked={(u) => setUnlocked(menuRecord.id, u)} />
-          )}
-          </ContextMenu>
-        </DataTable>
+              </TableSort>
+            </thead>
+            <ContextMenu modal={false} onOpenChange={(o) => { if (!o) setMenuId(null); }}>
+            <ContextMenuTrigger asChild>
+            <tbody className="font-mono text-[13px]" onPointerDown={dragSelect}
+              // Which row the menu is for. Outside a record row (the "no records" line) there's no menu, and the
+              // browser's own isn't wanted either, so the event stops here (Radix skips a prevented event).
+              onContextMenu={(e) => {
+                const id = (e.target as HTMLElement).closest<HTMLElement>("tr[data-record]")?.dataset["record"];
+                if (id) setMenuId(id); else e.preventDefault();
+              }}>
+              {loading && rows.length === 0 && <SkeletonRows cols={cols} skip={1} />}
+              {!loading && rows.length === 0 && (
+                <tr><td colSpan={cols} className="px-5 py-10 text-center font-body text-muted-foreground">
+                  No {mode === "clock" ? "clock in/out" : "daily hours"} records match.
+                </td></tr>
+              )}
+              {rows.map((r) => {
+                const mark = markOf(r);
+                const look = markedRow(mark);
+                return (
+                <tr key={r.id} data-record={r.id} style={look.style} title={look.title}
+                  // A click anywhere on the row opens it in the panel, except on its own controls (tick box, name, buttons)
+                  // or when the click ended a text selection (copying a value shouldn't open anything).
+                  onClick={(e) => { if (!grid.on && !(e.target as HTMLElement).closest("a, button, input, label") && !getSelection()?.toString()) open(r.id); }}
+                  className={`cursor-pointer border-b border-border last:border-0 hover:bg-secondary ${look.className} ${selected.has(r.id) ? "bg-accent/40" : ""} ${r.id === openId ? "outline outline-2 -outline-offset-2 outline-primary" : ""}`}>
+                  <td className="pl-5"><input type="checkbox" aria-label="Select record" checked={selected.has(r.id)} onChange={() => onToggle(r.id)} /></td>
+                  <td className="px-3 py-3 font-body">{r.employees ? <EmployeeLink id={r.employee_id} name={fullName(r.employees)} /> : "—"}</td>
+                  <td {...cellOf(r, "date", "whitespace-nowrap px-3 py-3")}>{grid.editor(r, "date") ?? <><span className="inline-block w-9 font-body text-muted-foreground">{weekday(r.work_date)}</span>{r.work_date}<MarkTags tags={mark.tags} /></>}</td>
+                  <RecordShiftCell shiftId={r.shift_id} employeeShiftId={empById.get(r.employee_id)?.shift_id} shifts={shifts} td={grid.on ? grid.cell(r, "shift") : undefined} editor={grid.editor(r, "shift")} />
+                  {mode === "clock" && (
+                    <>
+                      <td {...cellOf(r, "clock_in", "px-3 py-3")}>{grid.editor(r, "clock_in") ?? r.clock_in?.slice(0, 5)}</td>
+                      <td {...cellOf(r, "clock_out", "px-3 py-3")}>{grid.editor(r, "clock_out") ?? r.clock_out?.slice(0, 5)}</td>
+                      <td {...cellOf(r, "break", "px-3 py-3 text-right")}>{grid.editor(r, "break") ?? formatBreak(r.lunch_minutes, breakUnit)}</td>
+                    </>
+                  )}
+                  {mode === "hours"
+                    ? <td {...cellOf(r, "hours", "px-3 py-3 text-right")}>{grid.editor(r, "hours") ?? Number(r.hours).toFixed(2)}</td>
+                    : <td className="px-3 py-3 text-right">{Number(r.hours).toFixed(2)}</td>}
+                  <td className="px-3 py-3 text-right">{money(rateOn(rateHistory?.get(r.employee_id), r.employees?.hourly_rate ?? 0, r.work_date))}</td>
+                  <RecordPayCells line={pay?.get(r.id)} />
+                  <td {...cellOf(r, "note", "px-3 py-3 font-body text-xs text-muted-foreground")}>{grid.editor(r, "note") ?? r.note}</td>
+                  <td className="pl-3 pr-6">
+                    <div className="flex justify-end gap-3.5 text-muted-foreground">
+                      {lockedThrough && r.work_date <= lockedThrough && !r.unlocked ? (
+                        <button onClick={() => setUnlocked(r.id, true)} title={`Locked as paid (days up to ${lockedThrough}). Click to unlock just this record.`} aria-label="Locked as paid: unlock this record"><Lock className="h-4 w-4 text-primary hover:text-foreground" /></button>
+                      ) : (
+                        <>
+                          {lockedThrough && r.work_date <= lockedThrough && (
+                            <button onClick={() => setUnlocked(r.id, false)} title="Unlocked on a locked day. Click to lock it again." aria-label="Lock this record again"><LockOpen className="h-4 w-4 text-amber-600 hover:text-foreground" /></button>
+                          )}
+                          <button onClick={() => open(r.id)} aria-label="Open record" title="See and edit this record"><PanelRightOpen className="h-4 w-4 hover:text-foreground" /></button>
+                          <button onClick={() => onDelete(r.id)} aria-label="Delete record"><Trash2 className="h-4 w-4 hover:text-destructive" /></button>
+                        </>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+                );
+              })}
+            </tbody>
+            </ContextMenuTrigger>
+            {menuRecord && (
+              <RecordMenu record={menuRecord} employees={empById} selection={rows.filter((r) => selected.has(r.id))} lockedThrough={lockedThrough}
+                onOpen={() => open(menuRecord.id)} onToggle={() => onToggle(menuRecord.id)} onDelete={() => onDelete(menuRecord.id)}
+                onSetUnlocked={(u) => setUnlocked(menuRecord.id, u)} />
+            )}
+            </ContextMenu>
+          </DataTable>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-5 py-3 text-xs text-muted-foreground">
+          <span>Showing {rows.length} of {total}</span>
+          {footer}
+        </div>
+        {openRecord && (
+          <RecordPanel record={openRecord} employees={employees} shifts={shifts} line={pay?.get(openRecord.id)} mark={markOf(openRecord)}
+            lockedThrough={lockedThrough} position={`${openIndex + 1} of ${rows.length}${total > rows.length ? ` loaded (${total} in all)` : ""}`}
+            onMove={move} onClose={() => open(null)} onChanged={onChanged} onDelete={onDelete} onSetUnlocked={setUnlocked} onDirty={onDirty} />
+        )}
       </div>
-      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-5 py-3 text-xs text-muted-foreground">
-        <span>Showing {rows.length} of {total}</span>
-        {footer}
-      </div>
-      {openRecord && (
-        <RecordPanel record={openRecord} employees={employees} shifts={shifts} line={pay?.get(openRecord.id)} mark={markOf(openRecord)}
-          lockedThrough={lockedThrough} position={`${openIndex + 1} of ${rows.length}${total > rows.length ? ` loaded (${total} in all)` : ""}`}
-          onMove={move} onClose={() => open(null)} onChanged={onChanged} onDelete={onDelete} onSetUnlocked={setUnlocked} onDirty={onDirty} />
-      )}
-    </div>
+    </FoldBox>
   );
 }

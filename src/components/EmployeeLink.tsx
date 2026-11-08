@@ -1,10 +1,10 @@
 import { Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { HoverCard, HoverCardContent, HoverCardPortal, HoverCardTrigger } from "@/components/ui/hover-card";
-import { storeFor, useDataMode } from "@/lib/db/mode";
+import { db } from "@/lib/db/mode";
 import { useLabels } from "@/lib/labels";
-import { fullName, isoDate, money, useEmployees, usePayRates, usePayrollSettings, useShifts } from "@/lib/payroll";
-import { payByRecord, shiftFor, weekEnd, weekStart } from "@/lib/pay";
+import { fullName, isoDate, money, useEmployees, usePayRates, usePayrollSettings, useShifts, useHolidays } from "@/lib/payroll";
+import { payByRecord, shiftFor, weekEnd, weekStart, payRules } from "@/lib/pay";
 import { rateOn } from "@/lib/pay-rates";
 
 /**
@@ -33,26 +33,26 @@ export function EmployeeLink({ id, name, className = "" }: { id: string; name: s
 }
 
 function EmployeeCard({ id }: { id: string }) {
-  const mode = useDataMode();
   const { label } = useLabels();
   const { data: employees } = useEmployees();
   const { data: shifts = [] } = useShifts();
   const { data: rates } = usePayRates();
   const { data: settings } = usePayrollSettings();
+  const { data: holidays } = useHolidays();
   const today = isoDate(new Date());
   const from = weekStart(today), to = weekEnd(today);
   // This week's records for this person: a whole Mon–Sun week, so overtime is right.
   const { data: week } = useQuery({
-    queryKey: ["records", "card", id, from, mode],
-    queryFn: () => storeFor(mode).listRecordsMatching({ from, to, employeeIds: [id] }),
+    queryKey: ["records", "card", id, from],
+    queryFn: () => db().listRecordsMatching({ from, to, employeeIds: [id] }),
   });
   const emp = employees?.find((e) => e.id === id);
   if (!emp) return <span className="text-muted-foreground">Loading…</span>;
 
   const shift = shiftFor(emp.shift_id, shifts);
   const rate = rateOn(rates?.get(id), emp.hourly_rate, today);
-  const pay = week && settings
-    ? [...payByRecord(week, [emp], shifts, { threshold: settings.ot_threshold, otMultiplier: settings.ot_multiplier, weekendOvertime: settings.weekend_overtime }, rates).values()]
+  const pay = week && settings && holidays
+    ? [...payByRecord(week, [emp], shifts, payRules(settings, holidays), rates).values()]
     : null;
   const hours = pay?.reduce((a, l) => a + l.regular + l.overtime, 0) ?? 0;
   const ot = pay?.reduce((a, l) => a + l.overtime, 0) ?? 0;

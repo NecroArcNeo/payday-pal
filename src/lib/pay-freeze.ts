@@ -1,6 +1,6 @@
 import type { Tables } from "@/integrations/supabase/types";
 import type { DataStore, FrozenRow } from "@/lib/db/store";
-import { frozenPay, payByRecord, toFrozen, weekEnd, weekStart } from "@/lib/pay";
+import { frozenPay, payByRecord, toFrozen, weekEnd, weekStart, payRules } from "@/lib/pay";
 import type { RateEntry } from "@/lib/pay-rates";
 
 // Locked days keep what they paid. Locking saves each record's pay as the current rules, shift multipliers and
@@ -20,9 +20,10 @@ export async function payToFreeze(store: DataStore, records: Pick<Row, "id" | "w
     store.listRecordsMatching({ from: weekStart(dates[0]!), to: weekEnd(dates.at(-1)!) }),
     store.listEmployees(), store.listShifts(), store.getSettings(), store.listPayRates(),
   ]);
+  const holidays = await store.listHolidays();
   const rates = new Map<string, RateEntry[]>();
   for (const r of history) rates.set(r.employee_id, [...(rates.get(r.employee_id) ?? []), r]);
-  const rules = { threshold: Number(settings?.ot_threshold ?? 40), otMultiplier: Number(settings?.ot_multiplier ?? 1.5), weekendOvertime: settings?.weekend_overtime ?? true };
+  const rules = payRules(settings, holidays);
   const lines = payByRecord(week, employees, shifts, rules, rates);
   const out: FrozenRow[] = [];
   for (const r of todo) {

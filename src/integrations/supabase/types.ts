@@ -56,6 +56,60 @@ export type Database = {
         }
         Relationships: []
       }
+      holidays: {
+        Row: {
+          id: string
+          holiday_date: string
+          name: string
+          multiplier: number
+          paid_hours: number
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          holiday_date: string
+          name: string
+          multiplier?: number
+          paid_hours?: number
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          holiday_date?: string
+          name?: string
+          multiplier?: number
+          paid_hours?: number
+          created_at?: string
+        }
+        Relationships: []
+      }
+      work_patterns: {
+        Row: {
+          id: string
+          name: string
+          days: Json
+          employee_ids: Json
+          sort_order: number
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          name: string
+          days?: Json
+          employee_ids?: Json
+          sort_order?: number
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          name?: string
+          days?: Json
+          employee_ids?: Json
+          sort_order?: number
+          created_at?: string
+        }
+        Relationships: []
+      }
       pay_runs: {
         Row: {
           id: string

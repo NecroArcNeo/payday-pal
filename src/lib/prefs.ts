@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore, type Dispatch, type SetStateAction } from "react";
 
 // Display preferences remembered on this device (tab order, column widths,
 // break unit). Not payroll data, so they live in localStorage, not the database.
@@ -34,4 +34,18 @@ export function usePref<T>(key: string, fallback: T): [T, (v: T) => void] {
     () => fallback,
   );
   return [v, (next: T) => setPref(key, next)];
+}
+
+/**
+ * A page's state that's kept for next time on this device ("open where I left off"): like useState, but it starts
+ * from the saved value when `valid` accepts it (so a page can refuse it, e.g. when a link brought its own settings),
+ * else from `initial`, and every change is saved.
+ */
+export function useKeptState<T>(key: string, initial: T, valid: (v: unknown) => boolean): [T, Dispatch<SetStateAction<T>>] {
+  const [v, setV] = useState<T>(() => {
+    const saved = read<unknown>(key, undefined);
+    return saved !== undefined && valid(saved) ? (saved as T) : initial;
+  });
+  useEffect(() => setPref(key, v), [key, v]);
+  return [v, setV];
 }

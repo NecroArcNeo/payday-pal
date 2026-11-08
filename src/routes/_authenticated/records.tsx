@@ -1,8 +1,10 @@
+import { useKeptState } from "@/lib/prefs";
+import { isDateOrEmpty, validFacet, validFilter } from "@/lib/last-place";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { db, storeFor, useDataMode } from "@/lib/db/mode";
+import { db } from "@/lib/db/mode";
 import { backupBefore } from "@/lib/db/safety";
 import type { RecordFilter } from "@/lib/db/store";
 import type { TablesInsert } from "@/integrations/supabase/types";
@@ -11,11 +13,13 @@ import { RecordsLedger, type EntryMode } from "@/components/RecordsLedger";
 import { RecordShiftSelect } from "@/components/RecordPay";
 import { BreakHeader, BreakInput, BreakUnitToggle } from "@/components/BreakField";
 import { EditableLabel } from "@/components/EditableLabel";
-import { breakRangeText, formatBreak, useBreakUnit, validBreak } from "@/lib/breaks";
+import { breakRangeText, DEFAULT_BREAK_MINUTES, formatBreak, useBreakUnit, validBreak } from "@/lib/breaks";
+import { openSettings } from "@/lib/settings-window";
 import { EmployeePicker, SearchInput } from "@/components/EmployeeSearch";
 import { ANY, describeEmployeeFilter, describeFacet, facetActive, facetAllows, isFiltering, matchesEmployee, NO_FILTER, searchEmployees, type EmployeeFilter, type Facet } from "@/lib/employee-search";
 import { FacetFilter } from "@/components/FacetFilter";
 import { askChoice, askConfirm } from "@/lib/choice-prompt";
+import { confirmLongRecords } from "@/lib/typo-prompt";
 import { describeRecord, sameDayClashes, type Clash } from "@/lib/record-clash";
 import { addDays, computeHours, datesBetween, fullName, isoDate, useEmployees, usePayrollSettings, useRecordPay, useShifts, weekday, type Employee, type RecordWithEmp, type TimeRecord } from "@/lib/payroll";
 import { shiftFor } from "@/lib/pay";
@@ -25,12 +29,15 @@ import { PayLock } from "@/components/PayLock";
 import { setRecordsLocked } from "@/lib/pay-freeze";
 import { SortControl, useTableSort } from "@/components/SortControl";
 import { CopyWeek } from "@/components/CopyWeek";
+import { PatternsButton } from "@/components/Patterns";
+import { PasteRowsButton, usePasteRows, usePasteToImport } from "@/components/PasteRows";
 import { useCopyToNextWeek } from "@/components/RecordMenu";
 import { newestFirst, STORE_SORTED } from "@/lib/record-columns";
 import { sortTable, withoutColumns } from "@/lib/table-sort";
 import { useRecordSortColumns } from "@/components/RecordPay";
 import { DateInput } from "@/components/DateInput";
 import { readAmount } from "@/lib/amount";
+import { FoldBox } from "@/components/FoldBox";
 
 /** One shift's times for "Add each shift's usual hours", as typed (break in minutes). */
 type GroupTimes = { clock_in: string; clock_out: string; lunch_minutes: string; hours: string };
@@ -69,26 +76,28 @@ const PAY_COLUMNS = ["reg_hrs", "ot_hrs", "reg_pay", "ot_pay", "total_pay"];
 
 function RecordsPage() {
   const qc = useQueryClient();
-  const dataMode = useDataMode();
   const { data: employees = [] } = useEmployees();
   const search = Route.useSearch();
-  const [from, setFrom] = useState(search.from ?? "");
-  const [to, setTo] = useState(search.to ?? "");
+  // The list's filters are kept for next time (open where I left off), unless a link opened the page with its own.
+  const linked = !!(search.from || search.to || search.emp || search.mode);
+  const kept = (check: (v: unknown) => boolean) => (v: unknown) => !linked && check(v);
+  const [from, setFrom] = useKeptState("meridian-place:records-from", search.from ?? "", kept(isDateOrEmpty));
+  const [to, setTo] = useKeptState("meridian-place:records-to", search.to ?? "", kept(isDateOrEmpty));
   // Just this employee, when opened from a link; cleared with the chip by the filters.
-  const [onlyEmp, setOnlyEmp] = useState(search.emp ?? null);
+  const [onlyEmp, setOnlyEmp] = useKeptState<string | null>("meridian-place:records-emp", search.emp ?? null, kept((v) => v === null || typeof v === "string"));
 
   const [mode, setMode] = useState<"clock" | "hours">("clock");
   const { data: shifts = [] } = useShifts();
   const { data: settings } = usePayrollSettings();
-  const [f, setF] = useState({ work_date: isoDate(new Date()), until: "", skip_weekends: false, clock_in: "09:00", clock_out: "17:00", lunch_minutes: "30", hours: "8", pay: "", shift_id: "" });
+  const [f, setF] = useState({ work_date: isoDate(new Date()), until: "", skip_weekends: false, clock_in: "09:00", clock_out: "17:00", lunch_minutes: String(DEFAULT_BREAK_MINUTES), hours: "8", pay: "", shift_id: "" });
   const [breakUnit] = useBreakUnit();
   // An optional end date adds the same entry for every day in the range.
   const rangeBad = !!f.until && f.until < f.work_date;
   const days = useMemo(() => (f.work_date && !rangeBad ? datesBetween(f.work_date, f.until, f.skip_weekends) : []), [f.work_date, f.until, f.skip_weekends, rangeBad]);
   const [picked, setPicked] = useState<string[]>([]);
   const [pickQ, setPickQ] = useState<EmployeeFilter>(NO_FILTER);
-  const [listQ, setListQ] = useState<EmployeeFilter>(NO_FILTER);
-  const [listShifts, setListShifts] = useState<Facet>(ANY);
+  const [listQ, setListQ] = useKeptState<EmployeeFilter>("meridian-place:records-filter", NO_FILTER, kept(validFilter));
+  const [listShifts, setListShifts] = useKeptState<Facet>("meridian-place:records-shifts", ANY, kept(validFacet));
   // Resigned employees can't be given new hours, so they aren't offered here (their old records still list below).
   const working = useMemo(() => employees.filter((e) => e.active), [employees]);
   const resigned = employees.length - working.length;
@@ -190,11 +199,14 @@ function RecordsPage() {
         ? { employee_id, work_date, entry_mode: "clock", clock_in: t?.clock_in ?? f.clock_in, clock_out: t?.clock_out ?? f.clock_out, lunch_minutes: t ? Number(t.lunch_minutes) : lunch, ...manual, ...shiftOf(employee_id) }
         : { employee_id, work_date, entry_mode: "hours", hours: t ? Number(t.hours) : hours, ...manual, ...shiftOf(employee_id) };
     }));
+    // A record longer than a real day is usually a time typed as AM for PM: asked before anything else.
+    const nameOfId = (id: string) => { const e = employees.find((x) => x.id === id); return e ? fullName(e) : "Someone"; };
+    if (!(await confirmLongRecords(rows as (typeof rows[number] & { employee_id: string })[], nameOfId))) return;
     // Someone who already has a record that day is usually a slip (it would pay the day twice), but can be a real
     // second shift, so ask rather than refuse.
     let clashes: Clash[];
     try {
-      clashes = sameDayClashes(rows as { employee_id: string; work_date: string }[], await storeFor(dataMode).listRecordKeys(days[0]!, days.at(-1)!));
+      clashes = sameDayClashes(rows as { employee_id: string; work_date: string }[], await db().listRecordKeys(days[0]!, days.at(-1)!));
     } catch (err) { toast.error(`Couldn't check for records already on those days: ${(err as Error).message}`); return; }
     if (clashes.length) {
       const nameOf = (id: string) => { const e = employees.find((x) => x.id === id); return e ? fullName(e) : "Someone"; };
@@ -235,7 +247,7 @@ function RecordsPage() {
   };
 
   // ---- the list: filtered in the database, loaded a page at a time
-  const [listMode, setListMode] = useState<EntryMode>(search.mode ?? "clock");
+  const [listMode, setListMode] = useKeptState<EntryMode>("meridian-place:records-mode", search.mode ?? "clock", kept((v) => v === "clock" || v === "hours"));
   // Sorted by any column (clock times and break only for clock records). These columns name the choices and the
   // headers; sorting in the app uses the same ones with the pay worked out (appColumns, below).
   const sortChoices = useRecordSortColumns(undefined);
@@ -258,8 +270,8 @@ function RecordsPage() {
   useEffect(() => { setLimit(PAGE); setSelected(new Set()); setBulk(null); }, [filterKey]);
   const inApp = !inStore(sort.by);
   const page = useQuery({
-    queryKey: ["records", "page", dataMode, filterKey, limit],
-    queryFn: () => storeFor(dataMode).listRecordsPage(filter, 0, limit),
+    queryKey: ["records", "page", filterKey, limit],
+    queryFn: () => db().listRecordsPage(filter, 0, limit),
     placeholderData: keepPreviousData,
     enabled: !inApp,
   });
@@ -267,8 +279,8 @@ function RecordsPage() {
   // or names): load every matching record, sort them here (pay worked out over whole weeks, as the table does), and
   // page through the sorted list here instead of in the database.
   const everything = useQuery({
-    queryKey: ["records", "matching", dataMode, filterKey],
-    queryFn: () => storeFor(dataMode).listRecordsMatching(filter),
+    queryKey: ["records", "matching", filterKey],
+    queryFn: () => db().listRecordsMatching(filter),
     enabled: inApp,
     placeholderData: keepPreviousData,
   });
@@ -325,7 +337,7 @@ function RecordsPage() {
       confirm: `Delete ${n} record${n === 1 ? "" : "s"}`, danger: true,
     }))) return;
     try {
-      const ids = which === "selected" ? pickedRows.map((r) => r.id) : (await storeFor(dataMode).listRecordsMatching(filter)).map((r) => r.id);
+      const ids = which === "selected" ? pickedRows.map((r) => r.id) : (await db().listRecordsMatching(filter)).map((r) => r.id);
       await backupBefore("record-delete");
       const { error } = await db().removeMany("time_records", ids);
       if (error) throw error;
@@ -337,179 +349,197 @@ function RecordsPage() {
     }
   };
 
+  // Rows copied from a spreadsheet or anywhere else: Ctrl+V on this page (outside a text box) or "Paste rows" opens
+  // them on the Import page as hours.
+  const pasteToImport = usePasteToImport();
+  usePasteRows(pasteToImport);
+
   return (
     <AppShell eyebrow="Ledger" title="Time records">
-      <form onSubmit={add} className="glass-panel space-y-4 p-5">
-        <div className="flex items-center justify-between">
-          <div className="font-display font-extrabold tracking-tight">New record</div>
-          <div className="flex items-center gap-2">
-          <CopyWeek />
-          <div className="flex rounded-xl bg-secondary p-1 text-xs font-medium ring-1 ring-border">
-            {(["clock", "hours"] as const).map((m) => (
-              <button type="button" key={m} onClick={() => setMode(m)} className={`rounded-lg px-3 py-1.5 ${mode === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>
-                {m === "clock" ? "Clock in / out" : "Daily hours"}
-              </button>
-            ))}
-          </div>
-          </div>
-        </div>
-        <div>
-          <div className="mb-2 flex items-center justify-between">
-            <span className="label-mono">Employees · {picked.length} of {working.length} selected</span>
-            <div className="flex gap-3 text-xs text-muted-foreground">
-              <button type="button" className="hover:text-foreground"
-                onClick={() => setPicked((p) => [...new Set([...p, ...shownEmployees.map((e) => e.id)])])}>
-                {isFiltering(pickQ) ? `Select all ${shownEmployees.length} shown` : "Select all"}
-              </button>
-              <button type="button" className="hover:text-foreground" onClick={() => setPicked([])}>Clear</button>
+      <FoldBox id="records:new" title="New record">
+        <form onSubmit={add} className="glass-panel space-y-4 p-5">
+          <div className="flex items-center justify-between">
+            <div className="font-display font-extrabold tracking-tight">New record</div>
+            <div className="flex items-center gap-2">
+            <PasteRowsButton onSheet={pasteToImport} />
+            <PatternsButton />
+            <CopyWeek />
+            <div className="flex rounded-xl bg-secondary p-1 text-xs font-medium ring-1 ring-border">
+              {(["clock", "hours"] as const).map((m) => (
+                <button type="button" key={m} onClick={() => setMode(m)} className={`rounded-lg px-3 py-1.5 ${mode === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>
+                  {m === "clock" ? "Clock in / out" : "Daily hours"}
+                </button>
+              ))}
+            </div>
             </div>
           </div>
-          {shifts.length > 1 && working.length > 0 && (
-            <div className="mb-2 flex flex-wrap items-center gap-1.5 text-xs">
-              <span className="label-mono mr-1">By <EditableLabel k="shift" name="Shift" /></span>
-              {shifts.map((sh) => {
-                const people = byShift.get(sh.id) ?? [];
-                const on = people.length > 0 && people.every((e) => picked.includes(e.id));
-                const t = usualTimes(sh);
+          <div>
+            <div className="mb-2 flex items-center justify-between">
+              <span className="label-mono">Employees · {picked.length} of {working.length} selected</span>
+              <div className="flex gap-3 text-xs text-muted-foreground">
+                <button type="button" className="hover:text-foreground"
+                  onClick={() => setPicked((p) => [...new Set([...p, ...shownEmployees.map((e) => e.id)])])}>
+                  {isFiltering(pickQ) ? `Select all ${shownEmployees.length} shown` : "Select all"}
+                </button>
+                <button type="button" className="hover:text-foreground" onClick={() => setPicked([])}>Clear</button>
+              </div>
+            </div>
+            {shifts.length > 1 && working.length > 0 && (
+              <div className="mb-2 flex flex-wrap items-center gap-1.5 text-xs">
+                <span className="label-mono mr-1">By <EditableLabel k="shift" name="Shift" /></span>
+                {shifts.map((sh) => {
+                  const people = byShift.get(sh.id) ?? [];
+                  const on = people.length > 0 && people.every((e) => picked.includes(e.id));
+                  const t = usualTimes(sh);
+                  return (
+                    <button type="button" key={sh.id} onClick={() => toggleShift(sh.id)} disabled={!people.length} aria-pressed={on}
+                      title={`${on ? "Leave out" : "Select"} everyone${isFiltering(pickQ) ? ` shown (${describeEmployeeFilter(pickQ)})` : ""} on ${sh.name}${!on && t ? ` and fill in its usual hours (${describeTimes(t)})` : ""}`}
+                      className={`rounded-lg px-2.5 py-1 ring-1 ring-border disabled:opacity-40 ${on ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground hover:text-foreground"}`}>
+                      {on && <Check className="-ml-0.5 mr-1 inline h-3 w-3" />}
+                      {sh.name} · {people.length}
+                      {t && <span className="ml-1 font-mono opacity-70">{describeTimes(t)}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            <SearchInput value={pickQ} onChange={setPickQ} employees={working} className="mb-2" />
+            <div className="flex max-h-40 flex-wrap gap-2 overflow-y-auto">
+              {working.length === 0 && <span className="text-sm text-muted-foreground">{resigned ? "Everyone has resigned." : "No employees yet."}</span>}
+              {working.length > 0 && shownEmployees.length === 0 && <span className="text-sm text-muted-foreground">No employee matches {describeEmployeeFilter(pickQ)}.</span>}
+              {shownEmployees.map((e) => {
+                const on = picked.includes(e.id);
                 return (
-                  <button type="button" key={sh.id} onClick={() => toggleShift(sh.id)} disabled={!people.length} aria-pressed={on}
-                    title={`${on ? "Leave out" : "Select"} everyone${isFiltering(pickQ) ? ` shown (${describeEmployeeFilter(pickQ)})` : ""} on ${sh.name}${!on && t ? ` and fill in its usual hours (${describeTimes(t)})` : ""}`}
-                    className={`rounded-lg px-2.5 py-1 ring-1 ring-border disabled:opacity-40 ${on ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground hover:text-foreground"}`}>
-                    {on && <Check className="-ml-0.5 mr-1 inline h-3 w-3" />}
-                    {sh.name} · {people.length}
-                    {t && <span className="ml-1 font-mono opacity-70">{describeTimes(t)}</span>}
+                  <button type="button" key={e.id} onClick={() => toggle(e.id)} aria-pressed={on} title={on ? "Click to leave out" : "Click to include"}
+                    className={`rounded-lg px-3 py-1.5 text-sm ring-1 ring-border ${on ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground hover:text-foreground"}`}>
+                    {on && <Check className="-ml-0.5 mr-1 inline h-3.5 w-3.5" />}
+                    {fullName(e)} <span className="font-mono text-[11px] opacity-70">{e.employee_code}</span>
                   </button>
                 );
               })}
             </div>
-          )}
-          <SearchInput value={pickQ} onChange={setPickQ} employees={working} className="mb-2" />
-          <div className="flex max-h-40 flex-wrap gap-2 overflow-y-auto">
-            {working.length === 0 && <span className="text-sm text-muted-foreground">{resigned ? "Everyone has resigned." : "No employees yet."}</span>}
-            {working.length > 0 && shownEmployees.length === 0 && <span className="text-sm text-muted-foreground">No employee matches {describeEmployeeFilter(pickQ)}.</span>}
-            {shownEmployees.map((e) => {
-              const on = picked.includes(e.id);
-              return (
-                <button type="button" key={e.id} onClick={() => toggle(e.id)} aria-pressed={on} title={on ? "Click to leave out" : "Click to include"}
-                  className={`rounded-lg px-3 py-1.5 text-sm ring-1 ring-border ${on ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground hover:text-foreground"}`}>
-                  {on && <Check className="-ml-0.5 mr-1 inline h-3.5 w-3.5" />}
-                  {fullName(e)} <span className="font-mono text-[11px] opacity-70">{e.employee_code}</span>
-                </button>
-              );
-            })}
-          </div>
-          {showLeftOut && (
-            <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-              <span>Everyone selected except</span>
-              {left.map((e) => (
-                <button type="button" key={e.id} onClick={() => toggle(e.id)} title="Add back"
-                  className="rounded-md bg-secondary px-2 py-0.5 ring-1 ring-border hover:text-foreground">
-                  {fullName(e)} <Plus className="inline h-3 w-3" />
-                </button>
-              ))}
+            {showLeftOut && (
+              <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                <span>Everyone selected except</span>
+                {left.map((e) => (
+                  <button type="button" key={e.id} onClick={() => toggle(e.id)} title="Add back"
+                    className="rounded-md bg-secondary px-2 py-0.5 ring-1 ring-border hover:text-foreground">
+                    {fullName(e)} <Plus className="inline h-3 w-3" />
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="mt-1 text-xs text-muted-foreground">
+              Click a name to include or leave them out. To add for everyone but a few people, press Select all, then click the ones to leave out.
+              {resigned > 0 && ` ${resigned} resigned employee${resigned === 1 ? " is" : "s are"} hidden.`}
             </div>
-          )}
-          <div className="mt-1 text-xs text-muted-foreground">
-            Click a name to include or leave them out. To add for everyone but a few people, press Select all, then click the ones to leave out.
-            {resigned > 0 && ` ${resigned} resigned employee${resigned === 1 ? " is" : "s are"} hidden.`}
           </div>
-        </div>
-        <div className="flex flex-wrap items-end gap-3">
-          <label><span className="label-mono">{f.until ? "From" : "Date"}{f.work_date && ` · ${weekday(f.work_date)}`}</span><DateInput className={`${inputCls} mt-1 w-auto`} value={f.work_date} onChange={(v) => setF({ ...f, work_date: v })} required /></label>
-          <label title="Leave empty for one day. Set it to add the same entry for every day up to and including this date.">
-            <span className="label-mono">To (optional){f.until && ` · ${weekday(f.until)}`}</span>
-            <div className="mt-1 flex items-center gap-1">
-              <DateInput className={`${inputCls} w-auto ${rangeBad ? "ring-2 ring-destructive" : ""}`} value={f.until} min={f.work_date} onChange={(v) => setF({ ...f, until: v })} aria-label="Last date" />
-              {f.until && <button type="button" onClick={() => setF({ ...f, until: "" })} className="text-muted-foreground hover:text-foreground" aria-label="Just one day"><X className="h-4 w-4" /></button>}
-            </div>
-          </label>
-          {f.until && (
-            <label className="flex items-center gap-2 pb-2 text-sm">
-              <input type="checkbox" checked={f.skip_weekends} onChange={(e) => setF({ ...f, skip_weekends: e.target.checked })} /> Skip Saturdays and Sundays
+          <div className="flex flex-wrap items-end gap-3">
+            <label><span className="label-mono">{f.until ? "From" : "Date"}{f.work_date && ` · ${weekday(f.work_date)}`}</span><DateInput className={`${inputCls} mt-1 w-auto`} value={f.work_date} onChange={(v) => setF({ ...f, work_date: v })} required /></label>
+            <label title="Leave empty for one day. Set it to add the same entry for every day up to and including this date.">
+              <span className="label-mono">To (optional){f.until && ` · ${weekday(f.until)}`}</span>
+              <div className="mt-1 flex items-center gap-1">
+                <DateInput className={`${inputCls} w-auto ${rangeBad ? "ring-2 ring-destructive" : ""}`} value={f.until} min={f.work_date} onChange={(v) => setF({ ...f, until: v })} aria-label="Last date" />
+                {f.until && <button type="button" onClick={() => setF({ ...f, until: "" })} className="text-muted-foreground hover:text-foreground" aria-label="Just one day"><X className="h-4 w-4" /></button>}
+              </div>
             </label>
-          )}
-          {f.until && (
-            <div className={`pb-2 text-xs ${rangeBad ? "text-destructive" : "text-muted-foreground"}`}>
-              {rangeBad ? "The end date is before the start date." : `${days.length} day${days.length === 1 ? "" : "s"} × ${picked.length} employee${picked.length === 1 ? "" : "s"} = ${days.length * picked.length} records`}
-            </div>
-          )}
-        </div>
-        <div className="grid items-end gap-3 md:grid-cols-6">
-          {mode === "clock" ? (
-            <>
-              <label title={covered ? "Each shift's usual hours are used (see below)" : undefined}><span className="label-mono"><EditableLabel k="clock_in" name="Clock in" /></span><input type="time" className={`${inputCls} mt-1 disabled:opacity-40`} disabled={covered} value={covered ? "" : f.clock_in} onChange={(e) => setF({ ...f, clock_in: e.target.value })} required={!covered} /></label>
-              <label title={covered ? "Each shift's usual hours are used (see below)" : undefined}><span className="label-mono"><EditableLabel k="clock_out" name="Clock out" /></span><input type="time" className={`${inputCls} mt-1 disabled:opacity-40`} disabled={covered} value={covered ? "" : f.clock_out} onChange={(e) => setF({ ...f, clock_out: e.target.value })} required={!covered} /></label>
-              <label title={covered ? "Each shift's usual hours are used (see below)" : undefined}>
-                <span className="flex items-center justify-between gap-1"><span className="label-mono"><BreakHeader unit={breakUnit} /></span><BreakUnitToggle /></span>
-                {covered
-                  ? <input className={`${inputCls} mt-1 disabled:opacity-40`} disabled value="" aria-label="Break" />
-                  : <BreakInput minutes={f.lunch_minutes} onChange={(m) => setF({ ...f, lunch_minutes: m })} className={`${inputCls} mt-1`} />}
+            {f.until && (
+              <label className="flex items-center gap-2 pb-2 text-sm">
+                <input type="checkbox" checked={f.skip_weekends} onChange={(e) => setF({ ...f, skip_weekends: e.target.checked })} /> Skip Saturdays and Sundays
               </label>
-            </>
-          ) : (
-            <label className="md:col-span-3" title={covered ? "Each shift's usual hours are used (see below)" : undefined}><span className="label-mono"><EditableLabel k="hours" name="Hours worked" /></span><input type="number" step="0.25" min={0} max={24} className={`${inputCls} mt-1 disabled:opacity-40`} disabled={covered} value={covered ? "" : f.hours} onChange={(e) => setF({ ...f, hours: e.target.value })} /></label>
-          )}
-          <label title="For covering a different shift than usual, e.g. a night worker on a day shift. Overtime pays the same either way.">
-            <span className="label-mono"><EditableLabel k="shift" name="Shift" /></span>
-            <RecordShiftSelect value={f.shift_id} onChange={(id) => setF({ ...f, shift_id: id })} shifts={shifts} ownLabel="Each person's usual" className={`${inputCls} mt-1`} />
-          </label>
-          <label title="Leave empty to pay from hours. Enter an amount to pay exactly that for the day.">
-            <span className="label-mono"><EditableLabel k="manual_pay" name="Day pay" /> (optional)</span>
-            <input className={`${inputCls} mt-1`} inputMode="decimal" placeholder="auto" value={f.pay} onChange={(e) => setF({ ...f, pay: e.target.value })} />
-          </label>
-          <div>
-            <div className="mb-1 text-right font-mono text-[11px] text-muted-foreground">{useOwn ? "varies" : `${preview.toFixed(2)} h`}</div>
-            <button className={`${btnPrimary} w-full`}>Add</button>
-          </div>
-        </div>
-        {mixed && (
-          <div className="space-y-1.5 rounded-xl bg-secondary/50 p-3 text-sm ring-1 ring-border">
-            <label className="flex items-center gap-2 font-medium">
-              <input type="checkbox" checked={eachShift} onChange={(e) => setEachShift(e.target.checked)} />
-              Add each shift's usual hours
-            </label>
-            {eachShift ? (
-              <ul className="space-y-2 pl-6">
-                {shiftGroups.map((g) => {
-                  const t = timesOf(g);
-                  const edited = !!groupEdits[g.key];
-                  const h = mode === "clock" ? computeHours(t.clock_in, t.clock_out, Number(t.lunch_minutes) || 0) : Number(t.hours) || 0;
-                  const small = `${inputCls} !py-1.5 text-sm ${edited ? "ring-2 ring-primary/40" : ""}`;
-                  return (
-                    <li key={g.key} className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
-                      <div className="min-w-[14rem] flex-1 text-xs text-muted-foreground">
-                        <span className="text-sm font-medium text-foreground">{g.name}</span>
-                        {" · "}{g.people.length} {g.people.length === 1 ? "person" : "people"} ({g.people.slice(0, 3).join(", ")}{g.people.length > 3 ? ` +${g.people.length - 3} more` : ""})
-                        <div>{g.times ? (edited ? `Changed from usual ${describeTimes(g.times)}, ${formatBreak(g.times.lunch_minutes, breakUnit)} ${breakUnit === "h" ? "h" : "min"} break` : "Usual hours") : "No usual hours"}</div>
-                      </div>
-                      {mode === "clock" ? (
-                        <>
-                          <input type="time" aria-label={`${g.name} clock in`} className={`${small} !w-32`} value={t.clock_in} onChange={(e) => editGroup(g, { clock_in: e.target.value })} />
-                          <span className="text-muted-foreground">–</span>
-                          <input type="time" aria-label={`${g.name} clock out`} className={`${small} !w-32`} value={t.clock_out} onChange={(e) => editGroup(g, { clock_out: e.target.value })} />
-                          <BreakInput label={`${g.name} break`} minutes={t.lunch_minutes} onChange={(m) => editGroup(g, { lunch_minutes: m })} className={`${small} !w-20`} />
-                          <span className="text-xs text-muted-foreground">{breakUnit === "h" ? "h" : "min"} break</span>
-                        </>
-                      ) : (
-                        <>
-                          <input type="number" step="0.25" min={0} max={24} aria-label={`${g.name} hours`} className={`${small} !w-24`} value={t.hours} onChange={(e) => editGroup(g, { hours: e.target.value })} />
-                          <span className="text-xs text-muted-foreground">hours</span>
-                        </>
-                      )}
-                      <span className="w-16 text-right font-mono text-xs">{mode === "clock" ? `= ${h.toFixed(2)} h` : ""}</span>
-                      <button type="button" onClick={() => resetGroup(g)} disabled={!edited} className="w-24 text-left text-xs text-muted-foreground hover:text-foreground disabled:invisible">
-                        {g.times ? "Back to usual" : "Reset"}
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            ) : (
-              <p className="pl-6 text-xs text-muted-foreground">Everyone gets the {mode === "clock" ? "times" : "hours"} above.</p>
+            )}
+            {f.until && (
+              <div className={`pb-2 text-xs ${rangeBad ? "text-destructive" : "text-muted-foreground"}`}>
+                {rangeBad ? "The end date is before the start date." : `${days.length} day${days.length === 1 ? "" : "s"} × ${picked.length} employee${picked.length === 1 ? "" : "s"} = ${days.length * picked.length} records`}
+              </div>
             )}
           </div>
-        )}
-      </form>
+          <div className="grid items-end gap-3 md:grid-cols-6">
+            {mode === "clock" ? (
+              <>
+                <label title={covered ? "Each shift's usual hours are used (see below)" : undefined}><span className="label-mono"><EditableLabel k="clock_in" name="Clock in" /></span><input type="time" className={`${inputCls} mt-1 disabled:opacity-40`} disabled={covered} value={covered ? "" : f.clock_in} onChange={(e) => setF({ ...f, clock_in: e.target.value })} required={!covered} /></label>
+                <label title={covered ? "Each shift's usual hours are used (see below)" : undefined}><span className="label-mono"><EditableLabel k="clock_out" name="Clock out" /></span><input type="time" className={`${inputCls} mt-1 disabled:opacity-40`} disabled={covered} value={covered ? "" : f.clock_out} onChange={(e) => setF({ ...f, clock_out: e.target.value })} required={!covered} /></label>
+                <label title={covered ? "Each shift's usual hours are used (see below)" : undefined}>
+                  <span className="flex items-center justify-between gap-1"><span className="label-mono"><BreakHeader unit={breakUnit} /></span><BreakUnitToggle /></span>
+                  {covered
+                    ? <input className={`${inputCls} mt-1 disabled:opacity-40`} disabled value="" aria-label="Break" />
+                    : <BreakInput minutes={f.lunch_minutes} onChange={(m) => setF({ ...f, lunch_minutes: m })} className={`${inputCls} mt-1`} />}
+                </label>
+              </>
+            ) : (
+              <label className="md:col-span-3" title={covered ? "Each shift's usual hours are used (see below)" : undefined}><span className="label-mono"><EditableLabel k="hours" name="Hours worked" /></span><input type="number" step="0.25" min={0} max={24} className={`${inputCls} mt-1 disabled:opacity-40`} disabled={covered} value={covered ? "" : f.hours} onChange={(e) => setF({ ...f, hours: e.target.value })} /></label>
+            )}
+            <label title="For covering a different shift than usual, e.g. a night worker on a day shift. Overtime pays the same either way.">
+              <span className="label-mono"><EditableLabel k="shift" name="Shift" /></span>
+              <RecordShiftSelect value={f.shift_id} onChange={(id) => setF({ ...f, shift_id: id })} shifts={shifts} ownLabel="Each person's usual" className={`${inputCls} mt-1`} />
+            </label>
+            <label title="Leave empty to pay from hours. Enter an amount to pay exactly that for the day.">
+              <span className="label-mono"><EditableLabel k="manual_pay" name="Day pay" /> (optional)</span>
+              <input className={`${inputCls} mt-1`} inputMode="decimal" placeholder="auto" value={f.pay} onChange={(e) => setF({ ...f, pay: e.target.value })} />
+            </label>
+            <div>
+              <div className="mb-1 text-right font-mono text-[11px] text-muted-foreground">{useOwn ? "varies" : `${preview.toFixed(2)} h`}</div>
+              <button className={`${btnPrimary} w-full`}>Add</button>
+            </div>
+          </div>
+          {/* Where the times came from, or why they weren't filled in: a shift with no usual hours leaves them as they were. */}
+          {mode === "clock" && !mixed && shiftGroups.length > 0 && (
+            <p className="text-xs text-muted-foreground">
+              {uniform
+                ? <>Times filled in from {shiftGroups.map((g) => g.name).join(" and ")}'s usual hours ({describeTimes(uniform)}). Change them above for these records only.</>
+                : <>{shiftGroups.map((g) => g.name).join(" and ")} has no usual hours yet, so the times aren't filled in for {shiftGroups.length === 1 && picked.length === 1 ? "this person" : "these people"}.{" "}
+                  <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={() => openSettings("pay")}>Set usual hours</button></>}
+            </p>
+          )}
+          {mixed && (
+            <div className="space-y-1.5 rounded-xl bg-secondary/50 p-3 text-sm ring-1 ring-border">
+              <label className="flex items-center gap-2 font-medium">
+                <input type="checkbox" checked={eachShift} onChange={(e) => setEachShift(e.target.checked)} />
+                Add each shift's usual hours
+              </label>
+              {eachShift ? (
+                <ul className="space-y-2 pl-6">
+                  {shiftGroups.map((g) => {
+                    const t = timesOf(g);
+                    const edited = !!groupEdits[g.key];
+                    const h = mode === "clock" ? computeHours(t.clock_in, t.clock_out, Number(t.lunch_minutes) || 0) : Number(t.hours) || 0;
+                    const small = `${inputCls} !py-1.5 text-sm ${edited ? "ring-2 ring-primary/40" : ""}`;
+                    return (
+                      <li key={g.key} className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+                        <div className="min-w-[14rem] flex-1 text-xs text-muted-foreground">
+                          <span className="text-sm font-medium text-foreground">{g.name}</span>
+                          {" · "}{g.people.length} {g.people.length === 1 ? "person" : "people"} ({g.people.slice(0, 3).join(", ")}{g.people.length > 3 ? ` +${g.people.length - 3} more` : ""})
+                          <div>{g.times ? (edited ? `Changed from usual ${describeTimes(g.times)}, ${formatBreak(g.times.lunch_minutes, breakUnit)} ${breakUnit === "h" ? "h" : "min"} break` : "Usual hours") : "No usual hours"}</div>
+                        </div>
+                        {mode === "clock" ? (
+                          <>
+                            <input type="time" aria-label={`${g.name} clock in`} className={`${small} !w-32`} value={t.clock_in} onChange={(e) => editGroup(g, { clock_in: e.target.value })} />
+                            <span className="text-muted-foreground">–</span>
+                            <input type="time" aria-label={`${g.name} clock out`} className={`${small} !w-32`} value={t.clock_out} onChange={(e) => editGroup(g, { clock_out: e.target.value })} />
+                            <BreakInput label={`${g.name} break`} minutes={t.lunch_minutes} onChange={(m) => editGroup(g, { lunch_minutes: m })} className={`${small} !w-20`} />
+                            <span className="text-xs text-muted-foreground">{breakUnit === "h" ? "h" : "min"} break</span>
+                          </>
+                        ) : (
+                          <>
+                            <input type="number" step="0.25" min={0} max={24} aria-label={`${g.name} hours`} className={`${small} !w-24`} value={t.hours} onChange={(e) => editGroup(g, { hours: e.target.value })} />
+                            <span className="text-xs text-muted-foreground">hours</span>
+                          </>
+                        )}
+                        <span className="w-16 text-right font-mono text-xs">{mode === "clock" ? `= ${h.toFixed(2)} h` : ""}</span>
+                        <button type="button" onClick={() => resetGroup(g)} disabled={!edited} className="w-24 text-left text-xs text-muted-foreground hover:text-foreground disabled:invisible">
+                          {g.times ? "Back to usual" : "Reset"}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <p className="pl-6 text-xs text-muted-foreground">Everyone gets the {mode === "clock" ? "times" : "hours"} above.</p>
+              )}
+            </div>
+          )}
+        </form>
+      </FoldBox>
 
       <div className="flex flex-wrap items-center gap-3">
         <span className="label-mono">Filter</span>
@@ -533,7 +563,7 @@ function RecordsPage() {
         <BulkRecordEdit
           mode={listMode} employees={employees}
           label={bulk === "selected" ? `${pickedRows.length} selected record${pickedRows.length === 1 ? "" : "s"}` : `all ${total} ${describeFilter} records`}
-          load={async () => (bulk === "selected" ? pickedRows : storeFor(dataMode).listRecordsMatching(filter))}
+          load={async () => (bulk === "selected" ? pickedRows : db().listRecordsMatching(filter))}
           onClose={() => setBulk(null)} onDone={() => { setBulk(null); setSelected(new Set()); refresh(); }}
         />
       )}
@@ -558,7 +588,7 @@ function RecordsPage() {
           {loading && <span className="text-xs font-normal text-muted-foreground">{needsPay ? "working out pay…" : inApp ? "sorting…" : "loading…"}</span>}</span>}
         sort={sort} sortColumns={sortColumns} onSort={setSort}
         rows={rows} total={total} loading={inApp ? !everything.data : !page.data} mode={listMode} onModeChange={setListMode} employees={employees}
-        selected={selected} onToggle={toggleRow} onToggleAll={toggleAllRows} onChanged={refresh} onDelete={del}
+        selected={selected} onToggle={toggleRow} onToggleAll={toggleAllRows} onSelect={setSelected} onChanged={refresh} onDelete={del}
         footer={
           <div className="flex flex-wrap items-center gap-2">
             {total > 0 && <button onClick={() => setBulk("all")} className={btnGhost}>Edit all {total}</button>}
@@ -583,12 +613,12 @@ type DateMode = "set" | "shift";
 /** Changes the ticked fields on every target record. Clock fields only touch clock records; hours only touch daily-hours records. */
 function BulkRecordEdit({ mode, employees, label, load, onClose, onDone }: {
   mode: EntryMode; employees: Employee[]; label: string;
-  load: () => Promise<Pick<TimeRecord, "id" | "work_date" | "entry_mode">[]>; onClose: () => void; onDone: () => void;
+  load: () => Promise<Pick<TimeRecord, "id" | "employee_id" | "work_date" | "entry_mode" | "clock_in" | "clock_out" | "lunch_minutes" | "hours">[]>; onClose: () => void; onDone: () => void;
 }) {
   const [on, setOn] = useState<Record<string, boolean>>({});
   const { data: shifts = [] } = useShifts();
   const [breakUnit] = useBreakUnit();
-  const [v, setV] = useState({ employee_id: "", date: "", shift: "1", clock_in: "09:00", clock_out: "17:00", lunch_minutes: "30", hours: "8", note: "", pay: "", shift_id: "" });
+  const [v, setV] = useState({ employee_id: "", date: "", shift: "1", clock_in: "09:00", clock_out: "17:00", lunch_minutes: String(DEFAULT_BREAK_MINUTES), hours: "8", note: "", pay: "", shift_id: "" });
   const [dateMode, setDateMode] = useState<DateMode>("set");
   const [busy, setBusy] = useState(false);
   // "Edit all" lives in the table footer, often far below this panel: bring the panel into view when it opens or changes target.
@@ -646,6 +676,8 @@ function BulkRecordEdit({ mode, employees, label, load, onClose, onDone }: {
         if (on["pay"]) patch["pay_override"] = v.pay.trim() ? Math.round(payNum * 100) / 100 : null;
         return { id: r.id, patch };
       });
+      const after = targets.map((r, i) => ({ ...r, ...rows[i]!.patch }) as typeof r);
+      if (!(await confirmLongRecords(after, (id) => { const e = employees.find((x) => x.id === id); return e ? fullName(e) : "Someone"; }))) return;
       if (!(await askConfirm({
         title: `Change ${rows.length} record${rows.length === 1 ? "" : "s"}?`,
         detail: "A backup is saved first, so you can restore it from Sync & backup.",

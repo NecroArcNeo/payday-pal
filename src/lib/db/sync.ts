@@ -50,7 +50,7 @@ export type PushResult =
     differ: SnapshotCounts;
     /** Another computer that pushed since this one last synced. */
     otherDevice: { name: string; at: string | null } | null;
-    /** The cloud copy was edited directly ("Edit cloud directly") since the last push. */
+    /** The cloud copy changed since the last push without a push from any computer (older versions could edit it directly). */
     editedInCloud: boolean;
   };
 export type PullResult =

@@ -240,6 +240,7 @@ const NOUNS: Record<TableName, [string, string]> = {
   employee_field_defs: ["a category", "categories"], shifts: ["a shift", "shifts"], employees: ["an employee", "employees"],
   pay_rates: ["a pay rate", "pay rates"], time_records: ["a record", "records"], pay_adjustments: ["an extra-pay entry", "extra-pay entries"],
   deductions: ["a deduction", "deductions"], pay_runs: ["a pay run", "pay runs"], pay_run_lines: ["a pay run line", "pay run lines"],
+  holidays: ["a holiday", "holidays"], work_patterns: ["a weekly pattern", "weekly patterns"],
   payroll_settings: ["the settings", "the settings"],
 };
 const count = (t: TableName, n: number) => (n === 1 ? NOUNS[t][0] : `${n} ${NOUNS[t][1]}`);

@@ -12,7 +12,7 @@ import { useEffect, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
 import { supabase } from "@/integrations/supabase/client";
-import { cloudConfigured, getDataMode, setDataMode } from "@/lib/db/mode";
+import { cloudConfigured } from "@/lib/db/mode";
 import { Toaster } from "@/components/ui/sonner";
 import { PasswordPrompt } from "@/components/PasswordPrompt";
 import { ChoicePrompt } from "@/components/ChoicePrompt";
@@ -127,8 +127,6 @@ function RootComponent() {
     try {
       const { data } = supabase.auth.onAuthStateChange((event) => {
         if (event !== "SIGNED_IN" && event !== "SIGNED_OUT" && event !== "USER_UPDATED") return;
-        // Leaving the account means leaving its cloud copy too.
-        if (event === "SIGNED_OUT" && getDataMode() === "cloud") setDataMode("local");
         router.invalidate();
         queryClient.invalidateQueries();
       });

@@ -9,6 +9,7 @@ import { askConfirm } from "@/lib/choice-prompt";
 import { saveBackup } from "@/lib/db/backups";
 import { localDb } from "@/lib/db/local";
 import { maybeAutoBackup } from "@/lib/db/sync";
+import { FoldBox } from "@/components/FoldBox";
 
 /** The react-query key the copies' status is kept under (Sync & backup's banner reads it too). */
 export const BACKUP_COPY_KEY = ["backup-copy"];
@@ -112,62 +113,64 @@ export function BackupCopyPanel() {
   });
 
   return (
-    <section className="glass-panel space-y-3 p-5">
-      <div className="flex items-center gap-2 font-display font-extrabold tracking-tight"><HardDriveDownload className="h-4 w-4" /> Copy backups to another drive</div>
-      {!s ? (
-        status.isError ? (
+    <FoldBox id="settings:backup-copies" title="Copies on another drive">
+      <section className="glass-panel space-y-3 p-5">
+        <div className="flex items-center gap-2 font-display font-extrabold tracking-tight"><HardDriveDownload className="h-4 w-4" /> Copy backups to another drive</div>
+        {!s ? (
+          status.isError ? (
+            <>
+              <p className="text-sm text-destructive">Couldn't read the copy settings: {status.error.message}. If the app was just updated, close it and open it again.</p>
+              <button onClick={() => void status.refetch()} className={btnGhost}>Try again</button>
+            </>
+          ) : <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : !s.on ? (
           <>
-            <p className="text-sm text-destructive">Couldn't read the copy settings: {status.error.message}. If the app was just updated, close it and open it again.</p>
-            <button onClick={() => void status.refetch()} className={btnGhost}>Try again</button>
-          </>
-        ) : <p className="text-sm text-muted-foreground">Loading…</p>
-      ) : !s.on ? (
-        <>
-          <p className="text-sm text-muted-foreground">
-            The backups below are on this computer's disk: if it fails or is wiped, they go with it. Pick a folder on a USB stick or another drive, and after every backup the app also saves the newest there as a password-protected backup file. To get your data back, install the app on any computer and use Restore from file.
-          </p>
-          <button onClick={turnOn} disabled={!!busy} className={btnPrimary}>{busy === "on" ? "Setting up…" : "Choose where to copy backups…"}</button>
-        </>
-      ) : (
-        <>
-          <p className="text-sm">
-            Copying to <code className="break-all">{s.folder}</code>{" "}
-            <span className="inline-flex gap-3 text-xs text-muted-foreground">
-              <button className="underline underline-offset-2" onClick={moveFolder} disabled={!!busy}>Change…</button>
-              <button className="inline-flex items-center gap-1 underline underline-offset-2" onClick={() => desktop!.openFolder("copy").catch((e: Error) => toast.error(e.message))}><FolderOpen className="h-3 w-3" /> Open folder</button>
-            </span>
-          </p>
-          {s.error ? (
-            <p className="flex items-start gap-2 text-sm text-destructive">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>Couldn't copy at {when(s.error.at)}: {s.error.message}. It tries again every few minutes and after the next backup.{s.copied && ` The last copy there is from ${when(s.copied.backupAt)}.`}</span>
+            <p className="text-sm text-muted-foreground">
+              The backups below are on this computer's disk: if it fails or is wiped, they go with it. Pick a folder on a USB stick or another drive, and after every backup the app also saves the newest there as a password-protected backup file. To get your data back, install the app on any computer and use Restore from file.
             </p>
-          ) : (
-            <p className="text-sm text-muted-foreground">{s.copied ? `Last copy: the backup from ${when(s.copied.backupAt)}, copied ${when(s.copied.at)}.` : "No copy yet: one is made after the next backup."}</p>
-          )}
-          {s.keyLost && <p className="text-sm text-destructive">This computer's key changed since copies were turned on, so the app can't use the copies' password any more. Set it again to keep copying.</p>}
-          {!s.protected && <p className="text-xs text-destructive">The copies have no password: anyone with the drive can read everything in them, including ID numbers.</p>}
-          {s.sameDrive && <p className="text-xs text-muted-foreground">This folder is on the same drive as the app's data, so a failed or wiped disk would take the copies too.</p>}
-          <div className="flex flex-wrap items-center gap-2">
-            <button onClick={() => act("now", copyNow)} disabled={!!busy} className={btnPrimary}>{busy === "now" ? "Copying…" : "Copy now"}</button>
-            <button onClick={moveFolder} disabled={!!busy} className={btnGhost}>Change folder…</button>
-            <button onClick={changePassword} disabled={!!busy} className={btnGhost}>{s.keyLost ? "Set the password again…" : s.protected ? "Change password…" : "Add a password…"}</button>
-            <label className="flex items-center gap-2 text-sm text-muted-foreground">
-              Keep the newest
-              <select
-                className="h-9 rounded-xl bg-secondary px-2 text-sm text-foreground ring-1 ring-border"
-                value={s.keep}
-                disabled={!!busy}
-                onChange={(e) => void act("keep", () => copy.set({ keep: Number(e.target.value) }))}
-              >
-                {KEEP_CHOICES.map((n) => <option key={n} value={n}>{n}</option>)}
-              </select>
-            </label>
-            <button onClick={turnOff} disabled={!!busy} className={`${btnGhost} ml-auto`}>Stop copying</button>
-          </div>
-          <p className="text-[11px] text-muted-foreground">Copies of backups you save yourself (Back up now) are always kept. Files in the folder that aren't this computer's copies are never touched.</p>
-        </>
-      )}
-    </section>
+            <button onClick={turnOn} disabled={!!busy} className={btnPrimary}>{busy === "on" ? "Setting up…" : "Choose where to copy backups…"}</button>
+          </>
+        ) : (
+          <>
+            <p className="text-sm">
+              Copying to <code className="break-all">{s.folder}</code>{" "}
+              <span className="inline-flex gap-3 text-xs text-muted-foreground">
+                <button className="underline underline-offset-2" onClick={moveFolder} disabled={!!busy}>Change…</button>
+                <button className="inline-flex items-center gap-1 underline underline-offset-2" onClick={() => desktop!.openFolder("copy").catch((e: Error) => toast.error(e.message))}><FolderOpen className="h-3 w-3" /> Open folder</button>
+              </span>
+            </p>
+            {s.error ? (
+              <p className="flex items-start gap-2 text-sm text-destructive">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>Couldn't copy at {when(s.error.at)}: {s.error.message}. It tries again every few minutes and after the next backup.{s.copied && ` The last copy there is from ${when(s.copied.backupAt)}.`}</span>
+              </p>
+            ) : (
+              <p className="text-sm text-muted-foreground">{s.copied ? `Last copy: the backup from ${when(s.copied.backupAt)}, copied ${when(s.copied.at)}.` : "No copy yet: one is made after the next backup."}</p>
+            )}
+            {s.keyLost && <p className="text-sm text-destructive">This computer's key changed since copies were turned on, so the app can't use the copies' password any more. Set it again to keep copying.</p>}
+            {!s.protected && <p className="text-xs text-destructive">The copies have no password: anyone with the drive can read everything in them, including ID numbers.</p>}
+            {s.sameDrive && <p className="text-xs text-muted-foreground">This folder is on the same drive as the app's data, so a failed or wiped disk would take the copies too.</p>}
+            <div className="flex flex-wrap items-center gap-2">
+              <button onClick={() => act("now", copyNow)} disabled={!!busy} className={btnPrimary}>{busy === "now" ? "Copying…" : "Copy now"}</button>
+              <button onClick={moveFolder} disabled={!!busy} className={btnGhost}>Change folder…</button>
+              <button onClick={changePassword} disabled={!!busy} className={btnGhost}>{s.keyLost ? "Set the password again…" : s.protected ? "Change password…" : "Add a password…"}</button>
+              <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                Keep the newest
+                <select
+                  className="h-9 rounded-xl bg-secondary px-2 text-sm text-foreground ring-1 ring-border"
+                  value={s.keep}
+                  disabled={!!busy}
+                  onChange={(e) => void act("keep", () => copy.set({ keep: Number(e.target.value) }))}
+                >
+                  {KEEP_CHOICES.map((n) => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </label>
+              <button onClick={turnOff} disabled={!!busy} className={`${btnGhost} ml-auto`}>Stop copying</button>
+            </div>
+            <p className="text-[11px] text-muted-foreground">Copies of backups you save yourself (Back up now) are always kept. Files in the folder that aren't this computer's copies are never touched.</p>
+          </>
+        )}
+      </section>
+    </FoldBox>
   );
 }

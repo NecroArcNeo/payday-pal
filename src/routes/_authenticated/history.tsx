@@ -7,6 +7,7 @@ import { HistoryList } from "@/components/HistoryView";
 import { useEmployees } from "@/lib/payroll";
 import { openSettings } from "@/lib/settings-window";
 import type { HistoryKind } from "@/lib/db/history";
+import { FoldBox } from "@/components/FoldBox";
 
 export const Route = createFileRoute("/_authenticated/history")({
   head: () => ({ meta: [{ title: "Edit history — KoPayroll" }] }),
@@ -34,22 +35,24 @@ function HistoryPage() {
       <p className="text-sm text-muted-foreground">
         Every change made in the app on this computer, kept after the app closes. Click an entry to see each field before and after. Ctrl+Z undoes this session's changes; to go back further, restore a backup on Sync & backup.
       </p>
-      <div className="glass-panel overflow-hidden">
-        <div className="flex flex-wrap items-center gap-3 border-b border-border px-5 py-3">
-          <div className="w-72"><EmployeePicker employees={employees} value={employeeId} onChange={setEmployeeId} emptyLabel="Everyone" placeholder="Everyone" /></div>
-          <span className="flex items-center gap-2 text-sm">
-            <DateInput className={`${inputCls} !w-40`} value={from} onChange={setFrom} placeholder="From" aria-label="From" />
-            <span className="text-muted-foreground">→</span>
-            <DateInput className={`${inputCls} !w-40`} value={to} onChange={setTo} placeholder="To" aria-label="To" />
-          </span>
-          <select className={`${inputCls} !w-48`} value={kind} onChange={(e) => setKind(e.target.value as "" | HistoryKind)} aria-label="Kind">
-            {KINDS.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}
-          </select>
-          <input className={`${inputCls} min-w-[12rem] flex-1`} placeholder="Search names, amounts, notes…" value={text} onChange={(e) => setText(e.target.value)} />
-          {filtering && <button type="button" className={btnGhost} onClick={() => { setEmployeeId(""); setFrom(""); setTo(""); setKind(""); setText(""); }}>Clear</button>}
+      <FoldBox id="history:list" title="Edit history">
+        <div className="glass-panel overflow-hidden">
+          <div className="flex flex-wrap items-center gap-3 border-b border-border px-5 py-3">
+            <div className="w-72"><EmployeePicker employees={employees} value={employeeId} onChange={setEmployeeId} emptyLabel="Everyone" placeholder="Everyone" /></div>
+            <span className="flex items-center gap-2 text-sm">
+              <DateInput className={`${inputCls} !w-40`} value={from} onChange={setFrom} placeholder="From" aria-label="From" />
+              <span className="text-muted-foreground">→</span>
+              <DateInput className={`${inputCls} !w-40`} value={to} onChange={setTo} placeholder="To" aria-label="To" />
+            </span>
+            <select className={`${inputCls} !w-48`} value={kind} onChange={(e) => setKind(e.target.value as "" | HistoryKind)} aria-label="Kind">
+              {KINDS.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}
+            </select>
+            <input className={`${inputCls} min-w-[12rem] flex-1`} placeholder="Search names, amounts, notes…" value={text} onChange={(e) => setText(e.target.value)} />
+            {filtering && <button type="button" className={btnGhost} onClick={() => { setEmployeeId(""); setFrom(""); setTo(""); setKind(""); setText(""); }}>Clear</button>}
+          </div>
+          <HistoryList filter={filter} empty={filtering ? "No changes match." : "No changes recorded yet. Every change from now on is listed here."} />
         </div>
-        <HistoryList filter={filter} empty={filtering ? "No changes match." : "No changes recorded yet. Every change from now on is listed here."} />
-      </div>
+      </FoldBox>
     </AppShell>
   );
 }

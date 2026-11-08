@@ -7,6 +7,7 @@ import { useSyncExternalStore } from "react";
 export const SETTINGS_SECTIONS = [
   { id: "features", label: "Features" },
   { id: "pay", label: "Pay rules" },
+  { id: "holidays", label: "Holidays" },
   { id: "checks", label: "Checks & colours" },
   { id: "display", label: "Display" },
   { id: "privacy", label: "Privacy & security" },

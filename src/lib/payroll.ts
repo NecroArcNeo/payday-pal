@@ -2,10 +2,10 @@ import { useMemo } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import type { Tables } from "@/integrations/supabase/types";
-import { cloudConfigured, storeFor, useDataMode } from "@/lib/db/mode";
+import { cloudConfigured, db } from "@/lib/db/mode";
 import { localDb } from "@/lib/db/local";
 import { getPrivateFields } from "@/lib/db/privacy";
-import { payByRecord, weekEnd, weekStart, type PayLine } from "@/lib/pay";
+import { payByRecord, payRules, weekEnd, weekStart, type PayLine, type PayRules } from "@/lib/pay";
 import type { EmployeeDefaults } from "@/lib/employee-fields";
 import { dayAfter, dayBefore, type NearestRecords } from "@/lib/period-hint";
 
@@ -32,8 +32,7 @@ export function useSession() {
 
 // Query keys end with the data mode so this device's and the cloud's data never share a cache entry.
 export function useEmployees() {
-  const mode = useDataMode();
-  return useQuery({ queryKey: ["employees", mode], queryFn: () => storeFor(mode).listEmployees() });
+  return useQuery({ queryKey: ["employees"], queryFn: () => db().listEmployees() });
 }
 
 /**
@@ -41,12 +40,11 @@ export function useEmployees() {
  * change on an employee adds history (a database trigger), so refreshing employees refreshes this too.
  */
 export function usePayRates() {
-  const mode = useDataMode();
   return useQuery({
-    queryKey: ["employees", "rates", mode],
+    queryKey: ["employees", "rates"],
     queryFn: async () => {
       const m = new Map<string, Tables<"pay_rates">[]>();
-      for (const r of await storeFor(mode).listPayRates()) m.set(r.employee_id, [...(m.get(r.employee_id) ?? []), r]);
+      for (const r of await db().listPayRates()) m.set(r.employee_id, [...(m.get(r.employee_id) ?? []), r]);
       return m;
     },
   });
@@ -54,13 +52,32 @@ export function usePayRates() {
 
 export type Deduction = Tables<"deductions">;
 /** Every employee's deductions, by employee id. */
+export type Holiday = Tables<"holidays">;
+export type WorkPattern = Tables<"work_patterns">;
+
+/** Public holidays, by date (schema 14). */
+export function useHolidays() {
+  return useQuery({ queryKey: ["holidays"], queryFn: () => db().listHolidays() });
+}
+
+/** Saved weekly patterns (schema 14). */
+export function usePatterns() {
+  return useQuery({ queryKey: ["work_patterns"], queryFn: () => db().listPatterns() });
+}
+
+/** The pay rules everywhere pay is worked out; undefined until the settings and holidays are read. */
+export function usePayRules(): PayRules | undefined {
+  const { data: settings } = usePayrollSettings();
+  const { data: holidays } = useHolidays();
+  return useMemo(() => (settings && holidays ? payRules(settings, holidays) : undefined), [settings, holidays]);
+}
+
 export function useDeductions() {
-  const mode = useDataMode();
   return useQuery({
-    queryKey: ["deductions", mode],
+    queryKey: ["deductions"],
     queryFn: async () => {
       const m = new Map<string, Deduction[]>();
-      for (const d of await storeFor(mode).listDeductions()) m.set(d.employee_id, [...(m.get(d.employee_id) ?? []), d]);
+      for (const d of await db().listDeductions()) m.set(d.employee_id, [...(m.get(d.employee_id) ?? []), d]);
       return m;
     },
   });
@@ -69,19 +86,17 @@ export function useDeductions() {
 export type PayRun = Tables<"pay_runs"> & { lines: Tables<"pay_run_lines">[] };
 /** Every pay run with its lines, newest period first. */
 export function usePayRuns() {
-  const mode = useDataMode();
   return useQuery({
-    queryKey: ["pay-runs", mode],
+    queryKey: ["pay-runs"],
     queryFn: async (): Promise<PayRun[]> => {
-      const { runs, lines } = await storeFor(mode).listPayRuns();
+      const { runs, lines } = await db().listPayRuns();
       return runs.map((r) => ({ ...r, lines: lines.filter((l) => l.pay_run_id === r.id) }));
     },
   });
 }
 
 export function useRecords(from?: string, to?: string) {
-  const mode = useDataMode();
-  return useQuery({ queryKey: ["records", from, to, mode], queryFn: () => storeFor(mode).listRecords(from, to) });
+  return useQuery({ queryKey: ["records", from, to], queryFn: () => db().listRecords(from, to) });
 }
 
 /** "Mon", "Tue"… for an ISO date, without timezone drift. */
@@ -137,13 +152,11 @@ export function usePrivateFields() {
 }
 
 export function useFieldDefs() {
-  const mode = useDataMode();
-  return useQuery({ queryKey: ["field-defs", mode], queryFn: () => storeFor(mode).listFieldDefs() });
+  return useQuery({ queryKey: ["field-defs"], queryFn: () => db().listFieldDefs() });
 }
 
 export function useAdjustments(from?: string, to?: string) {
-  const mode = useDataMode();
-  return useQuery({ queryKey: ["adjustments", from, to, mode], queryFn: () => storeFor(mode).listAdjustments(from, to) });
+  return useQuery({ queryKey: ["adjustments", from, to], queryFn: () => db().listAdjustments(from, to) });
 }
 
 /** `locked_through`: days up to and including this date are locked as paid (null = nothing locked). */
@@ -154,19 +167,17 @@ export const defaultSettings = {
 
 /** The default profile new employees start with (see `withDefaults`). */
 export function useEmployeeDefaults() {
-  const mode = useDataMode();
   return useQuery({
-    queryKey: ["payroll-settings", "employee-defaults", mode],
-    queryFn: async () => ((await storeFor(mode).getSettings())?.employee_defaults ?? {}) as EmployeeDefaults,
+    queryKey: ["payroll-settings", "employee-defaults"],
+    queryFn: async () => ((await db().getSettings())?.employee_defaults ?? {}) as EmployeeDefaults,
   });
 }
 
 export function usePayrollSettings() {
-  const mode = useDataMode();
   return useQuery({
-    queryKey: ["payroll-settings", mode],
+    queryKey: ["payroll-settings"],
     queryFn: async () => {
-      const data = await storeFor(mode).getSettings();
+      const data = await db().getSettings();
       return data
         ? {
           ot_threshold: Number(data.ot_threshold), ot_multiplier: Number(data.ot_multiplier), weekend_overtime: data.weekend_overtime ?? true,
@@ -181,14 +192,12 @@ export function usePayrollSettings() {
 export type Shift = Tables<"shifts">;
 
 export function useShifts() {
-  const mode = useDataMode();
-  return useQuery({ queryKey: ["shifts", mode], queryFn: () => storeFor(mode).listShifts() });
+  return useQuery({ queryKey: ["shifts"], queryFn: () => db().listShifts() });
 }
 
 /** Every record in a date range — no row cap, so pay totals are never cut short. */
 export function useAllRecords(from: string, to: string) {
-  const mode = useDataMode();
-  return useQuery({ queryKey: ["records", "all", from, to, mode], queryFn: () => storeFor(mode).listRecordsMatching({ from, to }) });
+  return useQuery({ queryKey: ["records", "all", from, to], queryFn: () => db().listRecordsMatching({ from, to }) });
 }
 
 /**
@@ -197,12 +206,11 @@ export function useAllRecords(from: string, to: string) {
  * reads on either store, run only when `enabled`.
  */
 export function useNearestRecords(from: string, to: string, enabled: boolean) {
-  const mode = useDataMode();
   return useQuery({
-    queryKey: ["records", "nearest", from, to, mode],
+    queryKey: ["records", "nearest", from, to],
     enabled,
     queryFn: async (): Promise<NearestRecords> => {
-      const store = storeFor(mode);
+      const store = db();
       const [before, after] = await Promise.all([
         store.listRecordsPage({ to: dayBefore(from), sort: { by: "date", desc: true } }, 0, 1),
         store.listRecordsPage({ from: dayAfter(to), sort: { by: "date", desc: false } }, 0, 1),
@@ -221,14 +229,13 @@ export function useNearestRecords(from: string, to: string, enabled: boolean) {
 export function useRecordPay(rows: Pick<TimeRecord, "work_date">[]): Map<string, PayLine> | undefined {
   const { data: employees } = useEmployees();
   const { data: shifts } = useShifts();
-  const { data: settings } = usePayrollSettings();
+  const rules = usePayRules();
   const { data: rates } = usePayRates();
   const context = useWeekRecords(rows);
   return useMemo(() => {
-    if (!context || !employees || !shifts || !settings || !rates) return undefined;
-    const rules = { threshold: settings.ot_threshold, otMultiplier: settings.ot_multiplier, weekendOvertime: settings.weekend_overtime };
+    if (!context || !employees || !shifts || !rules || !rates) return undefined;
     return payByRecord(context, employees, shifts, rules, rates);
-  }, [context, employees, shifts, settings, rates]);
+  }, [context, employees, shifts, rules, rates]);
 }
 
 /**
@@ -236,7 +243,6 @@ export function useRecordPay(rows: Pick<TimeRecord, "work_date">[]): Map<string,
  * at a whole day, need. One load shared by everything that asks for the same weeks.
  */
 export function useWeekRecords(rows: Pick<TimeRecord, "work_date">[]) {
-  const mode = useDataMode();
   let first = "", last = "";
   for (const r of rows) {
     if (!first || r.work_date < first) first = r.work_date;
@@ -244,8 +250,8 @@ export function useWeekRecords(rows: Pick<TimeRecord, "work_date">[]) {
   }
   const from = first && weekStart(first), to = last && weekEnd(last);
   const { data: context } = useQuery({
-    queryKey: ["records", "all", from, to, mode],
-    queryFn: () => storeFor(mode).listRecordsMatching({ from, to }),
+    queryKey: ["records", "all", from, to],
+    queryFn: () => db().listRecordsMatching({ from, to }),
     enabled: !!from,
     placeholderData: keepPreviousData,
   });

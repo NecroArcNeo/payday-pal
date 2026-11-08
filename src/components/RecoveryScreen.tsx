@@ -1,8 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { btnGhost, btnPrimary } from "@/components/AppShell";
-import { backupFileName, getBackup, listBackups, reasonLabel, saveBackup } from "@/lib/db/backups";
-import { readBackupFile, saveBackupFile } from "@/lib/backup-file";
+import { getBackup, listBackups, reasonLabel, saveBackup } from "@/lib/db/backups";
+import { readBackupFile } from "@/lib/backup-file";
 import { localDb } from "@/lib/db/local";
 import { countRows, describeCounts, validateSnapshot, type Snapshot } from "@/lib/db/snapshot";
 import { restoreSnapshot } from "@/lib/db/sync";
@@ -16,7 +16,7 @@ const SHOWN = 10;
 /**
  * Shown when the payroll database can't be opened. Nothing happens until the user picks a backup and
  * confirms: the damaged database folder is moved aside (never deleted) and the backup is restored into a
- * new one. In the browser there's no folder to move aside, so it only offers to download the backups.
+ * new one.
  */
 export function RecoveryScreen({ error }: { error: Error }) {
   const backups = useQuery({ queryKey: ["recovery-backups"], queryFn: listBackups, retry: false });
@@ -78,7 +78,7 @@ export function RecoveryScreen({ error }: { error: Error }) {
   return (
     <Frame title="Your payroll data couldn't be opened">
       <p className="text-sm text-muted-foreground">{error.message}</p>
-      <p className="text-xs text-muted-foreground">Nothing has been changed or deleted. {desktop ? "Pick a backup to restore; the damaged database will be moved aside and kept." : "Download the newest backup so you have it as a file, then try again."}</p>
+      <p className="text-xs text-muted-foreground">Nothing has been changed or deleted. Pick a backup to restore; the damaged database will be moved aside and kept.</p>
 
       {backups.isError ? (
         <p className="text-sm text-destructive">The backups couldn't be read either: {backups.error.message}</p>
@@ -90,14 +90,11 @@ export function RecoveryScreen({ error }: { error: Error }) {
         <div className="max-h-72 divide-y divide-border overflow-y-auto rounded-xl ring-1 ring-border">
           {rows.map((b) => (
             <label key={b.id} className="flex cursor-pointer items-center gap-3 px-4 py-2.5 text-sm">
-              {desktop && <input type="radio" name="backup" checked={selected === b.id} onChange={() => setPicked(b.id)} />}
+              <input type="radio" name="backup" checked={selected === b.id} onChange={() => setPicked(b.id)} />
               <span className="min-w-0 flex-1">
                 <span className="block font-medium">{when(b.created_at)}{b.id === rows[0]!.id ? " (newest)" : ""}</span>
                 <span className="block text-xs text-muted-foreground">{reasonLabel[b.reason] ?? b.reason} · {describeCounts(b.counts)}</span>
               </span>
-              {!desktop && (
-                <button className={btnGhost} onClick={async () => { const full = await getBackup(b.id); if (full) await saveBackupFile(full.snapshot, backupFileName(new Date(full.created_at))); }}>Download</button>
-              )}
             </label>
           ))}
         </div>
@@ -106,9 +103,9 @@ export function RecoveryScreen({ error }: { error: Error }) {
       {problem && <p className="text-sm text-destructive">{problem}</p>}
 
       <div className="flex flex-wrap gap-2">
-        {desktop && <button onClick={restorePicked} disabled={busy || selected === null} className={btnPrimary}>{busy ? "Restoring…" : "Restore selected backup"}</button>}
-        {desktop && <button onClick={() => fileRef.current?.click()} disabled={busy} className={btnGhost}>Restore from a file…</button>}
-        {desktop && <button onClick={() => void desktop!.openFolder("backups")} className={btnGhost}>Open backups folder</button>}
+        <button onClick={restorePicked} disabled={busy || selected === null} className={btnPrimary}>{busy ? "Restoring…" : "Restore selected backup"}</button>
+        <button onClick={() => fileRef.current?.click()} disabled={busy} className={btnGhost}>Restore from a file…</button>
+        <button onClick={() => void desktop!.openFolder("backups")} className={btnGhost}>Open backups folder</button>
         <button onClick={() => location.reload()} disabled={busy} className={btnGhost}>Try again</button>
       </div>
       <input ref={fileRef} type="file" accept=".json,application/json" className="hidden" onChange={(e) => void restoreFile(e.target.files?.[0])} />

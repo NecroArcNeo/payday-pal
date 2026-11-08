@@ -43,6 +43,9 @@ export const COLUMNS: Record<TableName, readonly Column[]> = {
     c("hours", "real", 2), c("regular_hours", "real", 2), c("overtime_hours", "real", 2), c("extra_pay", "real", 2), c("gross", "real", 2),
     c("deductions", "json"), c("deductions_total", "real", 2), c("net", "real", 2),
   ],
+  // Schema 14: public holidays and their pay rules, and saved weekly patterns.
+  holidays: [c("id", "uuid"), c("holiday_date", "date"), c("name", "text"), c("multiplier", "real", 3), c("paid_hours", "real", 2), c("created_at", "timestamp")],
+  work_patterns: [c("id", "uuid"), c("name", "text"), c("days", "json"), c("employee_ids", "json"), c("sort_order", "int"), c("created_at", "timestamp")],
   payroll_settings: [
     c("id", "bool"), c("ot_threshold", "real"), c("ot_multiplier", "real"), c("visible_columns", "json"), c("updated_at", "timestamp"),
     c("weekend_overtime", "bool"), c("employee_defaults", "json"), c("locked_through", "date"),

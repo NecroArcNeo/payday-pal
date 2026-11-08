@@ -5,10 +5,11 @@ import { btnGhost, btnPrimary, inputCls } from "@/components/AppShell";
 import { BreakInput } from "@/components/BreakField";
 import { db } from "@/lib/db/mode";
 import { askConfirm } from "@/lib/choice-prompt";
-import { useBreakUnit, validBreak, breakRangeText } from "@/lib/breaks";
+import { DEFAULT_BREAK_MINUTES, useBreakUnit, validBreak, breakRangeText } from "@/lib/breaks";
 import { shiftFor } from "@/lib/pay";
 import type { Employee, Shift } from "@/lib/payroll";
 import type { TablesUpdate } from "@/integrations/supabase/types";
+import { FoldBox } from "@/components/FoldBox";
 
 /** The shifts employees can be on, each with a multiplier on the hourly rate. The first one is the default. */
 export function ShiftsPanel({ shifts, employees, onChange }: { shifts: Shift[]; employees: Employee[]; onChange: () => void }) {
@@ -57,24 +58,26 @@ export function ShiftsPanel({ shifts, employees, onChange }: { shifts: Shift[]; 
   };
 
   return (
-    <div className="glass-panel overflow-hidden">
-      <div className="border-b border-border px-5 py-4">
-        <div className="font-display font-extrabold tracking-tight">Shifts</div>
-        <p className="text-xs text-muted-foreground">
-          Each employee is on one shift. The multiplier scales their rate for regular hours (1 = normal, 1.1 = 10% more). Overtime hours are paid at the overtime rate instead, not stacked with the shift. A single day can be put on another shift on the Time records page.
-          New employees start on the first shift. A shift's usual hours (optional) fill in the clock-in, clock-out and break when you add records for its people on the Time records page.
-        </p>
+    <FoldBox id="settings:shifts" title="Shifts" summary={`${shifts.length} shift${shifts.length === 1 ? "" : "s"}`}>
+      <div className="glass-panel overflow-hidden">
+        <div className="border-b border-border px-5 py-4">
+          <div className="font-display font-extrabold tracking-tight">Shifts</div>
+          <p className="text-xs text-muted-foreground">
+            Each employee is on one shift. The multiplier scales their rate for regular hours (1 = normal, 1.1 = 10% more). Overtime hours are paid at the overtime rate instead, not stacked with the shift. A single day can be put on another shift on the Time records page.
+            New employees start on the first shift. A shift's usual hours (optional) fill in the clock-in, clock-out and break when you add records for its people on the Time records page.
+          </p>
+        </div>
+        <div className="divide-y divide-border">
+          {shifts.map((s, i) => <ShiftRow key={s.id} shift={s} isDefault={i === 0} count={counts.get(s.id) ?? 0} onSave={save} onRemove={remove} checkMult={checkMult} />)}
+          {shifts.length === 0 && <div className="px-5 py-4 text-sm text-muted-foreground">No shifts yet: everyone is paid their normal rate. Add one below.</div>}
+        </div>
+        <form onSubmit={add} className="flex flex-wrap items-end gap-3 border-t border-border p-5">
+          <label><span className="label-mono">New shift</span><input className={`${inputCls} mt-1`} placeholder="e.g. Swing, Weekend" value={name} onChange={(e) => setName(e.target.value)} /></label>
+          <label><span className="label-mono">Multiplier</span><input type="number" step="0.05" min="0.05" max="10" className={`${inputCls} mt-1 w-28`} value={multiplier} onChange={(e) => setMultiplier(e.target.value)} /></label>
+          <button className={btnPrimary}><Plus className="mr-1 inline h-4 w-4" />Add shift</button>
+        </form>
       </div>
-      <div className="divide-y divide-border">
-        {shifts.map((s, i) => <ShiftRow key={s.id} shift={s} isDefault={i === 0} count={counts.get(s.id) ?? 0} onSave={save} onRemove={remove} checkMult={checkMult} />)}
-        {shifts.length === 0 && <div className="px-5 py-4 text-sm text-muted-foreground">No shifts yet: everyone is paid their normal rate. Add one below.</div>}
-      </div>
-      <form onSubmit={add} className="flex flex-wrap items-end gap-3 border-t border-border p-5">
-        <label><span className="label-mono">New shift</span><input className={`${inputCls} mt-1`} placeholder="e.g. Swing, Weekend" value={name} onChange={(e) => setName(e.target.value)} /></label>
-        <label><span className="label-mono">Multiplier</span><input type="number" step="0.05" min="0.05" max="10" className={`${inputCls} mt-1 w-28`} value={multiplier} onChange={(e) => setMultiplier(e.target.value)} /></label>
-        <button className={btnPrimary}><Plus className="mr-1 inline h-4 w-4" />Add shift</button>
-      </form>
-    </div>
+    </FoldBox>
   );
 }
 
@@ -91,14 +94,15 @@ function ShiftRow({ shift, isDefault, count, onSave, onRemove, checkMult }: {
   const [v, setV] = useState(saved);
   const savedKey = JSON.stringify(saved);
   useEffect(() => { setV(JSON.parse(savedKey) as typeof saved); }, [savedKey]);
-  const set = (k: keyof typeof saved, val: string) => setV((x) => ({ ...x, [k]: val }));
+  // Giving a shift usual hours starts its break at the default (an hour), as a new record does.
+  const set = (k: keyof typeof saved, val: string) => setV((x) => ({ ...x, [k]: val, ...(k === "start" && val && !x.start && x.brk === "" ? { brk: String(DEFAULT_BREAK_MINUTES) } : {}) }));
   const dirty = v.name.trim() !== saved.name || Number(v.mult) !== Number(saved.mult) || v.start !== saved.start || v.end !== saved.end || (!!v.start && v.brk !== saved.brk);
   const save = () => {
     if (!v.name.trim()) { toast.error("A shift needs a name"); return; }
     const m = checkMult(v.mult);
     if (m === null) return;
     if (!v.start !== !v.end) { toast.error("Set both the usual start and end, or clear both"); return; }
-    const brk = v.start ? Number(v.brk || 0) : null;
+    const brk = v.start ? Number(v.brk === "" ? DEFAULT_BREAK_MINUTES : v.brk) : null;
     if (brk !== null && !validBreak(brk)) { toast.error(breakRangeText(unit)); return; }
     onSave(shift, { name: v.name.trim().slice(0, 40), multiplier: m, default_clock_in: v.start || null, default_clock_out: v.end || null, default_lunch_minutes: brk });
   };

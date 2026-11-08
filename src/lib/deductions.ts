@@ -52,3 +52,18 @@ export function deductionsFor(rules: readonly DeductionRule[], gross: number, fr
 
 /** A deduction's names in use, in first-seen order: each becomes a Payroll column and a payslip field. */
 export const deductionNames = (all: Iterable<readonly DeductionRule[]>) => [...new Set([...all].flatMap((rs) => rs.map((d) => d.name)))];
+
+/**
+ * Adding one deduction to several people at once: a row per person, placed after their own deductions (`sort_order`),
+ * so it's taken last. `already` lists who has a deduction of that name (any case); `skip` leaves them out.
+ */
+export function planBulkDeduction<R extends { name: string }>(
+  employeeIds: readonly string[], existing: ReadonlyMap<string, readonly { name: string }[]>, row: R, skip: boolean,
+) {
+  const name = row.name.trim().toLowerCase();
+  const already = employeeIds.filter((id) => (existing.get(id) ?? []).some((d) => d.name.trim().toLowerCase() === name));
+  const rows = employeeIds
+    .filter((id) => !(skip && already.includes(id)))
+    .map((id) => ({ ...row, employee_id: id, sort_order: existing.get(id)?.length ?? 0 }));
+  return { rows, already };
+}

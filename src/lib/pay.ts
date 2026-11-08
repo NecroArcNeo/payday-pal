@@ -17,6 +17,11 @@
 // * A day with manual pay is paid exactly that amount. Its hours still count
 //   toward the week, so they can push later days into overtime; for salaried
 //   employees it replaces that day's share of the week.
+// * A public holiday (schema 14, `rules.holidays`: its date → the multiplier the user set for hours worked that
+//   day) pays its hours at the highest of the multipliers that apply, never stacked: regular hours at the higher of
+//   the shift and holiday multipliers, overtime at the higher of the overtime and holiday ones (×2 on a holiday
+//   beats ×1.5 overtime; ×1.3 nights keep ×1.3 on a ×1 holiday). Salaried pay doesn't change (the week is paid as
+//   always). People who are off get "holiday pay" records instead (src/lib/holidays.ts), paid like any manual day.
 // * A locked day pays what it paid when it was locked (`frozen_pay`, saved by
 //   src/lib/pay-freeze.ts), whatever the rules, multipliers and rates say now.
 //   Its hours still count toward the week, as they always did.
@@ -24,7 +29,21 @@
 import { rateOn, type RateEntry } from "@/lib/pay-rates";
 
 export type PayShift = { id: string; multiplier: number | string; name: string };
-export type PayRules = { threshold: number; otMultiplier: number; weekendOvertime: boolean };
+export type PayRules = {
+  threshold: number; otMultiplier: number; weekendOvertime: boolean;
+  /** Public holidays: date → the multiplier for hours worked that day (missing: no holidays). */
+  holidays?: Readonly<Record<string, number>> | undefined;
+};
+/** The pay rules from the payroll settings and the public holidays (their rates for hours worked on them). */
+export function payRules(
+  settings: { ot_threshold?: number | string | null; ot_multiplier?: number | string | null; weekend_overtime?: boolean | null } | null | undefined,
+  holidays: { holiday_date: string; multiplier: number | string }[] | null | undefined,
+): PayRules {
+  return {
+    threshold: Number(settings?.ot_threshold ?? 40), otMultiplier: Number(settings?.ot_multiplier ?? 1.5), weekendOvertime: settings?.weekend_overtime ?? true,
+    holidays: Object.fromEntries((holidays ?? []).map((h) => [h.holiday_date, Number(h.multiplier)])),
+  };
+}
 export type PayType = "hourly" | "salary";
 export const PAY_TYPES: { value: PayType; label: string }[] = [{ value: "hourly", label: "Hourly" }, { value: "salary", label: "Salary" }];
 
@@ -161,8 +180,9 @@ export function livePay(records: PayRecord[], opts: PayOptions): Map<string, Pay
     const s = split.get(r.id)!;
     const manual = isManual(r);
     const rate = rateFor(r);
-    const regPay = manual ? 0 : s.regular * rate * multiplierOf(r);
-    const otPay = manual ? 0 : s.overtime * rate * opts.rules.otMultiplier;
+    const holiday = opts.rules.holidays?.[r.work_date] ?? 0;
+    const regPay = manual ? 0 : s.regular * rate * Math.max(multiplierOf(r), holiday);
+    const otPay = manual ? 0 : s.overtime * rate * Math.max(opts.rules.otMultiplier, holiday);
     out.set(r.id, { id: r.id, ...s, manual, salary: false, regPay, otPay, pay: manual ? Number(r.pay_override) : regPay + otPay });
   }
   return out;

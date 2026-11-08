@@ -64,12 +64,15 @@ export function useRecordSortColumns<R extends TimeRecord = RecordWithEmp>(pay: 
 }
 
 /** The shift a record was worked on, flagged when it isn't the employee's usual one. */
-export function RecordShiftCell({ shiftId, employeeShiftId, shifts, cell = "px-3 py-3" }: {
+export function RecordShiftCell({ shiftId, employeeShiftId, shifts, cell = "px-3 py-3", td, editor }: {
   shiftId: string | null | undefined; employeeShiftId: string | null | undefined; shifts: Shift[]; cell?: string;
+  /** Extra props for the cell (Time records' "Edit in cells"), and the text box shown instead while it's edited. */
+  td?: React.TdHTMLAttributes<HTMLTableCellElement> | undefined; editor?: React.ReactNode;
 }) {
   const s = shiftForRecord(shiftId, employeeShiftId, shifts);
+  if (editor) return <td {...td} className={`${cell} ${td?.className ?? ""}`}>{editor}</td>;
   return (
-    <td className={`${cell} whitespace-nowrap font-body`}>
+    <td {...td} className={`${cell} whitespace-nowrap font-body ${td?.className ?? ""}`}>
       {s.name}{s.multiplier !== 1 && <span className="ml-1 font-mono text-[11px] text-muted-foreground">×{s.multiplier}</span>}
       {s.changed && <div className="text-[10px] text-primary" title="Worked on a different shift than usual">changed</div>}
     </td>

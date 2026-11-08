@@ -1,7 +1,5 @@
 import type { Tables, TablesInsert, TablesUpdate } from "@/integrations/supabase/types";
-import { supabase } from "@/integrations/supabase/client";
 import { localDb } from "./local";
-import { getPrivateFields, stripPrivate } from "./privacy";
 import { decodeRow, encodeRow } from "./codec";
 import { insertEncoded, tableColumns, type Row, type Sql, type SqlDb } from "./snapshot";
 import type { TableName } from "./schema";
@@ -34,9 +32,8 @@ export type RecordFilter = { from?: string | undefined; to?: string | undefined;
 export type RecordKey = Pick<Tables<"time_records">, "employee_id" | "work_date" | "entry_mode" | "clock_in" | "clock_out" | "hours">;
 const RECORD_KEY_COLUMNS = "employee_id, work_date, entry_mode, clock_in, clock_out, hours";
 
-/** Everything the pages read or write. One implementation per place the data can live. */
+/** Everything the pages read or write: this computer's database. The cloud is reached only by push and pull (sync.ts). */
 export interface DataStore {
-  kind: "local" | "cloud";
   listEmployees(): Promise<Employee[]>;
   listRecords(from?: string, to?: string): Promise<RecordWithEmp[]>;
   listFieldDefs(): Promise<Tables<"employee_field_defs">[]>;
@@ -46,6 +43,10 @@ export interface DataStore {
   listPayRates(): Promise<Tables<"pay_rates">[]>;
   /** Every employee's deductions, in their order. */
   listDeductions(): Promise<Tables<"deductions">[]>;
+  /** Public holidays (schema 14), by date. */
+  listHolidays(): Promise<Tables<"holidays">[]>;
+  /** Saved weekly patterns (schema 14), in their order. */
+  listPatterns(): Promise<Tables<"work_patterns">[]>;
   /** Every pay run, newest period first, with each run's lines. */
   listPayRuns(): Promise<{ runs: Tables<"pay_runs">[]; lines: Tables<"pay_run_lines">[] }>;
   /** One page of records matching the filter, ordered by `filter.sort` (newest first by default), plus how many match in total. */
@@ -181,7 +182,6 @@ async function saveSettingsColumns(sql: Sql, values: Row) {
 
 export function createLocalStore(getDb: () => Promise<SqlDb>): DataStore {
   return {
-    kind: "local",
     async listEmployees() {
       return list<Employee>(await getDb(), "employees", "select * from employees order by last_name");
     },
@@ -224,6 +224,12 @@ export function createLocalStore(getDb: () => Promise<SqlDb>): DataStore {
     },
     async listDeductions() {
       return list<Tables<"deductions">>(await getDb(), "deductions", "select * from deductions order by employee_id, sort_order, created_at");
+    },
+    async listHolidays() {
+      return list<Tables<"holidays">>(await getDb(), "holidays", "select * from holidays order by holiday_date, id");
+    },
+    async listPatterns() {
+      return list<Tables<"work_patterns">>(await getDb(), "work_patterns", "select * from work_patterns order by sort_order, created_at, id");
     },
     async listPayRuns() {
       const db = await getDb();
@@ -289,162 +295,3 @@ export function createLocalStore(getDb: () => Promise<SqlDb>): DataStore {
 }
 
 export const localStore = undoableStore(createLocalStore(localDb), localUndo);
-
-// ---------------------------------------------------------------- cloud
-// Rows carry owner_id (defaulted to the signed-in user); RLS limits every query to that user's rows.
-
-/** Employee ids go in the request URL, so very broad employee searches are refused rather than failing obscurely. */
-const MAX_CLOUD_EMPLOYEE_FILTER = 200;
-function filterRecords<Q extends { gte: (c: string, v: string) => Q; lte: (c: string, v: string) => Q; eq: (c: string, v: string) => Q; in: (c: string, v: string[]) => Q; or: (filters: string) => Q }>(q: Q, f: RecordFilter): Q {
-  if (f.from) q = q.gte("work_date", f.from);
-  if (f.to) q = q.lte("work_date", f.to);
-  if (f.mode) q = q.eq("entry_mode", f.mode);
-  if (f.employeeIds) {
-    if (f.employeeIds.length > MAX_CLOUD_EMPLOYEE_FILTER) throw new Error(`The search matches ${f.employeeIds.length} employees; narrow it to ${MAX_CLOUD_EMPLOYEE_FILTER} or fewer when editing the cloud.`);
-    q = q.in("employee_id", f.employeeIds.length ? f.employeeIds : ["00000000-0000-0000-0000-000000000000"]);
-  }
-  if (f.shifts) {
-    const ids = f.shifts.employeeIds;
-    if (ids.length > MAX_CLOUD_EMPLOYEE_FILTER) throw new Error(`Those shifts have ${ids.length} employees; filter by ${MAX_CLOUD_EMPLOYEE_FILTER} or fewer when editing the cloud.`);
-    const onShift = `shift_id.in.(${(f.shifts.ids.length ? f.shifts.ids : ["00000000-0000-0000-0000-000000000000"]).join(",")})`;
-    q = q.or(ids.length ? `${onShift},and(shift_id.is.null,employee_id.in.(${ids.join(",")}))` : onShift);
-  }
-  return q;
-}
-
-const check = <T>({ data, error }: { data: T | null; error: { message: string } | null }): T => {
-  if (error) throw new Error(error.message);
-  return data as T;
-};
-const wrap = (p: PromiseLike<{ error: { message: string } | null }>): Promise<Result> =>
-  Promise.resolve(p).then(({ error }) => ({ error: error ? new Error(error.message) : null }), (e) => ({ error: toError(e) }));
-
-/** Private fields never reach the cloud, even when editing it directly. */
-async function cloudSafe<T>(table: string, rows: T): Promise<T> {
-  if (table !== "employees") return rows;
-  const keys = await getPrivateFields(await localDb());
-  return (Array.isArray(rows) ? rows.map((r) => stripPrivate(r, keys)) : stripPrivate(rows as Row, keys)) as T;
-}
-
-export const cloudStore: DataStore = {
-  kind: "cloud",
-  async listEmployees() {
-    return check(await supabase.from("employees").select("*").order("last_name"));
-  },
-  async listRecords(from, to) {
-    let q = supabase
-      .from("time_records")
-      .select("*, employees(first_name,last_name,employee_code,hourly_rate)")
-      .order("work_date", { ascending: false })
-      .limit(RECORD_LIMIT);
-    if (from) q = q.gte("work_date", from);
-    if (to) q = q.lte("work_date", to);
-    return check(await q) as RecordWithEmp[];
-  },
-  async listRecordsPage(filter, offset, limit) {
-    const q = filterRecords(supabase.from("time_records").select("*, employees(first_name,last_name,employee_code,hourly_rate)", { count: "exact" }), filter);
-    const ascending = filter.sort?.desc === false;
-    const by = filter.sort?.by ?? "date";
-    // Same order as the local store's recordOrder (names compare case-sensitively here). `employees(...)` orders by the joined employee.
-    const sorted = by === "date" ? q.order("work_date", { ascending }).order("created_at", { ascending })
-      : (by === "employee" ? q.order("employees(first_name)", { ascending, nullsFirst: false }).order("employees(last_name)", { ascending, nullsFirst: false })
-        : q.order("hours", { ascending, nullsFirst: false })).order("work_date", { ascending: false }).order("created_at", { ascending: false });
-    const { data, error, count } = await sorted.order("id").range(offset, offset + limit - 1);
-    if (error) throw new Error(error.message);
-    return { rows: (data ?? []) as RecordWithEmp[], total: count ?? 0 };
-  },
-  async listRecordsMatching(filter) {
-    const out: Tables<"time_records">[] = [];
-    for (let start = 0; ; start += 1000) {
-      const page = check(await filterRecords(supabase.from("time_records").select("*"), filter).order("id").range(start, start + 999)) as Tables<"time_records">[];
-      out.push(...page);
-      if (page.length < 1000) return out;
-    }
-  },
-  async listFieldDefs() {
-    return check(await supabase.from("employee_field_defs").select("*").order("sort_order").order("created_at"));
-  },
-  async listShifts() {
-    return check(await supabase.from("shifts").select("*").order("sort_order").order("created_at"));
-  },
-  async listAdjustments(from, to) {
-    let q = supabase.from("pay_adjustments").select("*").order("pay_date", { ascending: false });
-    if (from) q = q.gte("pay_date", from);
-    if (to) q = q.lte("pay_date", to);
-    return check(await q);
-  },
-  async listPayRates() {
-    const out: Tables<"pay_rates">[] = [];
-    for (let start = 0; ; start += 1000) {
-      const page = check(await supabase.from("pay_rates").select("*").order("employee_id").order("effective_from").range(start, start + 999)) as Tables<"pay_rates">[];
-      out.push(...page);
-      if (page.length < 1000) return out;
-    }
-  },
-  async listRecordKeys(from, to) {
-    // The API returns at most 1000 rows per request, so page through.
-    const out: RecordKey[] = [];
-    for (let start = 0; ; start += 1000) {
-      const page = check(await supabase.from("time_records").select(RECORD_KEY_COLUMNS).gte("work_date", from).lte("work_date", to)
-        .order("id").range(start, start + 999)) as RecordKey[];
-      out.push(...page);
-      if (page.length < 1000) return out;
-    }
-  },
-  async getSettings() {
-    return check(await supabase.from("payroll_settings").select("*").maybeSingle());
-  },
-  async listDeductions() {
-    return check(await supabase.from("deductions").select("*").order("employee_id").order("sort_order").order("created_at")) as Tables<"deductions">[];
-  },
-  async listPayRuns() {
-    return {
-      runs: check(await supabase.from("pay_runs").select("*").order("period_to", { ascending: false })) as Tables<"pay_runs">[],
-      lines: check(await supabase.from("pay_run_lines").select("*").order("employee_name")) as Tables<"pay_run_lines">[],
-    };
-  },
-  insert: async (table, rows) => wrap(supabase.from(table).insert((await cloudSafe(table, rows)) as never)),
-  update: async (table, id, patch) => wrap(supabase.from(table as "employees").update((await cloudSafe(table, patch)) as never).eq("id", id)),
-  remove: (table, id) => wrap(supabase.from(table as "employees").delete().eq("id", id)),
-  async updateMany(table, rows) {
-    let updated = 0;
-    for (const { id, patch } of rows) {
-      const { error } = await wrap(supabase.from(table as "employees").update((await cloudSafe(table, patch)) as never).eq("id", id));
-      if (error) return { error: new Error(`${error.message} (${updated} of ${rows.length} were updated before this)`), updated };
-      updated++;
-    }
-    return { error: null, updated };
-  },
-  removeMany: (table, ids) => wrap(supabase.from(table as "employees").delete().in("id", ids)),
-  upsertEmployeesByCode: async (rows) => wrap(supabase.from("employees").upsert((await cloudSafe("employees", rows)) as never, { onConflict: "owner_id,employee_code" })),
-  saveSettings: (s) => wrap(supabase.from("payroll_settings").upsert({ ...s, updated_at: new Date().toISOString() } as never, { onConflict: "owner_id" })),
-  // One request at a time (no transaction across requests): the pay is saved before the lock, so a failure leaves
-  // nothing locked without its pay.
-  setLockedThrough: async (date, freeze = []) => {
-    for (const f of freeze) {
-      const r = await wrap(supabase.from("time_records").update({ frozen_pay: f.pay as never }).eq("id", f.id));
-      if (r.error) return r;
-    }
-    const r = await wrap(supabase.from("payroll_settings").upsert({ locked_through: date, updated_at: new Date().toISOString() } as never, { onConflict: "owner_id" }));
-    if (r.error) return r;
-    const flags = await wrap(supabase.from("time_records").update({ unlocked: false }).eq("unlocked", true));
-    if (flags.error) return flags;
-    let thaw = supabase.from("time_records").update({ frozen_pay: null }).not("frozen_pay", "is", null);
-    if (date) thaw = thaw.gt("work_date", date);
-    return wrap(thaw);
-  },
-  setRecordsUnlocked: async (ids, unlocked, freeze = []) => {
-    if (!unlocked) for (const f of freeze) {
-      const r = await wrap(supabase.from("time_records").update({ frozen_pay: f.pay as never }).eq("id", f.id));
-      if (r.error) return r;
-    }
-    const r = await wrap(supabase.from("time_records").update({ unlocked }).in("id", ids));
-    return r.error || !unlocked ? r : wrap(supabase.from("time_records").update({ frozen_pay: null }).in("id", ids));
-  },
-  countUnlockedRecords: async () => {
-    const { count, error } = await supabase.from("time_records").select("id", { count: "exact", head: true }).eq("unlocked", true);
-    if (error) throw new Error(error.message);
-    return count ?? 0;
-  },
-  saveEmployeeDefaults: async (d) => wrap(supabase.from("payroll_settings").upsert({ employee_defaults: stripPrivate(d as Row, await getPrivateFields(await localDb()), "delete"), updated_at: new Date().toISOString() } as never, { onConflict: "owner_id" })),
-};

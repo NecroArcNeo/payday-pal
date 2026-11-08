@@ -287,6 +287,17 @@
   .marked-row { background-color: color-mix(in oklch, var(--row-mark) 15%, transparent); }
   .dark .marked-row { background-color: color-mix(in oklch, var(--row-mark) 22%, transparent); }
   .marked-row > td:first-child { box-shadow: inset 4px 0 0 var(--row-mark); }
+  /* Time records' "Edit in cells" (RecordGrid.tsx): the active cell. */
+  .grid-cell-active { outline: 2px solid var(--color-primary); outline-offset: -2px; background-color: color-mix(in oklch, var(--color-primary) 8%, transparent); }
+  /* While rows are being selected by dragging (useDragSelect): no text selection. */
+  .drag-selecting, .drag-selecting * { user-select: none; cursor: default !important; }
+  /* A feature Ctrl+K took the user to (revealFeature, src/lib/jump.ts): a ring that pulses twice and fades. */
+  .find-flash { animation: find-flash 1s ease-out 2; }
+}
+
+@keyframes find-flash {
+  0% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-primary) 70%, transparent); }
+  100% { box-shadow: 0 0 0 10px transparent; }
 }
 
 /* A side panel (SidePanel: a Time record, an employee) is fixed to the right, as wide as --side-panel-w (dragged by

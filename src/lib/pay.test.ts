@@ -146,3 +146,31 @@ describe("salary", () => {
     expect(week.total).toBe(200 + 200 + 50);
   });
 });
+
+describe("public holidays", () => {
+  const holiday = { ...rules, holidays: { "2026-10-21": 2 } };
+  it("pays hours worked on a holiday at its rate, regular and overtime alike", () => {
+    // Wed is a ×2 holiday: its 8 regular hours pay ×2; the rest of the week is as usual.
+    const r = pay(weekdays.map((d) => day(d, 8)), { rules: holiday });
+    expect(r.regPay).toBe(4 * 8 * 20 + 8 * 20 * 2);
+    // Overtime on the holiday pays ×2 too (the higher of ×1.5 and ×2), never ×3.
+    const late = pay([...weekdays.slice(0, 2).map((d) => day(d, 20)), day("2026-10-21", 8)], { rules: holiday });
+    expect([late.regular, late.overtime]).toEqual([40, 8]);
+    expect(late.otPay).toBe(8 * 20 * 2);
+  });
+
+  it("never stacks: a shift's own rate still wins when it's higher than the holiday's", () => {
+    const low = { ...rules, holidays: { "2026-10-21": 1.2 } };
+    const r = pay([day("2026-10-21", 8)], { rules: low, shiftMultiplier: 1.3 });
+    expect(r.regPay).toBeCloseTo(8 * 20 * 1.3);
+    // A ×1 holiday changes nothing.
+    expect(pay([day("2026-10-21", 8)], { rules: { ...rules, holidays: { "2026-10-21": 1 } } }).regPay).toBe(160);
+  });
+
+  it("leaves manual days, salary weeks and locked days as they were", () => {
+    expect(pay([day("2026-10-21", 8, { pay_override: 100 })], { rules: holiday }).total).toBe(100);
+    expect(pay([day("2026-10-21", 8)], { rules: holiday, payType: "salary" }).total).toBe(40 * 20);
+    const frozen = { regular: 8, overtime: 0, weekend: false, manual: false, salary: false, regPay: 160, otPay: 0, pay: 160 };
+    expect(pay([day("2026-10-21", 8, { frozen_pay: frozen })], { rules: holiday }).total).toBe(160);
+  });
+});

@@ -3,8 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { z } from "zod";
-import { db, undoable, useDataMode } from "@/lib/db/mode";
-import { customKey } from "@/lib/db/privacy";
+import { db, undoable } from "@/lib/db/mode";
 import { backupBefore } from "@/lib/db/safety";
 import { AppShell, btnGhost, btnPrimary, inputCls } from "@/components/AppShell";
 import { SearchInput } from "@/components/EmployeeSearch";
@@ -14,11 +13,13 @@ import { CategoryInput } from "@/components/ProfileCategories";
 import { codeTakenMessage, employeeWithCode, friendlySaveError } from "@/lib/employee-code";
 import { planRateChange, type RatePlan } from "@/lib/pay-rates";
 import { askRateDate, writeRateHistory } from "@/lib/rate-change";
-import { fullName, money, useEmployeeDefaults, useEmployees, useFieldDefs, usePayRates, usePayrollSettings, usePrivateFields, useShifts, type Employee, type FieldDef, type Shift } from "@/lib/payroll";
+import { confirmNewName, confirmRates } from "@/lib/typo-prompt";
+import { fullName, money, useEmployeeDefaults, useEmployees, useFieldDefs, usePayRates, usePayrollSettings, useShifts, type Employee, type FieldDef, type Shift } from "@/lib/payroll";
 import { NO_DEFAULTS, withDefaults } from "@/lib/employee-fields";
 import { PAY_TYPES, shiftFor } from "@/lib/pay";
 import { describeEmployeeFilter, isFiltering, NO_FILTER, searchEmployees, type EmployeeFilter } from "@/lib/employee-search";
-import { IdCard, Pencil, Trash2, X } from "lucide-react";
+import { IdCard, MinusCircle, Pencil, Trash2, X } from "lucide-react";
+import { BulkDeductionDialog } from "@/components/DeductionsEditor";
 import { EditableLabel } from "@/components/EditableLabel";
 import { useLabels } from "@/lib/labels";
 import { SkeletonRows } from "@/components/Loading";
@@ -26,8 +27,10 @@ import { EmployeePanel } from "@/components/EmployeePanel";
 import { EmployeeContextMenu, EmployeeMenuButton } from "@/components/EmployeeMenu";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { SortControl, SortTh, TableSort, useTableSort } from "@/components/SortControl";
+import { useDragSelect } from "@/components/DragSelect";
 import { sortTable, type SortColumns } from "@/lib/table-sort";
 import { askChoice, askConfirm, LEAVE_UNSAVED, modalOpen } from "@/lib/choice-prompt";
+import { FoldBox } from "@/components/FoldBox";
 
 export const Route = createFileRoute("/_authenticated/employees")({
   head: () => ({ meta: [{ title: "Employees — KoPayroll" }] }),
@@ -64,6 +67,7 @@ function EmployeesPage() {
   const [q, setQ] = useState<EmployeeFilter>(NO_FILTER);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkEdit, setBulkEdit] = useState(false);
+  const [bulkDeduction, setBulkDeduction] = useState(false);
   const [busy, setBusy] = useState(false);
 
   // Forget selections of employees that no longer exist.
@@ -81,6 +85,7 @@ function EmployeesPage() {
     if (!parsed.success) { toast.error(parsed.error.issues[0]?.message ?? "Invalid input"); return; }
     const owner = employeeWithCode(employees, parsed.data.employee_code);
     if (owner) { toast.error(codeTakenMessage(parsed.data.employee_code, owner)); return; }
+    if (!(await confirmNewName(parsed.data.first_name, parsed.data.last_name, employees))) return;
     const row = { ...parsed.data, email: parsed.data.email || null, department: parsed.data.department || null, shift_id: form["shift_id"] || shifts[0]?.id || null, pay_type: form["pay_type"] === "salary" ? "salary" : "hourly" };
     const { error } = await db().insert("employees", withDefaults(row, defaults));
     if (error) { toast.error(friendlySaveError(error.message)); return; }
@@ -146,6 +151,7 @@ function EmployeesPage() {
     for (const e of list) if (allShownPicked) n.delete(e.id); else n.add(e.id);
     return n;
   });
+  const dragSelect = useDragSelect({ attr: "employee", order: list.map((e) => e.id), selected, setSelected });
 
   // The row menus (⋯ and right-click): which row was right-clicked, and what every row's menu can do.
   const [menuId, setMenuId] = useState<string | null>(null);
@@ -211,125 +217,131 @@ function EmployeesPage() {
 
   return (
     <AppShell eyebrow="Directory" title={isLoading ? "Employees" : `${employees.length} employees`}>
-      <form onSubmit={save} className="glass-panel grid gap-3 p-5 md:grid-cols-9">
-        <div>
-          {field("employee_code", "Employee ID", "text", !!codeOwner)}
-          {codeOwner && <div className="mt-1 text-[11px] text-destructive">Already used by {fullName(codeOwner)}</div>}
-        </div>
-        {field("first_name", "First name")}
-        {field("last_name", "Last name")}
-        {field("email", "Email", "email")}
-        {field("department", "Department")}
-        {field("hourly_rate", "Hourly rate", "number")}
-        <select className={inputCls} value={form["pay_type"]} onChange={(e) => setForm({ ...form, pay_type: e.target.value })} aria-label="Pay type"
-          title="Salary pays a full week (40 h) at the hourly rate for every week worked, with no overtime.">
-          {PAY_TYPES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
-        </select>
-        <select className={inputCls} value={form["shift_id"] || shifts[0]?.id || ""} onChange={(e) => setForm({ ...form, shift_id: e.target.value })} aria-label="Shift">
-          {shifts.map((s) => <option key={s.id} value={s.id}>{s.name} shift{Number(s.multiplier) !== 1 ? ` ×${Number(s.multiplier)}` : ""}</option>)}
-          {shifts.length === 0 && <option value="">Day shift</option>}
-        </select>
-        <div className="flex gap-2">
-          <button className={`${btnPrimary} flex-1`}>Add</button>
-        </div>
-      </form>
+      <FoldBox id="employees:add" title="Add an employee">
+        <form onSubmit={save} className="glass-panel grid gap-3 p-5 md:grid-cols-9">
+          <div>
+            {field("employee_code", "Employee ID", "text", !!codeOwner)}
+            {codeOwner && <div className="mt-1 text-[11px] text-destructive">Already used by {fullName(codeOwner)}</div>}
+          </div>
+          {field("first_name", "First name")}
+          {field("last_name", "Last name")}
+          {field("email", "Email", "email")}
+          {field("department", "Department")}
+          {field("hourly_rate", "Hourly rate", "number")}
+          <select className={inputCls} value={form["pay_type"]} onChange={(e) => setForm({ ...form, pay_type: e.target.value })} aria-label="Pay type"
+            title="Salary pays a full week (40 h) at the hourly rate for every week worked, with no overtime.">
+            {PAY_TYPES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+          </select>
+          <select className={inputCls} value={form["shift_id"] || shifts[0]?.id || ""} onChange={(e) => setForm({ ...form, shift_id: e.target.value })} aria-label="Shift">
+            {shifts.map((s) => <option key={s.id} value={s.id}>{s.name} shift{Number(s.multiplier) !== 1 ? ` ×${Number(s.multiplier)}` : ""}</option>)}
+            {shifts.length === 0 && <option value="">Day shift</option>}
+          </select>
+          <div className="flex gap-2">
+            <button className={`${btnPrimary} flex-1`}>Add</button>
+          </div>
+        </form>
+      </FoldBox>
 
 
+      {bulkDeduction && picked.length > 0 && <BulkDeductionDialog people={picked} onClose={() => setBulkDeduction(false)} />}
       {bulkEdit && picked.length > 0 && (
         <BulkEditPanel employees={picked} defs={defs} shifts={shifts} onClose={() => setBulkEdit(false)}
           onDone={() => { setBulkEdit(false); qc.invalidateQueries(); }} />
       )}
 
-      <div className="glass-panel overflow-hidden">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
-          <div className="flex items-center gap-3">
-            <div className="font-display font-extrabold tracking-tight">Roster</div>
-            <Link to="/employees/template" className={btnGhost} title="The profile every new employee starts with"><IdCard className="mr-1 inline h-4 w-4" />Default profile</Link>
-          </div>
-          <div className="flex w-full max-w-3xl flex-wrap items-center justify-end gap-3">
-            <SearchInput value={q} onChange={setQ} employees={employees} className="min-w-[16rem] flex-1" />
-            <SortControl value={sort} onChange={setSort} columns={columns} />
-          </div>
-        </div>
-
-        {picked.length > 0 && (
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-accent/60 px-5 py-2.5 text-sm">
-            <span>
-              <span className="font-semibold">{picked.length} selected</span>
-              {hiddenPicked > 0 && <span className="text-muted-foreground"> ({hiddenPicked} hidden by the search)</span>}
-            </span>
-            <div className="flex gap-2">
-              <button onClick={() => setBulkEdit(true)} disabled={busy} className={btnPrimary}><Pencil className="mr-1 inline h-4 w-4" />Edit {picked.length}</button>
-              <button onClick={() => void removePeople(picked)} disabled={busy} className={`${btnGhost} hover:!text-destructive`}><Trash2 className="mr-1 inline h-4 w-4" />Delete {picked.length}</button>
-              <button onClick={() => setSelected(new Set())} className={btnGhost} aria-label="Clear selection"><X className="h-4 w-4" /></button>
+      <FoldBox id="employees:roster" title="Roster" summary={`${employees.length} people`}>
+        <div className="glass-panel overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
+            <div className="flex items-center gap-3">
+              <div className="font-display font-extrabold tracking-tight">Roster</div>
+              <Link to="/employees/template" className={btnGhost} title="The profile every new employee starts with"><IdCard className="mr-1 inline h-4 w-4" />Default profile</Link>
+            </div>
+            <div className="flex w-full max-w-3xl flex-wrap items-center justify-end gap-3">
+              <SearchInput value={q} onChange={setQ} employees={employees} className="min-w-[16rem] flex-1" />
+              <SortControl value={sort} onChange={setSort} columns={columns} />
             </div>
           </div>
-        )}
 
-        <DataTable id="employees" className="w-full text-sm">
-          <thead>
-            <TableSort sort={sort} columns={columns} onSort={setSort}>
-            <tr className="border-b border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
-              <th className="w-10 pl-5"><input type="checkbox" aria-label="Select all shown" checked={allShownPicked} onChange={toggleShown} disabled={!list.length} /></th>
-              <SortTh k="employee" className="px-3 py-3 text-left font-medium"><EditableLabel k="employee" name="Employee" /></SortTh>
-              <SortTh k="employee_code" className="px-3 py-3 text-left font-medium"><EditableLabel k="employee_code" name="ID" /></SortTh>
-              <SortTh k="job_title" className="px-3 py-3 text-left font-medium"><EditableLabel k="job_title" name="Position" /></SortTh>
-              <SortTh k="department" className="px-3 py-3 text-left font-medium"><EditableLabel k="department" name="Department" /></SortTh>
-              <SortTh k="shift" className="px-3 py-3 text-left font-medium"><EditableLabel k="shift" name="Shift" /></SortTh>
-              <SortTh k="email" className="px-3 py-3 text-left font-medium"><EditableLabel k="email" name="Email" /></SortTh>
-              <SortTh k="hourly_rate" className="px-3 py-3 text-right font-medium"><EditableLabel k="hourly_rate" name="Rate" /></SortTh>
-              <th className="w-20" />
-            </tr>
-            </TableSort>
-          </thead>
-          <ContextMenu modal={false} onOpenChange={(o) => { if (!o) setMenuId(null); }}>
-          <ContextMenuTrigger asChild>
-          <tbody
-            // Which row the right-click menu is for; outside a row (the "no employees" line) there's no menu, and the
-            // browser's own isn't wanted either, so the event stops here (Radix skips a prevented event).
-            onContextMenu={(ev) => {
-              const id = (ev.target as HTMLElement).closest<HTMLElement>("tr[data-employee]")?.dataset["employee"];
-              if (id) setMenuId(id); else ev.preventDefault();
-            }}>
-            {isLoading && <SkeletonRows cols={9} skip={1} />}
-            {!isLoading && list.length === 0 && (
-              <tr><td colSpan={9} className="px-5 py-10 text-center text-muted-foreground">
-                {employees.length ? `No employee matches ${describeEmployeeFilter(q)}.` : "No employees yet — add one above or import a file."}
-              </td></tr>
-            )}
-            {list.map((e) => (
-              <tr key={e.id} data-employee={e.id}
-                // A click on the row (not its tick box, links or buttons, nor the end of a text selection) opens the
-                // profile beside the roster; the name still opens the full page.
-                // (The ⋯ menu is portalled, but React still passes its clicks up through this row: [role=menu] skips them.)
-                onClick={(ev) => { if (!(ev.target as HTMLElement).closest("a, button, input, label, [role=menu]") && !getSelection()?.toString()) void open(e.id); }}
-                className={`cursor-pointer border-b border-border last:border-0 hover:bg-secondary ${selected.has(e.id) ? "bg-accent/40" : ""} ${e.id === openId ? "outline outline-2 -outline-offset-2 outline-primary" : ""}`}>
-                <td className="pl-5"><input type="checkbox" aria-label={`Select ${fullName(e)}`} checked={selected.has(e.id)} onChange={() => toggle(e.id)} /></td>
-                <td className="px-3 py-3 font-medium">
-                  <Link to="/employees/$id" params={{ id: e.id }} className="hover:underline">{fullName(e)}</Link>
-                  {!e.active && <span className="ml-2 rounded bg-secondary px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground ring-1 ring-border">Resigned</span>}
-                </td>
-                <td className="px-3 py-3 font-mono text-[13px]">{e.employee_code}</td>
-                <td className="px-3 py-3 text-muted-foreground">{e.job_title ?? "—"}</td>
-                <td className="px-3 py-3 text-muted-foreground">{e.department ?? "—"}</td>
-                <td className="px-3 py-3 text-muted-foreground">{shiftFor(e.shift_id, shifts).name}</td>
-                <td className="px-3 py-3 text-muted-foreground">{e.email ? <EmailLink email={e.email} /> : "—"}</td>
-                <td className="px-3 py-3 text-right font-mono text-[13px]">{money(Number(e.hourly_rate))}<div className="font-body text-[10px] text-muted-foreground">{e.pay_type === "salary" ? "salary" : "hourly"}</div></td>
-                <td className="py-3 pl-3 pr-6">
-                  <div className="flex items-center justify-end gap-3.5 text-muted-foreground">
-                    <Link to="/employees/$id" params={{ id: e.id }} aria-label={`Edit ${fullName(e)}`} title="Edit profile"><Pencil className="h-4 w-4 hover:text-foreground" /></Link>
-                    <EmployeeMenuButton {...menuProps(e)} />
-                  </div>
-                </td>
+          {picked.length > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-accent/60 px-5 py-2.5 text-sm">
+              <span>
+                <span className="font-semibold">{picked.length} selected</span>
+                {hiddenPicked > 0 && <span className="text-muted-foreground"> ({hiddenPicked} hidden by the search)</span>}
+              </span>
+              <div className="flex gap-2">
+                <button onClick={() => setBulkEdit(true)} disabled={busy} className={btnPrimary}><Pencil className="mr-1 inline h-4 w-4" />Edit {picked.length}</button>
+                {settings?.deductions_on && <button onClick={() => setBulkDeduction(true)} disabled={busy} className={btnGhost}><MinusCircle className="mr-1 inline h-4 w-4" />Add deduction</button>}
+                <button onClick={() => void removePeople(picked)} disabled={busy} className={`${btnGhost} hover:!text-destructive`}><Trash2 className="mr-1 inline h-4 w-4" />Delete {picked.length}</button>
+                <button onClick={() => setSelected(new Set())} className={btnGhost} aria-label="Clear selection"><X className="h-4 w-4" /></button>
+              </div>
+            </div>
+          )}
+
+          <DataTable id="employees" className="w-full text-sm">
+            <thead>
+              <TableSort sort={sort} columns={columns} onSort={setSort}>
+              <tr className="border-b border-border font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
+                <th className="w-10 pl-5"><input type="checkbox" aria-label="Select all shown" checked={allShownPicked} onChange={toggleShown} disabled={!list.length} /></th>
+                <SortTh k="employee" className="px-3 py-3 text-left font-medium"><EditableLabel k="employee" name="Employee" /></SortTh>
+                <SortTh k="employee_code" className="px-3 py-3 text-left font-medium"><EditableLabel k="employee_code" name="ID" /></SortTh>
+                <SortTh k="job_title" className="px-3 py-3 text-left font-medium"><EditableLabel k="job_title" name="Position" /></SortTh>
+                <SortTh k="department" className="px-3 py-3 text-left font-medium"><EditableLabel k="department" name="Department" /></SortTh>
+                <SortTh k="shift" className="px-3 py-3 text-left font-medium"><EditableLabel k="shift" name="Shift" /></SortTh>
+                <SortTh k="email" className="px-3 py-3 text-left font-medium"><EditableLabel k="email" name="Email" /></SortTh>
+                <SortTh k="hourly_rate" className="px-3 py-3 text-right font-medium"><EditableLabel k="hourly_rate" name="Rate" /></SortTh>
+                <th className="w-20" />
               </tr>
-            ))}
-          </tbody>
-          </ContextMenuTrigger>
-          {menuEmp && <EmployeeContextMenu {...menuProps(menuEmp)} />}
-          </ContextMenu>
-        </DataTable>
-        {isFiltering(q) && list.length > 0 && <div className="border-t border-border px-5 py-2 text-xs text-muted-foreground">Showing {list.length} of {employees.length}</div>}
-      </div>
+              </TableSort>
+            </thead>
+            <ContextMenu modal={false} onOpenChange={(o) => { if (!o) setMenuId(null); }}>
+            <ContextMenuTrigger asChild>
+            <tbody onPointerDown={dragSelect}
+              // Which row the right-click menu is for; outside a row (the "no employees" line) there's no menu, and the
+              // browser's own isn't wanted either, so the event stops here (Radix skips a prevented event).
+              onContextMenu={(ev) => {
+                const id = (ev.target as HTMLElement).closest<HTMLElement>("tr[data-employee]")?.dataset["employee"];
+                if (id) setMenuId(id); else ev.preventDefault();
+              }}>
+              {isLoading && <SkeletonRows cols={9} skip={1} />}
+              {!isLoading && list.length === 0 && (
+                <tr><td colSpan={9} className="px-5 py-10 text-center text-muted-foreground">
+                  {employees.length ? `No employee matches ${describeEmployeeFilter(q)}.` : "No employees yet — add one above or import a file."}
+                </td></tr>
+              )}
+              {list.map((e) => (
+                <tr key={e.id} data-employee={e.id}
+                  // A click on the row (not its tick box, links or buttons, nor the end of a text selection) opens the
+                  // profile beside the roster; the name still opens the full page.
+                  // (The ⋯ menu is portalled, but React still passes its clicks up through this row: [role=menu] skips them.)
+                  onClick={(ev) => { if (!(ev.target as HTMLElement).closest("a, button, input, label, [role=menu]") && !getSelection()?.toString()) void open(e.id); }}
+                  className={`cursor-pointer border-b border-border last:border-0 hover:bg-secondary ${selected.has(e.id) ? "bg-accent/40" : ""} ${e.id === openId ? "outline outline-2 -outline-offset-2 outline-primary" : ""}`}>
+                  <td className="pl-5"><input type="checkbox" aria-label={`Select ${fullName(e)}`} checked={selected.has(e.id)} onChange={() => toggle(e.id)} /></td>
+                  <td className="px-3 py-3 font-medium">
+                    <Link to="/employees/$id" params={{ id: e.id }} className="hover:underline">{fullName(e)}</Link>
+                    {!e.active && <span className="ml-2 rounded bg-secondary px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground ring-1 ring-border">Resigned</span>}
+                  </td>
+                  <td className="px-3 py-3 font-mono text-[13px]">{e.employee_code}</td>
+                  <td className="px-3 py-3 text-muted-foreground">{e.job_title ?? "—"}</td>
+                  <td className="px-3 py-3 text-muted-foreground">{e.department ?? "—"}</td>
+                  <td className="px-3 py-3 text-muted-foreground">{shiftFor(e.shift_id, shifts).name}</td>
+                  <td className="px-3 py-3 text-muted-foreground">{e.email ? <EmailLink email={e.email} /> : "—"}</td>
+                  <td className="px-3 py-3 text-right font-mono text-[13px]">{money(Number(e.hourly_rate))}<div className="font-body text-[10px] text-muted-foreground">{e.pay_type === "salary" ? "salary" : "hourly"}</div></td>
+                  <td className="py-3 pl-3 pr-6">
+                    <div className="flex items-center justify-end gap-3.5 text-muted-foreground">
+                      <Link to="/employees/$id" params={{ id: e.id }} aria-label={`Edit ${fullName(e)}`} title="Edit profile"><Pencil className="h-4 w-4 hover:text-foreground" /></Link>
+                      <EmployeeMenuButton {...menuProps(e)} />
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            </ContextMenuTrigger>
+            {menuEmp && <EmployeeContextMenu {...menuProps(menuEmp)} />}
+            </ContextMenu>
+          </DataTable>
+          {isFiltering(q) && list.length > 0 && <div className="border-t border-border px-5 py-2 text-xs text-muted-foreground">Showing {list.length} of {employees.length}</div>}
+        </div>
+      </FoldBox>
 
       {openEmp && (
         <EmployeePanel emp={openEmp} employees={employees} onMove={move} onClose={() => open(null)} onDirty={onDirty}
@@ -354,11 +366,8 @@ const textFields = [
 
 /** Changes only the fields that are ticked, on every selected employee. */
 function BulkEditPanel({ employees, defs, shifts, onClose, onDone }: { employees: Employee[]; defs: FieldDef[]; shifts: Shift[]; onClose: () => void; onDone: () => void }) {
-  // Private fields can't be written to the cloud, so they aren't offered when editing it directly.
-  const { data: privateKeys = [] } = usePrivateFields();
-  const hidden = useDataMode() === "cloud" ? privateKeys : [];
-  const fields = textFields.filter((f) => !hidden.includes(f.key));
-  const editableDefs = defs.filter((d) => !hidden.includes(customKey(d.id)));
+  const fields = textFields;
+  const editableDefs = defs;
   const [on, setOn] = useState<Record<string, boolean>>({});
   const [vals, setVals] = useState<Record<string, string>>({});
   const [rateMode, setRateMode] = useState<RateMode>("set");
@@ -400,6 +409,7 @@ function BulkEditPanel({ employees, defs, shifts, onClose, onDone }: { employees
     if (on["rate"]) {
       const changed = employees.filter((e) => newRate(e) !== Number(e.hourly_rate));
       if (changed.length) {
+        if (!(await confirmRates(changed.map((e) => ({ name: fullName(e), oldRate: Number(e.hourly_rate), newRate: newRate(e) }))))) return;
         const when = await askRateDate(`New hourly rate for ${changed.length} employee${changed.length === 1 ? "" : "s"}`, "their current rates", null);
         if (!when) return;
         for (const e of changed) ratePlans.set(e.id, planRateChange(rateHistory?.get(e.id) ?? [], Number(e.hourly_rate), newRate(e), when));

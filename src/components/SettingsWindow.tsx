@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { btnGhost } from "@/components/AppShell";
 import { PayRulesPanel } from "@/components/PayRulesPanel";
 import { ShiftsPanel } from "@/components/ShiftsPanel";
+import { HolidaysPanel } from "@/components/HolidaysPanel";
 import { LimitsEditor } from "@/components/RecordWarnings";
 import { MarksPanel } from "@/components/RowMarks";
 import { BreakUnitToggle } from "@/components/BreakField";
@@ -26,6 +27,7 @@ import { Switch } from "@/components/ui/switch";
 import { clearAlias, useLabels } from "@/lib/labels";
 import { EMPLOYEE_SECTIONS } from "@/lib/employee-fields";
 import { customKey } from "@/lib/db/privacy";
+import { FoldBox } from "@/components/FoldBox";
 
 /**
  * The app's Settings window: one place for the settings that used to sit on different pages (overtime rules and
@@ -79,17 +81,27 @@ const Heading = ({ title, children }: { title: string; children?: ReactNode }) =
 const PANES: Partial<Record<SettingsSection, () => ReactNode>> = {
   features: () => <FeaturesPane />,
   pay: () => <PayPane />,
+  holidays: () => (
+    <>
+      <Heading title="Holidays">Public holidays and how they're paid: you choose the days, the rate for hours worked on them, and what people who are off get. These are payroll data: they sync and are in backups.</Heading>
+      <HolidaysPanel />
+    </>
+  ),
   checks: () => (
     <>
       <Heading title="Checks & colours">What the Payroll page flags before paying, and how Time records rows are coloured. Remembered on this computer.</Heading>
-      <div className="glass-panel overflow-hidden">
-        <div className="px-5 pt-4 font-display font-extrabold tracking-tight">Things to check: limits</div>
-        <LimitsEditor onClose={() => toast.success("Limits saved")} />
-      </div>
-      <div className="glass-panel overflow-hidden">
-        <div className="px-5 pt-4 font-display font-extrabold tracking-tight">Row colours and tags on Time records</div>
-        <MarksPanel onClose={closeSettings} />
-      </div>
+      <FoldBox id="settings:limits" title="Things to check: limits">
+        <div className="glass-panel overflow-hidden">
+          <div className="px-5 pt-4 font-display font-extrabold tracking-tight">Things to check: limits</div>
+          <LimitsEditor onClose={() => toast.success("Limits saved")} />
+        </div>
+      </FoldBox>
+      <FoldBox id="settings:row-marks" title="Row colours and tags">
+        <div className="glass-panel overflow-hidden">
+          <div className="px-5 pt-4 font-display font-extrabold tracking-tight">Row colours and tags on Time records</div>
+          <MarksPanel onClose={closeSettings} />
+        </div>
+      </FoldBox>
     </>
   ),
   display: () => <DisplayPane />,
@@ -194,18 +206,20 @@ function HistoryPane() {
         Every change made on this computer is listed on the <Link to="/history" onClick={closeSettings} className="underline">Edit history</Link> page, and each employee's and record's own changes on their profile and side panel.
         It stays on this computer (backups keep it too) and is never sent to the cloud.
       </Heading>
-      <div className="glass-panel space-y-3 p-5">
-        <div className="font-display font-extrabold tracking-tight">Keep history for</div>
-        <div className="flex flex-wrap gap-2">
-          {KEEP_CHOICES.map((c) => (
-            <button key={c.label} type="button" disabled={busy} aria-pressed={keep === c.days} onClick={() => void choose(c.days)}
-              className={`rounded-lg px-3 py-1.5 text-sm ring-1 ring-border ${keep === c.days ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground hover:text-foreground"}`}>
-              {c.label}
-            </button>
-          ))}
+      <FoldBox id="settings:history" title="Keep history for">
+        <div className="glass-panel space-y-3 p-5">
+          <div className="font-display font-extrabold tracking-tight">Keep history for</div>
+          <div className="flex flex-wrap gap-2">
+            {KEEP_CHOICES.map((c) => (
+              <button key={c.label} type="button" disabled={busy} aria-pressed={keep === c.days} onClick={() => void choose(c.days)}
+                className={`rounded-lg px-3 py-1.5 text-sm ring-1 ring-border ${keep === c.days ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground hover:text-foreground"}`}>
+                {c.label}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">Older entries are removed when the app starts. Payroll records often have to be kept for several years, so check what applies to you before shortening it.</p>
         </div>
-        <p className="text-xs text-muted-foreground">Older entries are removed when the app starts. Payroll records often have to be kept for several years, so check what applies to you before shortening it.</p>
-      </div>
+      </FoldBox>
     </>
   );
 }
@@ -233,19 +247,21 @@ function DisplayPane() {
   return (
     <>
       <Heading title="Display">How the app looks on this computer.</Heading>
-      <div className="glass-panel space-y-4 p-5">
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="w-40 text-sm font-medium">Theme</span>
-          <div className="inline-flex rounded-lg bg-secondary p-0.5 ring-1 ring-border" role="group" aria-label="Theme">
-            <button type="button" className={choice(!dark)} aria-pressed={!dark} onClick={() => theme(false)}><Sun className="mr-1 inline h-3.5 w-3.5" />Light</button>
-            <button type="button" className={choice(dark)} aria-pressed={dark} onClick={() => theme(true)}><Moon className="mr-1 inline h-3.5 w-3.5" />Night</button>
+      <FoldBox id="settings:display" title="Display">
+        <div className="glass-panel space-y-4 p-5">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="w-40 text-sm font-medium">Theme</span>
+            <div className="inline-flex rounded-lg bg-secondary p-0.5 ring-1 ring-border" role="group" aria-label="Theme">
+              <button type="button" className={choice(!dark)} aria-pressed={!dark} onClick={() => theme(false)}><Sun className="mr-1 inline h-3.5 w-3.5" />Light</button>
+              <button type="button" className={choice(dark)} aria-pressed={dark} onClick={() => theme(true)}><Moon className="mr-1 inline h-3.5 w-3.5" />Night</button>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="w-40 text-sm font-medium">Show breaks in</span>
+            <BreakUnitToggle />
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="w-40 text-sm font-medium">Show breaks in</span>
-          <BreakUnitToggle />
-        </div>
-      </div>
+      </FoldBox>
       <RenamedLabels />
     </>
   );
@@ -262,27 +278,29 @@ function RenamedLabels() {
   const realName = (key: string) => known.get(key) ?? (key.startsWith("extra:") ? `${key.slice(6)} (extra pay)` : key.startsWith("nav:") ? `${key.slice(4)} page` : key.replace(/_/g, " "));
   const entries = Object.entries(aliases).sort((a, b) => a[1].localeCompare(b[1]));
   return (
-    <div className="glass-panel overflow-hidden">
-      <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
-        <div>
-          <div className="font-display font-extrabold tracking-tight">Renamed labels</div>
-          <p className="text-xs text-muted-foreground">Click a column or field name anywhere in the app to rename it. The real name is kept: putting it back changes nothing else.</p>
+    <FoldBox id="settings:labels" title="Renamed labels">
+      <div className="glass-panel overflow-hidden">
+        <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
+          <div>
+            <div className="font-display font-extrabold tracking-tight">Renamed labels</div>
+            <p className="text-xs text-muted-foreground">Click a column or field name anywhere in the app to rename it. The real name is kept: putting it back changes nothing else.</p>
+          </div>
+          {entries.length > 1 && <button type="button" className={btnGhost} onClick={() => { for (const [k] of entries) clearAlias(k); }}>Put all back</button>}
         </div>
-        {entries.length > 1 && <button type="button" className={btnGhost} onClick={() => { for (const [k] of entries) clearAlias(k); }}>Put all back</button>}
+        {entries.length === 0 ? (
+          <p className="px-5 py-4 text-sm text-muted-foreground">Nothing renamed.</p>
+        ) : (
+          <ul className="divide-y divide-border">
+            {entries.map(([k, alias]) => (
+              <li key={k} className="flex items-center gap-3 px-5 py-2.5 text-sm">
+                <span className="font-medium">{alias}</span>
+                <span className="text-muted-foreground">for {realName(k)}</span>
+                <button type="button" className={`${btnGhost} ml-auto`} onClick={() => clearAlias(k)}><RotateCcw className="mr-1 inline h-3.5 w-3.5" />Put back</button>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
-      {entries.length === 0 ? (
-        <p className="px-5 py-4 text-sm text-muted-foreground">Nothing renamed.</p>
-      ) : (
-        <ul className="divide-y divide-border">
-          {entries.map(([k, alias]) => (
-            <li key={k} className="flex items-center gap-3 px-5 py-2.5 text-sm">
-              <span className="font-medium">{alias}</span>
-              <span className="text-muted-foreground">for {realName(k)}</span>
-              <button type="button" className={`${btnGhost} ml-auto`} onClick={() => clearAlias(k)}><RotateCcw className="mr-1 inline h-3.5 w-3.5" />Put back</button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
+    </FoldBox>
   );
 }

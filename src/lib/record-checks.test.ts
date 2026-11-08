@@ -47,6 +47,12 @@ describe("checking records before paying them", () => {
     expect(kinds([clock("a", "2026-11-02", "06:00", "10:00", 0), clock("a", "2026-11-02", "10:00", "14:00", 0)])).toEqual([]);
   });
 
+  it("doesn't call a paid day off with no hours (holiday pay) a short shift", () => {
+    const off = { ...daily("a", "2026-12-25", 0), pay_override: 160 } as TimeRecord;
+    expect(kinds([off])).toEqual([]);
+    expect(kinds([daily("a", "2026-12-25", 0)])).toEqual(["short"]); // no pay either: still worth a look
+  });
+
   it("flags times past midnight on a day shift (swapped?), not on a night shift", () => {
     expect(kinds([clock("a", "2026-11-02", "17:00", "01:00")])).toEqual(["past-midnight"]);
     expect(kinds([clock("a", "2026-11-02", "22:00", "06:00", 30, { shift_id: "night" })])).toEqual([]);
